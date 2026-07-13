@@ -37,6 +37,10 @@ export type { CassImportOptions, CassImportStats } from './cass/index.js';
 export { ClaudeCodeImporter, resolveClaudeProjectsPath } from './claude/index.js';
 export type { ClaudeImportOptions, ClaudeImportStats } from './claude/index.js';
 
+// Codex 原生 adapter（LOOP-004，覆盖等级 A）
+export { CodexImporter, resolveCodexSessionsPath } from './codex/index.js';
+export type { CodexImportOptions, CodexImportStats } from './codex/index.js';
+
 // 后续 Loop 的骨架导出（暂保留）
 export { McpServer } from './mcp/server.js';
 export { SyncAgent } from './sync/agent.js';
