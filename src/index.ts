@@ -33,6 +33,10 @@ export type {
 export { CassImporter, resolveCassDbPath } from './cass/index.js';
 export type { CassImportOptions, CassImportStats } from './cass/index.js';
 
+// Claude Code 原生 adapter（LOOP-003，覆盖等级 A）
+export { ClaudeCodeImporter, resolveClaudeProjectsPath } from './claude/index.js';
+export type { ClaudeImportOptions, ClaudeImportStats } from './claude/index.js';
+
 // 后续 Loop 的骨架导出（暂保留）
 export { McpServer } from './mcp/server.js';
 export { SyncAgent } from './sync/agent.js';
