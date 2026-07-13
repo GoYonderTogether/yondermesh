@@ -5,7 +5,7 @@
  * 代码离开设备前永远是密文。
  */
 
-import type { SqliteCollectorStore } from '../collector/store.js';
+import type { SessionStore } from '../store/index.js';
 import type { SyncConfig } from '../daemon/config.js';
 
 /**
@@ -17,12 +17,12 @@ import type { SyncConfig } from '../daemon/config.js';
  * 3. 解密后入库
  */
 export class SyncAgent {
-  private store: SqliteCollectorStore;
+  private store: SessionStore;
   private config: SyncConfig;
   private running = false;
   private timer?: ReturnType<typeof setInterval>;
 
-  constructor(store: SqliteCollectorStore, config: SyncConfig) {
+  constructor(store: SessionStore, config: SyncConfig) {
     this.store = store;
     this.config = config;
   }
@@ -42,7 +42,7 @@ export class SyncAgent {
 
     // 定时同步（每 60 秒）
     this.timer = setInterval(() => {
-      this.sync().catch(err => {
+      this.sync().catch((err) => {
         console.error('[yondermesh] 同步失败:', err);
       });
     }, 60_000);
@@ -66,5 +66,6 @@ export class SyncAgent {
     // 4. GET 其他设备的加密 session
     // 5. 解密并入库
     // 6. 更新 sync_state
+    void this.store;
   }
 }

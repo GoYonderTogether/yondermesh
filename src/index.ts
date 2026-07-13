@@ -5,23 +5,32 @@
  * 互相看见、互相查询、互相接力。
  */
 
-// 采集器
-export { Collector } from './collector/types.js';
-export { SqliteCollectorStore } from './collector/store.js';
-
-// MCP
-export { McpServer } from './mcp/server.js';
-
-// 同步
-export { SyncAgent } from './sync/agent.js';
-
-// 晨报
-export { BriefingGenerator } from './briefing/generator.js';
-
-// 类型
+// Session Store（LOOP-001）
+export { SessionStore, SCHEMA } from './store/index.js';
 export type {
-  SessionRecord,
+  Coverage,
+  IngestResult,
+  MessageRole,
+  Presence,
+  RelationType,
+  Relationship,
+  RelationshipInput,
+  RevisionRecord,
+  Retention,
+  ScanRun,
+  ScanRunFinishInput,
+  ScanRunStartInput,
+  SessionIngestInput,
   SessionMessage,
-  CollectorConfig,
-} from './collector/types.js';
+  SessionQuery,
+  SessionRecord,
+  SessionTopology,
+  SourceInstance,
+  SourceInstanceInput,
+} from './store/index.js';
+
+// 后续 Loop 的骨架导出（暂保留）
+export { McpServer } from './mcp/server.js';
+export { SyncAgent } from './sync/agent.js';
+export { BriefingGenerator } from './briefing/generator.js';
 export type { YondermeshConfig } from './daemon/config.js';

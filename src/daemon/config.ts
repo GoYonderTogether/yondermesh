@@ -1,8 +1,16 @@
 /**
  * yondermesh 全局配置
+ *
+ * 注：采集器配置（type/path/device）是历史占位，后续 Loop 将由
+ * SessionStore 的来源实例（SourceInstance）取代。
  */
 
-import type { CollectorConfig } from '../collector/types.js';
+/** 历史采集器配置占位 */
+export interface AgentCollectorConfig {
+  type: string;
+  path: string;
+  device: string;
+}
 
 /** yondermesh 配置 */
 export interface YondermeshConfig {
@@ -21,7 +29,7 @@ export interface DeviceConfig {
   /** 设备名 */
   name: string;
   /** 该设备上的 agent 采集器列表 */
-  agents: CollectorConfig[];
+  agents: AgentCollectorConfig[];
 }
 
 /** 同步配置 */

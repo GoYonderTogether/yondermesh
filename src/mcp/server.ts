@@ -9,7 +9,7 @@
  * 所有支持 MCP 的 CLI agent 挂载后即可使用。
  */
 
-import type { SqliteCollectorStore } from '../collector/store.js';
+import type { SessionStore } from '../store/index.js';
 
 /** MCP 工具定义 */
 export interface McpToolDef {
@@ -30,10 +30,10 @@ export interface McpToolResult {
  * 通过 stdio 与 agent 通信，遵循 MCP 协议。
  */
 export class McpServer {
-  private store: SqliteCollectorStore;
+  private store: SessionStore;
   private running = false;
 
-  constructor(store: SqliteCollectorStore) {
+  constructor(store: SessionStore) {
     this.store = store;
   }
 
@@ -54,7 +54,8 @@ export class McpServer {
     return [
       {
         name: 'recall_recent_work',
-        description: '查询当前设备（及同步网络中其他设备）所有 agent 的最近工作 session。用于在开始新任务前了解此前上下文。',
+        description:
+          '查询当前设备（及同步网络中其他设备）所有 agent 的最近工作 session。用于在开始新任务前了解此前上下文。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -109,41 +110,22 @@ export class McpServer {
 
   /** recall_recent_work 实现 */
   private async recallRecentWork(args: Record<string, unknown>): Promise<McpToolResult> {
-    const limit = (args.limit as number) ?? 10;
-    const sessions = this.store.recent(limit);
-
-    if (sessions.length === 0) {
-      return { content: '暂无 session 记录。' };
-    }
-
-    const lines = sessions.map((s, i) => {
-      const time = new Date(s.startedAt).toLocaleString('zh-CN');
-      const summary = s.summary ?? `${s.messageCount} 条消息`;
-      return `${i + 1}. [${s.agent}] ${s.device} · ${time}\n   项目: ${s.projectPath}\n   摘要: ${summary}`;
-    });
-
-    return { content: `最近 ${sessions.length} 个 session:\n\n${lines.join('\n\n')}` };
+    // TODO(LOOP-007): 基于 SessionStore.querySessions 召回最近工作
+    void args;
+    void this.store;
+    return { content: 'recall_recent_work 将在后续 Loop 接入 SessionStore 实现。' };
   }
 
   /** whats_on_device 实现 */
   private async whatsOnDevice(args: Record<string, unknown>): Promise<McpToolResult> {
-    const device = args.device as string;
-    const sessions = this.store.query({ device, limit: 5 });
-
-    if (sessions.sessions.length === 0) {
-      return { content: `设备 ${device} 上暂无 session 记录。` };
-    }
-
-    const lines = sessions.sessions.map((s, i) => {
-      const time = new Date(s.startedAt).toLocaleString('zh-CN');
-      return `${i + 1}. [${s.agent}] ${time}\n   项目: ${s.projectPath}\n   ${s.messageCount} 条消息`;
-    });
-
-    return { content: `设备 ${device} 最近活动:\n\n${lines.join('\n\n')}` };
+    // TODO(LOOP-007): 基于 SessionStore.querySessions 查询设备工作现场
+    void args;
+    return { content: 'whats_on_device 将在后续 Loop 接入 SessionStore 实现。' };
   }
 
   /** handoff_task 实现（M2） */
   private async handoffTask(args: Record<string, unknown>): Promise<McpToolResult> {
+    void args;
     return {
       content: 'handoff_task 将在 M2 里程碑实现。当前版本请使用 recall_recent_work 查询上下文后手动接力。',
       isError: true,

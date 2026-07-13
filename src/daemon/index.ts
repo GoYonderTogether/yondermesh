@@ -11,8 +11,8 @@
 
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { existsSync, readFileSync } from 'node:fs';
-import { SqliteCollectorStore } from '../collector/store.js';
+import { existsSync } from 'node:fs';
+import { SessionStore } from '../store/index.js';
 import { McpServer } from '../mcp/server.js';
 import { SyncAgent } from '../sync/agent.js';
 import { BriefingGenerator } from '../briefing/generator.js';
@@ -21,7 +21,7 @@ import { defaultConfig, type YondermeshConfig } from './config.js';
 /** daemon 运行时 */
 export class YondermeshDaemon {
   private config: YondermeshConfig;
-  private store: SqliteCollectorStore;
+  private store: SessionStore;
   private mcpServer?: McpServer;
   private syncAgent?: SyncAgent;
   private briefingGen?: BriefingGenerator;
@@ -30,7 +30,7 @@ export class YondermeshDaemon {
   constructor(config?: YondermeshConfig) {
     this.config = config ?? this.loadConfig();
     const dbPath = join(homedir(), '.yondermesh', 'yondermesh.db');
-    this.store = new SqliteCollectorStore(dbPath);
+    this.store = new SessionStore(dbPath);
   }
 
   /** 加载配置文件 */
@@ -92,7 +92,7 @@ export class YondermeshDaemon {
     for (const device of this.config.devices) {
       for (const agentConfig of device.agents) {
         console.log(`[yondermesh] 扫描 ${agentConfig.type} (${agentConfig.path})`);
-        // TODO: 调用具体采集器
+        // TODO: 调用具体采集器（LOOP-003/004 接入原生 adapter）
       }
     }
   }
