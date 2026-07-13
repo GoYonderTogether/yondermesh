@@ -51,7 +51,17 @@ export function buildRelease(projectRoot: string, force = false): ReleaseResult 
   }
 
   // 清理目标目录
-  fs.rmSync(target, { recursive: true, force: true });
+  // 清理目标目录（可能因上次失败残留）
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+  } catch {
+    // ENOTEMPTY 偶发：重试一次
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+    } catch {
+      /* 仍然失败则忽略，mkdirSync 会处理 */
+    }
+  }
   fs.mkdirSync(target, { recursive: true });
 
   // 1. 编译 TypeScript

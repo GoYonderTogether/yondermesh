@@ -35,3 +35,7 @@ export {
   releaseDir,
   releaseEntry,
 } from './paths.js';
+
+// 更新与回退（LOOP-009）
+export { updateFromGit } from './updater.js';
+export type { UpdateResult, HealthCheck } from './updater.js';

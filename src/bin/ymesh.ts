@@ -9,7 +9,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, basename } from 'node:path';
 import { hostname } from 'node:os';
 
 import { SessionStore } from '../store/index.js';
@@ -24,11 +24,13 @@ import {
   installRelease,
   listReleases,
   getCurrentRelease,
+  rollbackRelease,
   installService,
   uninstallService,
   startService,
   stopService,
   getServiceStatus,
+  updateFromGit,
   ENTRY_SYMLINK,
   LAUNCH_AGENT_PLIST,
 } from '../install/index.js';
@@ -133,6 +135,8 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   install             本地构建 release 并安装
   service <action>    管理 LaunchAgent (install|uninstall|start|stop|status)
   releases            列出已安装的 release 版本
+  update              从 Git 源码更新（构建失败自动回退）
+  rollback            手动回退到上一个 release 版本
 
 通用选项:
   --json              以 JSON 格式输出结果（便于脚本消费）
@@ -483,6 +487,34 @@ function cmdReleases(flags: Record<string, string | boolean>): number {
   return 0;
 }
 
+// ─── update 命令（LOOP-009） ───────────────────────────────────────────
+
+/** update 命令：从 Git 源码更新并自动回退 */
+async function cmdUpdate(flags: Record<string, string | boolean>): Promise<number> {
+  const repoUrl = (flags.repo as string) ?? 'https://github.com/GoYonderTogether/yondermesh.git';
+  const branch = (flags.branch as string) ?? 'main';
+
+  console.log(`[yondermesh] 正在从 Git 更新...`);
+  console.log(`  仓库: ${repoUrl}`);
+  console.log(`  分支: ${branch}`);
+
+  const result = updateFromGit(repoUrl, branch);
+
+  if (result.success) {
+    console.log(`[yondermesh] 更新成功: ${result.previousVersion ?? '(none)'} → ${result.newVersion}`);
+    return 0;
+  } else {
+    if (result.rolledBack) {
+      console.error(`[yondermesh] 更新失败，已自动回退到 ${result.previousVersion ?? 'previous'}`);
+    } else {
+      console.error(`[yondermesh] 更新失败，未能回退`);
+    }
+    console.error(`[yondermesh] 错误: ${result.error ?? '未知错误'}`);
+    console.error('[yondermesh] 请手动检查并解决问题后重试。');
+    return 1;
+  }
+}
+
 // ─── 主入口 ──────────────────────────────────────────────────────────────
 
 async function main(): Promise<number> {
@@ -521,6 +553,21 @@ async function main(): Promise<number> {
 
     case 'releases':
       return cmdReleases(flags);
+
+    case 'update':
+      return await cmdUpdate(flags);
+
+    case 'rollback':
+      {
+        const rolled = rollbackRelease();
+        if (rolled) {
+          console.log(`[yondermesh] 已回退到 ${basename(rolled)}`);
+          return 0;
+        } else {
+          console.error('[yondermesh] 没有 previous release 可回退');
+          return 1;
+        }
+      }
 
     default:
       console.error(`未知命令: ${command}\n`);
