@@ -30,6 +30,7 @@ import type {
   SessionMessage,
   SessionMessageInput,
   SessionQuery,
+  SessionStats,
   SessionRecord,
   SessionTopology,
   SourceInstance,
@@ -271,10 +272,24 @@ export class SessionStore {
 
   // ─── 查询 ────────────────────────────────────────────────────────────
 
-  /** 多维查询 session 列表 */
-  querySessions(query: SessionQuery): SessionRecord[] {
+  /**
+   * 转义 LIKE 特殊字符（_ % \），使前缀匹配按字面量工作。
+   * 返回转义后的 pattern，调用方需用 ESCAPE '\' 子句。
+   */
+  private escapeLike(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+  }
+
+  /**
+   * 构建多维查询的 WHERE 条件和参数。
+   * cwdPrefix / projectPrefix 使用 LIKE + ESCAPE 实现目录边界安全的前缀匹配：
+   *   '/foo' 匹配 cwd='/foo' 或 cwd='/foo/...'
+   *   但不匹配 cwd='/foobar'（边界 '_' 被转义为字面量）
+   */
+  private buildQueryConditions(query: SessionQuery): { where: string; params: (string | number)[] } {
     const conditions: string[] = [];
     const params: (string | number)[] = [];
+
     if (query.deviceId) {
       conditions.push('device_id = ?');
       params.push(query.deviceId);
@@ -287,16 +302,87 @@ export class SessionStore {
       conditions.push('topology = ?');
       params.push(query.topology);
     }
-    if (query.cwd) {
-      conditions.push('cwd = ?');
-      params.push(query.cwd);
+    if (query.cwd !== undefined) {
+      if (query.cwd === null) {
+        conditions.push('cwd IS NULL');
+      } else {
+        conditions.push('cwd = ?');
+        params.push(query.cwd);
+      }
     }
+    if (query.projectPath !== undefined) {
+      if (query.projectPath === null) {
+        conditions.push('project_path IS NULL');
+      } else {
+        conditions.push('project_path = ?');
+        params.push(query.projectPath);
+      }
+    }
+    if (query.startedAtFrom !== undefined) {
+      conditions.push('started_at >= ?');
+      params.push(query.startedAtFrom);
+    }
+    if (query.startedAtTo !== undefined) {
+      conditions.push('started_at <= ?');
+      params.push(query.startedAtTo);
+    }
+    if (query.cwdPrefix !== undefined) {
+      // 规范化：去尾部斜杠，使 /repo/ 与 /repo 等价
+      const cwdNorm = query.cwdPrefix.replace(/\/+$/, '');
+      const cwdEsc = this.escapeLike(cwdNorm);
+      conditions.push("(cwd = ? OR cwd LIKE ? ESCAPE '\\')");
+      params.push(cwdNorm, cwdEsc + '/%');
+    }
+    if (query.projectPrefix !== undefined) {
+      const projNorm = query.projectPrefix.replace(/\/+$/, '');
+      const projEsc = this.escapeLike(projNorm);
+      conditions.push("(project_path = ? OR project_path LIKE ? ESCAPE '\\')");
+      params.push(projNorm, projEsc + '/%');
+    }
+
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    return { where, params };
+  }
+
+  /** 多维查询 session 列表 */
+  querySessions(query: SessionQuery): SessionRecord[] {
+    const { where, params } = this.buildQueryConditions(query);
     const limit = query.limit ?? 100;
     const rows = this.db
       .prepare(`SELECT * FROM sessions ${where} ORDER BY last_seen_at DESC LIMIT ?`)
       .all(...params, limit) as Row[];
     return rows.map((r) => this.rowToSession(r));
+  }
+
+  /** 按 id 获取单条 session，不存在返回 undefined */
+  getSession(sessionId: string): SessionRecord | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM sessions WHERE id = ?')
+      .get(sessionId) as Row | undefined;
+    return row ? this.rowToSession(row) : undefined;
+  }
+
+  /** 统计（与 querySessions 同过滤语义） */
+  getSessionStats(query: SessionQuery): SessionStats {
+    const { where, params } = this.buildQueryConditions(query);
+
+    const totals = this.db
+      .prepare(
+        `SELECT
+           COUNT(*) AS total_sessions,
+           COALESCE(SUM(CASE WHEN topology = 'root' THEN 1 ELSE 0 END), 0) AS root_sessions,
+           COALESCE(SUM(CASE WHEN topology = 'subagent' THEN 1 ELSE 0 END), 0) AS subagent_sessions,
+           COALESCE(SUM(message_count), 0) AS total_messages
+         FROM sessions ${where}`,
+      )
+      .get(...params) as Row;
+
+    return {
+      totalSessions: totals.total_sessions as number,
+      rootSessions: totals.root_sessions as number,
+      subagentSessions: totals.subagent_sessions as number,
+      totalMessages: totals.total_messages as number,
+    };
   }
 
   // ─── scan_runs ───────────────────────────────────────────────────────
@@ -425,6 +511,7 @@ export class SessionStore {
       nativeSessionId: row.native_session_id as string,
       source: row.source as string,
       cwd: (row.cwd as string | null) ?? null,
+      projectPath: (row.project_path as string | null) ?? null,
       topology: row.topology as SessionTopology,
       presence: row.presence as Presence,
       retention: row.retention as SessionRecord['retention'],

@@ -22,6 +22,7 @@ export type {
   SessionMessage,
   SessionMessageInput,
   SessionQuery,
+  SessionStats,
   SessionRecord,
   SessionTopology,
   SourceInstance,

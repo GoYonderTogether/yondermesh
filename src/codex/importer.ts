@@ -359,6 +359,7 @@ export class CodexImporter {
         nativeSessionId: lg.nativeId,
         source: 'codex',
         cwd: lg.cwd,
+        projectPath: lg.cwd,
         startedAt: lg.startedAt,
         topology: lg.topology,
         sourceKind: 'A',

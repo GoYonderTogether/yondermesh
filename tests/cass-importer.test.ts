@@ -221,6 +221,8 @@ describe('LOOP-002 cass 历史导入', () => {
     expect(s.source).toBe('claude_code');
     expect(s.nativeSessionId).toBe('c-uuid-100');
     expect(s.cwd).toBe('/repo/a');
+    // LOOP-005：v0.1 把 cass workspace path 当作 projectPath/workspace scope 写入
+    expect(s.projectPath).toBe('/repo/a');
     expect(s.startedAt).toBe(1_000);
     expect(s.sourceInstanceId).toBe(stats.sourceInstanceId);
 

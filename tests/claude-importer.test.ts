@@ -167,6 +167,8 @@ describe('LOOP-003 Claude Code 原生 adapter', () => {
     expect(s.nativeSessionId).toBe(ROOT);
     expect(s.source).toBe('claude-code');
     expect(s.cwd).toBe(CWD);
+    // LOOP-005：v0.1 把各来源 cwd 当作 projectPath/workspace scope 写入
+    expect(s.projectPath).toBe(CWD);
     expect(s.startedAt).toBe(Date.parse('2026-07-13T01:00:00.000Z'));
 
     // 消息：只有可显示文本；thinking/tool_use 被排除
@@ -229,6 +231,8 @@ describe('LOOP-003 Claude Code 原生 adapter', () => {
     expect(sub.topology).toBe('subagent');
     expect(sub.nativeSessionId).toBe(`${ROOT}:${SUB_AGENT}`); // parentRootId:agentId
     expect(sub.cwd).toBe(CWD);
+    // LOOP-005：子 agent 同样以 cwd 作为 projectPath 写入
+    expect(sub.projectPath).toBe(CWD);
     expect(store.getMessages(sub.id).map((m) => m.content)).toEqual([
       'do sub task',
       'sub reply',

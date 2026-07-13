@@ -152,6 +152,16 @@ export interface SessionQuery {
   source?: string;
   topology?: SessionTopology;
   cwd?: string;
+  /** 精确 projectPath 匹配 */
+  projectPath?: string;
+  /** startedAt 闭区间起点（含） */
+  startedAtFrom?: number;
+  /** startedAt 闭区间终点（含） */
+  startedAtTo?: number;
+  /** cwd 前缀匹配（目录边界安全，LIKE 特殊字符转义） */
+  cwdPrefix?: string;
+  /** projectPath 前缀匹配（目录边界安全） */
+  projectPrefix?: string;
   limit?: number;
 }
 
@@ -163,6 +173,7 @@ export interface SessionRecord {
   nativeSessionId: string;
   source: string;
   cwd: string | null;
+  projectPath: string | null;
   topology: SessionTopology;
   presence: Presence;
   retention: Retention;
@@ -171,4 +182,12 @@ export interface SessionRecord {
   messageCount: number;
   startedAt: number | null;
   lastSeenAt: number;
+}
+
+/** 查询统计结果 */
+export interface SessionStats {
+  totalSessions: number;
+  rootSessions: number;
+  subagentSessions: number;
+  totalMessages: number;
 }

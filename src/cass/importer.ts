@@ -287,6 +287,7 @@ export class CassImporter {
         nativeSessionId,
         source: slug,
         cwd,
+        projectPath: cwd,
         startedAt: conv.started_at ?? undefined,
         sourceKind: 'B',
         messages,

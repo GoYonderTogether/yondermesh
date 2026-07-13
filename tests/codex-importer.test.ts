@@ -254,6 +254,8 @@ describe('LOOP-004 Codex 原生 adapter', () => {
     expect(s.nativeSessionId).toBe(ROOT_ID);
     expect(s.source).toBe('codex');
     expect(s.cwd).toBe(CWD);
+    // LOOP-005：v0.1 把 codex 报告的 cwd 当作 projectPath/workspace scope 写入
+    expect(s.projectPath).toBe(CWD);
     // 最早时间 = session_meta.timestamp（05:50:48 早于所有 response_item）
     expect(s.startedAt).toBe(Date.parse('2026-07-03T05:50:48.750Z'));
 
@@ -312,6 +314,8 @@ describe('LOOP-004 Codex 原生 adapter', () => {
     expect(sub.topology).toBe('subagent');
     expect(sub.nativeSessionId).toBe(SUB_ID);
     expect(sub.cwd).toBe(CWD);
+    // LOOP-005：subagent 同样以 cwd 作为 projectPath 写入
+    expect(sub.projectPath).toBe(CWD);
     expect(store.getMessages(sub.id).map((m) => m.content)).toEqual([
       'do sub task',
       'sub reply',
