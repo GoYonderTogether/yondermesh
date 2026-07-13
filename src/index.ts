@@ -42,8 +42,12 @@ export type { ClaudeImportOptions, ClaudeImportStats } from './claude/index.js';
 export { CodexImporter, resolveCodexSessionsPath } from './codex/index.js';
 export type { CodexImportOptions, CodexImportStats } from './codex/index.js';
 
-// 后续 Loop 的骨架导出（暂保留）
-export { McpServer } from './mcp/server.js';
-export { SyncAgent } from './sync/agent.js';
-export { BriefingGenerator } from './briefing/generator.js';
-export type { YondermeshConfig } from './daemon/config.js';
+// Daemon（LOOP-006）
+export { YondermeshDaemon } from './daemon/index.js';
+export type {
+  DaemonConfig,
+  DaemonStatus,
+  FullScanResult,
+  SourceScanResult,
+} from './daemon/index.js';
+export { defaultDaemonConfig, defaultDataDir } from './daemon/config.js';

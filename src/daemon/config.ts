@@ -1,89 +1,48 @@
 /**
- * yondermesh 全局配置
+ * yondermesh daemon 配置（LOOP-006）
  *
- * 注：采集器配置（type/path/device）是历史占位，后续 Loop 将由
- * SessionStore 的来源实例（SourceInstance）取代。
+ * v0.1 极简：只管本机 session 采集 + 实时监听。
+ * sync / mcp / briefing 留到后续 Loop，此处不展开。
  */
 
-/** 历史采集器配置占位 */
-export interface AgentCollectorConfig {
-  type: string;
-  path: string;
-  device: string;
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+/** daemon 配置 */
+export interface DaemonConfig {
+  /** 数据目录（DB、PID 文件等） */
+  dataDir: string;
+  /** SQLite 数据库文件路径 */
+  dbPath: string;
+  /** PID 文件路径（单实例锁） */
+  pidFile: string;
+  /** 定时 reconcile 间隔（毫秒），默认 5 分钟 */
+  reconcileIntervalMs: number;
+  /** watch debounce 延迟（毫秒），默认 2 秒 */
+  debounceMs: number;
+  /** 设备 id，默认 os.hostname() */
+  deviceId?: string;
+  /** 是否跳过 cass 全量导入（cass DB 不存在时自动跳过） */
+  skipCass?: boolean;
+  /** 是否跳过 Claude 实时监听 */
+  skipClaude?: boolean;
+  /** 是否跳过 Codex 实时监听 */
+  skipCodex?: boolean;
 }
 
-/** yondermesh 配置 */
-export interface YondermeshConfig {
-  /** 设备列表 */
-  devices: DeviceConfig[];
-  /** 同步配置 */
-  sync: SyncConfig;
-  /** MCP server 配置 */
-  mcp: McpConfig;
-  /** 晨报配置 */
-  briefing: BriefingConfig;
-}
-
-/** 设备配置 */
-export interface DeviceConfig {
-  /** 设备名 */
-  name: string;
-  /** 该设备上的 agent 采集器列表 */
-  agents: AgentCollectorConfig[];
-}
-
-/** 同步配置 */
-export interface SyncConfig {
-  /** relay 服务器地址 */
-  relayUrl?: string;
-  /** E2E 加密密钥文件路径 */
-  keyFile: string;
-  /** 是否启用同步 */
-  enabled: boolean;
-}
-
-/** MCP 配置 */
-export interface McpConfig {
-  /** 是否启用 */
-  enabled: boolean;
-  /** 监听端口（0 = stdio 模式） */
-  port: number;
-}
-
-/** 晨报配置 */
-export interface BriefingConfig {
-  /** 是否启用 */
-  enabled: boolean;
-  /** 输出目录 */
-  output: string;
+/** 默认数据目录 */
+export function defaultDataDir(): string {
+  return join(homedir(), '.yondermesh');
 }
 
 /** 默认配置 */
-export function defaultConfig(): YondermeshConfig {
+export function defaultDaemonConfig(): DaemonConfig {
+  const dataDir = defaultDataDir();
   return {
-    devices: [
-      {
-        name: 'local',
-        agents: [
-          {
-            type: 'claude-code',
-            path: '~/.claude/projects',
-            device: 'local',
-          },
-        ],
-      },
-    ],
-    sync: {
-      enabled: false,
-      keyFile: '~/.yondermesh/key.pem',
-    },
-    mcp: {
-      enabled: true,
-      port: 0,
-    },
-    briefing: {
-      enabled: true,
-      output: '~/.yondermesh/briefings',
-    },
+    dataDir,
+    dbPath: join(dataDir, 'yondermesh.db'),
+    pidFile: join(dataDir, 'daemon.pid'),
+    reconcileIntervalMs: 5 * 60 * 1000, // 5 分钟
+    debounceMs: 2_000, // 2 秒
   };
 }

@@ -8,7 +8,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { SessionStore } from '../store/index.js';
-import type { BriefingConfig } from '../daemon/config.js';
+
 
 /** 晨报内容 */
 export interface Briefing {
@@ -36,10 +36,10 @@ export interface BriefingSession {
  */
 export class BriefingGenerator {
   private store: SessionStore;
-  private config: BriefingConfig;
+  private config: { enabled: boolean; output: string };
   private timer?: ReturnType<typeof setInterval>;
 
-  constructor(store: SessionStore, config: BriefingConfig) {
+  constructor(store: SessionStore, config: { enabled: boolean; output: string }) {
     this.store = store;
     this.config = config;
   }

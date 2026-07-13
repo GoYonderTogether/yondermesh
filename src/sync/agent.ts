@@ -6,7 +6,6 @@
  */
 
 import type { SessionStore } from '../store/index.js';
-import type { SyncConfig } from '../daemon/config.js';
 
 /**
  * 同步 agent
@@ -18,11 +17,11 @@ import type { SyncConfig } from '../daemon/config.js';
  */
 export class SyncAgent {
   private store: SessionStore;
-  private config: SyncConfig;
+  private config: { enabled: boolean; relayUrl?: string; keyFile: string };
   private running = false;
   private timer?: ReturnType<typeof setInterval>;
 
-  constructor(store: SessionStore, config: SyncConfig) {
+  constructor(store: SessionStore, config: { enabled: boolean; relayUrl?: string; keyFile: string }) {
     this.store = store;
     this.config = config;
   }
