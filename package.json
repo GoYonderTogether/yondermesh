@@ -1,0 +1,57 @@
+{
+  "name": "yondermesh",
+  "version": "0.1.0",
+  "description": "Self-hosted Agent Context Bus — let your AI agents see each other, query each other, and hand off tasks across devices and CLIs.",
+  "type": "module",
+  "license": "MIT",
+  "author": "未至之境 (GoYonderTogether)",
+  "homepage": "https://github.com/GoYonderTogether/yondermesh",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GoYonderTogether/yondermesh.git"
+  },
+  "bugs": {
+    "url": "https://github.com/GoYonderTogether/yondermesh/issues"
+  },
+  "keywords": [
+    "agent",
+    "mcp",
+    "claude-code",
+    "codex",
+    "aider",
+    "session",
+    "context",
+    "cross-device",
+    "self-hosted",
+    "mesh"
+  ],
+  "bin": {
+    "ymesh": "./dist/bin/ymesh.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/bin/ymesh.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

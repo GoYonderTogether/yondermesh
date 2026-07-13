@@ -1,0 +1,34 @@
+# yondermesh 配置示例
+# 复制到 ~/.yondermesh/config.yaml 后修改
+
+# 设备列表
+devices:
+  - name: macbook
+    agents:
+      - type: claude-code
+        path: ~/.claude/projects
+      - type: codex
+        path: ~/.codex/sessions
+      - type: aider
+        path: ~/projects
+
+  # - name: windows-desktop
+  #   agents:
+  #     - type: codex
+  #       path: C:\Users\you\.codex\sessions
+
+# 跨设备同步
+sync:
+  enabled: false
+  relay_url: https://relay.your-domain.com
+  key_file: ~/.yondermesh/key.pem
+
+# MCP server
+mcp:
+  enabled: true
+  port: 0  # 0 = stdio 模式
+
+# 每日晨报
+briefing:
+  enabled: true
+  output: ~/.yondermesh/briefings

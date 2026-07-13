@@ -1,0 +1,43 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+
+# 本地配置与数据
+*.local
+.env
+.env.*
+!.env.example
+
+# SQLite 数据库
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 密钥文件
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+logs/
+
+# 测试覆盖率
+coverage/
+
+# 临时文件
+tmp/
+temp/
