@@ -19,6 +19,20 @@ import { CodexImporter } from '../codex/index.js';
 import { YondermeshDaemon, defaultDaemonConfig } from '../daemon/index.js';
 import type { DaemonConfig } from '../daemon/index.js';
 
+import {
+  buildRelease,
+  installRelease,
+  listReleases,
+  getCurrentRelease,
+  installService,
+  uninstallService,
+  startService,
+  stopService,
+  getServiceStatus,
+  ENTRY_SYMLINK,
+  LAUNCH_AGENT_PLIST,
+} from '../install/index.js';
+
 // 读取 package.json 的版本号
 const projectRoot = dirname(dirname(dirname(new URL(import.meta.url).pathname)));
 const packageJson = JSON.parse(readFileSync(`${projectRoot}/package.json`, 'utf-8'));
@@ -116,6 +130,9 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   status              显示 daemon 状态和最近扫描结果
   sessions            列出 session（支持过滤）
   daemon              启动后台 daemon（实时监听 + 定时 reconcile）
+  install             本地构建 release 并安装
+  service <action>    管理 LaunchAgent (install|uninstall|start|stop|status)
+  releases            列出已安装的 release 版本
 
 通用选项:
   --json              以 JSON 格式输出结果（便于脚本消费）
@@ -359,6 +376,113 @@ async function cmdDaemon(flags: Record<string, string | boolean>): Promise<numbe
   }
 }
 
+// ─── install / service 命令 ─────────────────────────────────────────────
+
+/** install 命令：本地构建 release 并安装 */
+function cmdInstall(flags: Record<string, string | boolean>): number {
+  const force = flags.force === true;
+  console.log('[yondermesh] 开始本地构建...');
+
+  try {
+    const release = buildRelease(projectRoot, force);
+    console.log(`[yondermesh] 构建 release ${release.version} → ${release.releasePath}`);
+
+    installRelease(release);
+    console.log(`[yondermesh] 已安装: ${ENTRY_SYMLINK} → ${release.entryPath}`);
+    console.log('[yondermesh] 提示：将以下路径加入 PATH 以全局使用：');
+    console.log('  export PATH="$HOME/.yondermesh/bin:$PATH"');
+    return 0;
+  } catch (err) {
+    console.error(`[yondermesh] 安装失败: ${String(err)}`);
+    return 1;
+  }
+}
+
+/** service 命令：管理 LaunchAgent */
+function cmdService(flags: Record<string, string | boolean>): number {
+  // 解析 service 子命令：service start / service stop / ...
+  const positional = process.argv.slice(process.argv.indexOf('service') + 1);
+  const svcAction = positional[0] ?? '';
+
+  switch (svcAction) {
+    case 'install': {
+      try {
+        installService();
+        console.log(`[yondermesh] LaunchAgent 已安装: ${LAUNCH_AGENT_PLIST}`);
+        return 0;
+      } catch (err) {
+        console.error(`[yondermesh] 安装失败: ${String(err)}`);
+        return 1;
+      }
+    }
+    case 'uninstall': {
+      try {
+        uninstallService();
+        console.log('[yondermesh] LaunchAgent 已卸载');
+        return 0;
+      } catch (err) {
+        console.error(`[yondermesh] 卸载失败: ${String(err)}`);
+        return 1;
+      }
+    }
+    case 'start': {
+      try {
+        startService();
+        console.log('[yondermesh] daemon service 已启动');
+        return 0;
+      } catch (err) {
+        console.error(`[yondermesh] 启动失败: ${String(err)}`);
+        return 1;
+      }
+    }
+    case 'stop': {
+      try {
+        stopService();
+        console.log('[yondermesh] daemon service 已停止');
+        return 0;
+      } catch (err) {
+        console.error(`[yondermesh] 停止失败: ${String(err)}`);
+        return 1;
+      }
+    }
+    case 'status': {
+      const status = getServiceStatus();
+      if (flags.json) {
+        console.log(JSON.stringify(status, null, 2));
+      } else {
+        console.log(`\n  LaunchAgent: ${status.loaded ? '已加载' : '未加载'}`);
+        console.log(`  运行状态:    ${status.running ? `运行中 (PID ${status.pid})` : '未运行'}`);
+        if (status.exitStatus !== null) {
+          console.log(`  上次退出码:  ${status.exitStatus}`);
+        }
+        console.log();
+      }
+      return 0;
+    }
+    default:
+      console.error('用法: ymesh service install|uninstall|start|stop|status');
+      return 1;
+  }
+}
+
+/** releases 命令：列出已安装的版本 */
+function cmdReleases(flags: Record<string, string | boolean>): number {
+  const releases = listReleases();
+  const current = getCurrentRelease();
+
+  if (flags.json) {
+    console.log(JSON.stringify({ current, releases }, null, 2));
+  } else {
+    console.log('\n已安装的 release 版本：\n');
+    for (const ver of releases) {
+      const marker = ver === current ? ' ← current' : '';
+      console.log(`  ${ver}${marker}`);
+    }
+    console.log();
+  }
+  return 0;
+}
+
 // ─── 主入口 ──────────────────────────────────────────────────────────────
 
 async function main(): Promise<number> {
@@ -388,6 +512,15 @@ async function main(): Promise<number> {
 
     case 'daemon':
       return await cmdDaemon(flags);
+
+    case 'install':
+      return cmdInstall(flags);
+
+    case 'service':
+      return cmdService(flags);
+
+    case 'releases':
+      return cmdReleases(flags);
 
     default:
       console.error(`未知命令: ${command}\n`);

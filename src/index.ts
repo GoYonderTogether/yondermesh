@@ -51,3 +51,19 @@ export type {
   SourceScanResult,
 } from './daemon/index.js';
 export { defaultDaemonConfig, defaultDataDir } from './daemon/config.js';
+
+// 安装与 release 管理（LOOP-008）
+export {
+  buildRelease,
+  installRelease,
+  rollbackRelease,
+  listReleases,
+  getCurrentRelease,
+  generatePlist,
+  installService,
+  uninstallService,
+  startService,
+  stopService,
+  getServiceStatus,
+} from './install/index.js';
+export type { ReleaseResult, ServiceStatus } from './install/index.js';
