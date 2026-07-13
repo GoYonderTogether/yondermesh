@@ -92,6 +92,14 @@ export class SessionStore {
     return this.rowToSourceInstance(row);
   }
 
+  /** 读取来源实例（按 id），不存在返回 undefined */
+  getSourceInstance(id: string): SourceInstance | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM source_instances WHERE id = ?')
+      .get(id) as Row | undefined;
+    return row ? this.rowToSourceInstance(row) : undefined;
+  }
+
   // ─── Session 入库 ────────────────────────────────────────────────────
 
   /** 入库一个 session：首次创建 / 内容幂等 / 内容变化生成新 revision */

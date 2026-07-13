@@ -29,6 +29,10 @@ export type {
   SourceInstanceInput,
 } from './store/index.js';
 
+// cass 历史导入（LOOP-002，覆盖等级 B）
+export { CassImporter, resolveCassDbPath } from './cass/index.js';
+export type { CassImportOptions, CassImportStats } from './cass/index.js';
+
 // 后续 Loop 的骨架导出（暂保留）
 export { McpServer } from './mcp/server.js';
 export { SyncAgent } from './sync/agent.js';
