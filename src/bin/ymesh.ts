@@ -344,7 +344,7 @@ function cmdScan(flags: Record<string, string | boolean>): number {
 function cmdStatus(flags: Record<string, string | boolean>): number {
   const config = defaultDaemonConfig();
   const dbPath = (flags.db as string) ?? config.dbPath;
-  const pidFile = config.pidFile;
+  const pidFile = (flags['pid-file'] as string) ?? config.pidFile;
 
   // 检查 daemon 是否运行
   let daemonRunning = false;
@@ -1495,8 +1495,8 @@ async function main(): Promise<number> {
 }
 
 main().then((code) => {
-  process.exit(code);
+  process.exitCode = code;
 }).catch((err) => {
   console.error(err);
-  process.exit(1);
+  process.exitCode = 1;
 });

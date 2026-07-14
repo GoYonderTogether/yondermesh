@@ -166,14 +166,14 @@ describe('LOOP-007: CLI', () => {
   });
 
   it('status 输出 daemon 和统计信息', () => {
-    const result = runCli(['status', '--db', tmpDb]);
+    const result = runCli(['status', '--db', tmpDb, '--pid-file', '/dev/null/nonexistent']);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('daemon');
     expect(result.stdout).toContain('未运行');
   });
 
   it('status --json 输出合法 JSON', () => {
-    const result = runCli(['status', '--db', tmpDb, '--json']);
+    const result = runCli(['status', '--db', tmpDb, '--pid-file', '/dev/null/nonexistent', '--json']);
     expect(result.exitCode).toBe(0);
     const parsed = JSON.parse(result.stdout);
     expect(parsed.daemonRunning).toBe(false);

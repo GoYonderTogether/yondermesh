@@ -714,6 +714,10 @@ function formatSessionSummary(s: SessionRecord) {
     messageCount: s.messageCount,
     startedAt: s.startedAt,
     lastSeenAt: s.lastSeenAt,
+    model: s.model,
+    cliVersion: s.cliVersion,
+    originator: s.originator,
+    threadSource: s.threadSource,
   };
 }
 

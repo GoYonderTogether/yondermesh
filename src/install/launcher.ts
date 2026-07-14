@@ -25,9 +25,13 @@ export interface ServiceStatus {
 
 /**
  * 生成 LaunchAgent plist 内容
+ *
+ * 注意：LaunchAgent 不加载 shell rc，PATH 里没有 fnm/nvm 管理的 node。
+ * 所以必须用 process.execPath（当前 node 完整路径）而非裸 "node" 命令。
  */
 export function generatePlist(): string {
   const entry = resolveEntrySymlink();
+  const nodeBin = process.execPath;  // 当前 node 进程的完整路径
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -37,7 +41,7 @@ export function generatePlist(): string {
 
   <key>ProgramArguments</key>
   <array>
-    <string>node</string>
+    <string>${nodeBin}</string>
     <string>${entry}</string>
     <string>daemon</string>
   </array>
