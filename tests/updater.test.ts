@@ -8,11 +8,12 @@
  *   4. rollbackRelease 回退正确
  *
  * 注意：不测试真实的 git clone（需要网络），
- * 只测试锁机制和回退逻辑。测试间可能有状态共享，
- * 因此每个测试都自行建立 baseline。
+ * 只测试锁机制和回退逻辑。
+ *
+ * 通过 YONDERMESH_HOME 环境变量重定向到临时目录。
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -25,14 +26,28 @@ import {
   rollbackRelease,
   getCurrentRelease,
 } from '../src/install/release.js';
+import {
+  resolveDataDir,
+  resolvePreviousSymlink,
+} from '../src/install/paths.js';
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 
 describe('LOOP-009: 更新器', () => {
+  let tmpHome: string;
+
   beforeEach(() => {
-    // 每个测试前建立 baseline：安装当前版本
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ymesh-update-'));
+    process.env.YONDERMESH_HOME = tmpHome;
+
+    // 建立 baseline：安装当前版本
     const release = buildRelease(PROJECT_ROOT, true);
     installRelease(release);
+  });
+
+  afterEach(() => {
+    delete process.env.YONDERMESH_HOME;
+    fs.rmSync(tmpHome, { recursive: true, force: true });
   });
 
   it('updateFromGit 返回结构正确的 UpdateResult', () => {
@@ -52,7 +67,7 @@ describe('LOOP-009: 更新器', () => {
   });
 
   it('更新锁：旧锁文件（进程已退出）不阻止新操作', () => {
-    const lockPath = path.join(os.homedir(), '.yondermesh', 'update.lock');
+    const lockPath = path.join(resolveDataDir(), 'update.lock');
     fs.writeFileSync(lockPath, '999999', 'utf-8');
 
     const result = updateFromGit(
@@ -69,7 +84,7 @@ describe('LOOP-009: 更新器', () => {
   it('rollbackRelease 在有 previous 时成功回退', () => {
     const pkgPath = path.join(PROJECT_ROOT, 'package.json');
     const origPkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-    const PREV_SYMLINK = path.join(os.homedir(), '.yondermesh', 'releases', 'previous');
+    const PREV_SYMLINK = resolvePreviousSymlink();
 
     // 清理 previous 符号链接，确保干净基线
     try { fs.unlinkSync(PREV_SYMLINK); } catch { /* ok */ }
@@ -111,7 +126,7 @@ describe('LOOP-009: 更新器', () => {
 
   it('updateFromGit 成功后清理更新锁', () => {
     updateFromGit('file:///nonexistent/repo', 'main', () => true);
-    const lockPath = path.join(os.homedir(), '.yondermesh', 'update.lock');
+    const lockPath = path.join(resolveDataDir(), 'update.lock');
     // 锁应该被清理（finally 块）
     expect(fs.existsSync(lockPath)).toBe(false);
   });

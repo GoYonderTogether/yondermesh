@@ -21,9 +21,9 @@ import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 
 import {
-  DATA_DIR,
-  RELEASES_DIR,
-  CURRENT_SYMLINK,
+  resolveDataDir,
+  resolveReleasesDir,
+  resolveCurrentSymlink,
 } from './paths.js';
 import {
   buildRelease,
@@ -33,10 +33,14 @@ import {
 } from './release.js';
 
 /** 更新锁文件路径 */
-const UPDATE_LOCK = path.join(DATA_DIR, 'update.lock');
+function updateLockPath(): string {
+  return path.join(resolveDataDir(), 'update.lock');
+}
 
 /** staging 目录路径（git clone / fetch 的目标） */
-const STAGING_DIR = path.join(DATA_DIR, 'staging');
+function stagingDir(): string {
+  return path.join(resolveDataDir(), 'staging');
+}
 
 /** 默认 Git 仓库 URL */
 const DEFAULT_REPO_URL = 'https://github.com/GoYonderTogether/yondermesh.git';
@@ -88,7 +92,7 @@ export function updateFromGit(
     syncStaging(repoUrl, branch);
 
     // 3. 在 staging 中构建 release
-    const release = buildRelease(STAGING_DIR, true);
+    const release = buildRelease(stagingDir(), true);
 
     // 4. 安装新 release
     installRelease(release);
@@ -146,7 +150,7 @@ export function updateFromGit(
 const defaultHealthCheck: HealthCheck = (): boolean => {
   try {
     // 使用 current 符号链接运行 version
-    const entry = path.join(CURRENT_SYMLINK, 'ymesh.js');
+    const entry = path.join(resolveCurrentSymlink(), 'ymesh.js');
     if (!existsSync(entry)) return false;
     execSync(`node "${entry}" version`, {
       stdio: 'pipe',
@@ -162,18 +166,19 @@ const defaultHealthCheck: HealthCheck = (): boolean => {
  * Clone 或 fetch 到 staging 目录
  */
 function syncStaging(repoUrl: string, branch: string): void {
-  mkdirSync(RELEASES_DIR, { recursive: true });
+  mkdirSync(resolveReleasesDir(), { recursive: true });
 
-  if (existsSync(path.join(STAGING_DIR, '.git'))) {
+  const staging = stagingDir();
+  if (existsSync(path.join(staging, '.git'))) {
     // staging 已有 git 仓库 → fetch + reset
-    execSync('git fetch origin', { cwd: STAGING_DIR, stdio: 'pipe' });
-    execSync(`git reset --hard origin/${branch}`, { cwd: STAGING_DIR, stdio: 'pipe' });
+    execSync('git fetch origin', { cwd: staging, stdio: 'pipe' });
+    execSync(`git reset --hard origin/${branch}`, { cwd: staging, stdio: 'pipe' });
   } else {
     // 全新 clone
-    rmSync(STAGING_DIR, { recursive: true, force: true });
-    mkdirSync(path.dirname(STAGING_DIR), { recursive: true });
+    rmSync(staging, { recursive: true, force: true });
+    mkdirSync(path.dirname(staging), { recursive: true });
     execSync(
-      `git clone --depth 1 --branch ${branch} ${repoUrl} "${STAGING_DIR}"`,
+      `git clone --depth 1 --branch ${branch} ${repoUrl} "${staging}"`,
       { stdio: 'pipe', timeout: 60_000 },
     );
   }
@@ -185,15 +190,16 @@ function syncStaging(repoUrl: string, branch: string): void {
  * 获取更新锁（文件锁）
  */
 function acquireUpdateLock(): void {
-  if (existsSync(UPDATE_LOCK)) {
-    const content = fs.readFileSync(UPDATE_LOCK, 'utf-8').trim();
+  const lockPath = updateLockPath();
+  if (existsSync(lockPath)) {
+    const content = fs.readFileSync(lockPath, 'utf-8').trim();
     const pid = parseInt(content, 10);
     if (pid && isProcessAlive(pid)) {
       throw new Error(`另一个更新正在进行中 (PID ${pid})`);
     }
     // 旧锁文件但进程已退出——清理
   }
-  writeFileSync(UPDATE_LOCK, String(process.pid), 'utf-8');
+  writeFileSync(lockPath, String(process.pid), 'utf-8');
 }
 
 /**
@@ -201,10 +207,11 @@ function acquireUpdateLock(): void {
  */
 function releaseUpdateLock(): void {
   try {
-    if (existsSync(UPDATE_LOCK)) {
-      const content = fs.readFileSync(UPDATE_LOCK, 'utf-8').trim();
+    const lockPath = updateLockPath();
+    if (existsSync(lockPath)) {
+      const content = fs.readFileSync(lockPath, 'utf-8').trim();
       if (parseInt(content, 10) === process.pid) {
-        unlinkSync(UPDATE_LOCK);
+        unlinkSync(lockPath);
       }
     }
   } catch {

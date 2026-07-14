@@ -30,9 +30,9 @@ export interface DaemonConfig {
   skipCodex?: boolean;
 }
 
-/** 默认数据目录 */
+/** 默认数据目录（支持 YONDERMESH_HOME 环境变量覆盖） */
 export function defaultDataDir(): string {
-  return join(homedir(), '.yondermesh');
+  return process.env.YONDERMESH_HOME ?? join(homedir(), '.yondermesh');
 }
 
 /** 默认配置 */

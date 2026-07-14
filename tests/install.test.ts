@@ -9,22 +9,14 @@
  *   5. rollbackRelease 回退到 previous
  *   6. generatePlist 输出合法 plist XML
  *   7. getServiceStatus 在 plist 不存在时返回 loaded=false
+ *
+ * 通过 YONDERMESH_HOME 环境变量重定向到临时目录，避免写入真实 ~/.yondermesh。
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-
-// 在导入 install 模块前，用环境变量覆盖 DATA_DIR
-// 但 install/paths.ts 用了硬编码常量，所以我们需要 mock 或直接测试函数
-
-// 先临时修改 homedir 来重定向路径
-const ORIG_HOME = process.env.HOME;
-let tmpHome: string;
-
-// 由于 paths.ts 在导入时就确定了路径，我们需要用动态导入
-// 但 vitest 的 ESM 动态导入比较麻烦，所以改用直接测试函数行为
 
 import {
   buildRelease,
@@ -34,12 +26,27 @@ import {
   getCurrentRelease,
   generatePlist,
   getServiceStatus,
+  resolveDataDir,
+  resolveReleasesDir,
+  resolveBinDir,
+  resolveCurrentSymlink,
+  resolveEntrySymlink,
+  resolvePreviousSymlink,
 } from '../src/install/index.js';
 
 
 describe('LOOP-008: 安装模块', () => {
-  // 注意：这些测试直接操作真实的 ~/.yondermesh 目录
-  // 测试后清理，不影响生产数据（如果有的话）
+  let tmpHome: string;
+
+  beforeEach(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ymesh-install-'));
+    process.env.YONDERMESH_HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    delete process.env.YONDERMESH_HOME;
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  });
 
   it('generatePlist 输出合法 plist XML', () => {
     const plist = generatePlist();
@@ -59,8 +66,6 @@ describe('LOOP-008: 安装模块', () => {
   });
 
   it('getServiceStatus 在 plist 不存在时返回 loaded=false', () => {
-    // 这个测试假设测试环境没有安装 plist
-    // 如果已安装，这个测试可能需要跳过
     const status = getServiceStatus();
     expect(status).toHaveProperty('loaded');
     expect(status).toHaveProperty('running');
@@ -71,6 +76,17 @@ describe('LOOP-008: 安装模块', () => {
 
 describe('LOOP-008: Release 构建（使用真实源码）', () => {
   const projectRoot = path.resolve(__dirname, '..');
+  let tmpHome: string;
+
+  beforeEach(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ymesh-release-'));
+    process.env.YONDERMESH_HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    delete process.env.YONDERMESH_HOME;
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  });
 
   it('buildRelease 构建出合法的 release 目录', () => {
     const release = buildRelease(projectRoot, true);
@@ -92,36 +108,32 @@ describe('LOOP-008: Release 构建（使用真实源码）', () => {
     installRelease(release);
 
     // current 符号链接应该存在
-    const currentExists = fs.existsSync(path.join(os.homedir(), '.yondermesh', 'releases', 'current'));
-    expect(currentExists).toBe(true);
+    expect(fs.existsSync(resolveCurrentSymlink())).toBe(true);
 
     // 入口符号链接应该存在
-    const entryExists = fs.existsSync(path.join(os.homedir(), '.yondermesh', 'bin', 'ymesh'));
-    expect(entryExists).toBe(true);
+    expect(fs.existsSync(resolveEntrySymlink())).toBe(true);
   });
 
   it('getCurrentRelease 返回当前版本', () => {
+    const release = buildRelease(projectRoot, true);
+    installRelease(release);
     const current = getCurrentRelease();
     expect(current).not.toBeNull();
     expect(current).toMatch(/\d+\.\d+\.\d+/);
   });
 
   it('listReleases 返回非空列表', () => {
-    // 先确保有一个 release
     const release = buildRelease(projectRoot, true);
     installRelease(release);
     const releases = listReleases();
     expect(releases.length).toBeGreaterThan(0);
     const current = getCurrentRelease();
-    // current 可能是 null（符号链接不存在），但 releases 至少有一个版本
     if (current) {
       expect(releases).toContain(current);
     }
   });
 
   it('rollbackRelease 在没有 previous 时返回 null', () => {
-    // 先确保 previous 不存在（通过先清除）
-    // 这个测试可能因测试顺序而异，所以只测试函数可调用且返回 string|null
     const result = rollbackRelease();
     expect(typeof result === 'string' || result === null).toBe(true);
   });
@@ -141,8 +153,7 @@ describe('LOOP-008: Release 构建（使用真实源码）', () => {
       installRelease(r2);
 
       // previous 应该存在
-      const previousExists = fs.existsSync(path.join(os.homedir(), '.yondermesh', 'releases', 'previous'));
-      expect(previousExists).toBe(true);
+      expect(fs.existsSync(resolvePreviousSymlink())).toBe(true);
 
       // rollback 应该返回之前的路径
       const rolled = rollbackRelease();

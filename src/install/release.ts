@@ -11,13 +11,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 import {
-  RELEASES_DIR,
+  resolveReleasesDir,
+  resolveEntrySymlink,
+  resolveBinDir,
+  resolveCurrentSymlink,
+  resolvePreviousSymlink,
   releaseDir,
   releaseEntry,
-  ENTRY_SYMLINK,
-  BIN_DIR,
-  CURRENT_SYMLINK,
-  PREVIOUS_SYMLINK,
 } from './paths.js';
 
 /** release 构建结果 */
@@ -109,28 +109,31 @@ import('./dist/bin/ymesh.js');
  */
 export function installRelease(release: ReleaseResult): void {
   // 确保 bin 目录存在
-  fs.mkdirSync(BIN_DIR, { recursive: true });
-  fs.mkdirSync(RELEASES_DIR, { recursive: true });
+  fs.mkdirSync(resolveBinDir(), { recursive: true });
+  fs.mkdirSync(resolveReleasesDir(), { recursive: true });
 
   // 如果已有 current 符号链接，先保存为 previous
-  if (fs.existsSync(CURRENT_SYMLINK) || fs.existsSync(PREVIOUS_SYMLINK)) {
+  const currentSymlink = resolveCurrentSymlink();
+  const previousSymlink = resolvePreviousSymlink();
+  if (fs.existsSync(currentSymlink) || fs.existsSync(previousSymlink)) {
     try {
-      const currentTarget = fs.readlinkSync(CURRENT_SYMLINK);
+      const currentTarget = fs.readlinkSync(currentSymlink);
       // 更新 previous 指向旧 current
-      removeSymlink(PREVIOUS_SYMLINK);
-      fs.symlinkSync(currentTarget, PREVIOUS_SYMLINK, 'dir');
+      removeSymlink(previousSymlink);
+      fs.symlinkSync(currentTarget, previousSymlink, 'dir');
     } catch {
       /* current 不是符号链接或不存在 */
     }
   }
 
   // 更新 current 指向新 release
-  removeSymlink(CURRENT_SYMLINK);
-  fs.symlinkSync(release.releasePath, CURRENT_SYMLINK, 'dir');
+  removeSymlink(currentSymlink);
+  fs.symlinkSync(release.releasePath, currentSymlink, 'dir');
 
   // 更新入口符号链接
-  removeSymlink(ENTRY_SYMLINK);
-  fs.symlinkSync(release.entryPath, ENTRY_SYMLINK, 'file');
+  const entrySymlink = resolveEntrySymlink();
+  removeSymlink(entrySymlink);
+  fs.symlinkSync(release.entryPath, entrySymlink, 'file');
 }
 
 /**
@@ -139,26 +142,29 @@ export function installRelease(release: ReleaseResult): void {
  * @returns 回退后的 release 路径，或 null 如果没有 previous
  */
 export function rollbackRelease(): string | null {
-  if (!fs.existsSync(PREVIOUS_SYMLINK)) {
+  const previousSymlink = resolvePreviousSymlink();
+  if (!fs.existsSync(previousSymlink)) {
     return null;
   }
 
   try {
-    const previousTarget = fs.readlinkSync(PREVIOUS_SYMLINK);
+    const previousTarget = fs.readlinkSync(previousSymlink);
 
     // current → previous
-    removeSymlink(CURRENT_SYMLINK);
-    fs.symlinkSync(previousTarget, CURRENT_SYMLINK, 'dir');
+    const currentSymlink = resolveCurrentSymlink();
+    removeSymlink(currentSymlink);
+    fs.symlinkSync(previousTarget, currentSymlink, 'dir');
 
     // 入口符号链接
     const entry = releaseEntry(previousTarget);
     if (fs.existsSync(entry)) {
-      removeSymlink(ENTRY_SYMLINK);
-      fs.symlinkSync(entry, ENTRY_SYMLINK, 'file');
+      const entrySymlink = resolveEntrySymlink();
+      removeSymlink(entrySymlink);
+      fs.symlinkSync(entry, entrySymlink, 'file');
     }
 
     // 清理 previous
-    removeSymlink(PREVIOUS_SYMLINK);
+    removeSymlink(previousSymlink);
 
     return previousTarget;
   } catch {
@@ -170,13 +176,14 @@ export function rollbackRelease(): string | null {
  * 列出所有已安装的 release 版本
  */
 export function listReleases(): string[] {
-  if (!fs.existsSync(RELEASES_DIR)) return [];
+  const releasesDir = resolveReleasesDir();
+  if (!fs.existsSync(releasesDir)) return [];
   return fs
-    .readdirSync(RELEASES_DIR)
+    .readdirSync(releasesDir)
     .filter((name) => name !== 'current' && name !== 'previous')
     .filter((name) => {
       try {
-        return fs.statSync(path.join(RELEASES_DIR, name)).isDirectory();
+        return fs.statSync(path.join(releasesDir, name)).isDirectory();
       } catch {
         return false;
       }
@@ -190,7 +197,7 @@ export function listReleases(): string[] {
  */
 export function getCurrentRelease(): string | null {
   try {
-    const target = fs.readlinkSync(CURRENT_SYMLINK);
+    const target = fs.readlinkSync(resolveCurrentSymlink());
     return path.basename(target);
   } catch {
     return null;

@@ -10,9 +10,9 @@ import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 import {
   LAUNCH_AGENT_LABEL,
-  LAUNCH_AGENT_PLIST,
-  ENTRY_SYMLINK,
-  DATA_DIR,
+  resolveLaunchAgentPlist,
+  resolveEntrySymlink,
+  resolveDataDir,
 } from './paths.js';
 
 /** LaunchAgent 状态 */
@@ -27,7 +27,7 @@ export interface ServiceStatus {
  * 生成 LaunchAgent plist 内容
  */
 export function generatePlist(): string {
-  const entry = ENTRY_SYMLINK;
+  const entry = resolveEntrySymlink();
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -43,7 +43,7 @@ export function generatePlist(): string {
   </array>
 
   <key>WorkingDirectory</key>
-  <string>${DATA_DIR}</string>
+  <string>${resolveDataDir()}</string>
 
   <key>RunAtLoad</key>
   <true/>
@@ -55,10 +55,10 @@ export function generatePlist(): string {
   </dict>
 
   <key>StandardOutPath</key>
-  <string>${DATA_DIR}/daemon.log</string>
+  <string>${resolveDataDir()}/daemon.log</string>
 
   <key>StandardErrorPath</key>
-  <string>${DATA_DIR}/daemon.err.log</string>
+  <string>${resolveDataDir()}/daemon.err.log</string>
 
   <key>ProcessType</key>
   <string>Background</string>
@@ -74,33 +74,35 @@ export function generatePlist(): string {
  */
 export function installService(): void {
   // 确保 plist 目录存在
-  const dir = path.dirname(LAUNCH_AGENT_PLIST);
+  const plistPath = resolveLaunchAgentPlist();
+  const dir = path.dirname(plistPath);
   fs.mkdirSync(dir, { recursive: true });
 
   // 写入 plist
-  fs.writeFileSync(LAUNCH_AGENT_PLIST, generatePlist(), 'utf-8');
+  fs.writeFileSync(plistPath, generatePlist(), 'utf-8');
 
   // 如果已加载，先 unload
   try {
-    execSync(`launchctl unload "${LAUNCH_AGENT_PLIST}"`, { stdio: 'pipe' });
+    execSync(`launchctl unload "${plistPath}"`, { stdio: 'pipe' });
   } catch {
     /* 未加载 */
   }
 
   // load
-  execSync(`launchctl load "${LAUNCH_AGENT_PLIST}"`, { stdio: 'pipe' });
+  execSync(`launchctl load "${plistPath}"`, { stdio: 'pipe' });
 }
 
 /**
  * 卸载 LaunchAgent
  */
 export function uninstallService(): void {
+  const plistPath = resolveLaunchAgentPlist();
   try {
-    execSync(`launchctl unload "${LAUNCH_AGENT_PLIST}"`, { stdio: 'pipe' });
+    execSync(`launchctl unload "${plistPath}"`, { stdio: 'pipe' });
   } catch {
     /* 未加载 */
   }
-  fs.rmSync(LAUNCH_AGENT_PLIST, { force: true });
+  fs.rmSync(plistPath, { force: true });
 }
 
 /**
@@ -121,7 +123,8 @@ export function stopService(): void {
  * 查询 service 状态
  */
 export function getServiceStatus(): ServiceStatus {
-  if (!fs.existsSync(LAUNCH_AGENT_PLIST)) {
+  const plistPath = resolveLaunchAgentPlist();
+  if (!fs.existsSync(plistPath)) {
     return { loaded: false, running: false, pid: null, exitStatus: null };
   }
 

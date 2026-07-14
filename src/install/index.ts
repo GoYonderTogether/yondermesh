@@ -34,6 +34,15 @@ export {
   LAUNCH_AGENT_PLIST,
   releaseDir,
   releaseEntry,
+  resolveDataDir,
+  resolveBinDir,
+  resolveReleasesDir,
+  resolveEntrySymlink,
+  resolvePreviousSymlink,
+  resolveCurrentSymlink,
+  resolveDbPath,
+  resolvePidFile,
+  resolveLaunchAgentPlist,
 } from './paths.js';
 
 // 更新与回退（LOOP-009）

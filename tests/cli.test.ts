@@ -10,7 +10,8 @@
  *   6. 未知命令返回退出码 1
  *   7. --json 标志输出合法 JSON
  *
- * 使用 tsx 直接运行 TS 源码。
+ * 直接运行编译后的 dist/bin/ymesh.js，避免 npx tsx 在沙盒环境下的
+ * named pipe EPERM 问题。
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -21,7 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { SessionStore } from '../src/store/index.js';
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
-const CLI_ENTRY = path.join(PROJECT_ROOT, 'src', 'bin', 'ymesh.ts');
+const CLI_ENTRY = path.join(PROJECT_ROOT, 'dist', 'bin', 'ymesh.js');
 
 /** 运行 CLI 并返回 { stdout, stderr, exitCode } */
 function runCli(
@@ -30,8 +31,8 @@ function runCli(
 ): { stdout: string; stderr: string; exitCode: number } {
   try {
     const stdout = execFileSync(
-      'npx',
-      ['tsx', CLI_ENTRY, ...args],
+      'node',
+      [CLI_ENTRY, ...args],
       {
         encoding: 'utf-8',
         timeout: 15000,

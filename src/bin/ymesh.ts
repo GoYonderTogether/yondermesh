@@ -31,8 +31,8 @@ import {
   stopService,
   getServiceStatus,
   updateFromGit,
-  ENTRY_SYMLINK,
-  LAUNCH_AGENT_PLIST,
+  resolveEntrySymlink as ENTRY_SYMLINK,
+  resolveLaunchAgentPlist as LAUNCH_AGENT_PLIST,
 } from '../install/index.js';
 
 // 读取 package.json 的版本号
@@ -392,7 +392,7 @@ function cmdInstall(flags: Record<string, string | boolean>): number {
     console.log(`[yondermesh] 构建 release ${release.version} → ${release.releasePath}`);
 
     installRelease(release);
-    console.log(`[yondermesh] 已安装: ${ENTRY_SYMLINK} → ${release.entryPath}`);
+    console.log(`[yondermesh] 已安装: ${ENTRY_SYMLINK()} → ${release.entryPath}`);
     console.log('[yondermesh] 提示：将以下路径加入 PATH 以全局使用：');
     console.log('  export PATH="$HOME/.yondermesh/bin:$PATH"');
     return 0;
@@ -412,7 +412,7 @@ function cmdService(flags: Record<string, string | boolean>): number {
     case 'install': {
       try {
         installService();
-        console.log(`[yondermesh] LaunchAgent 已安装: ${LAUNCH_AGENT_PLIST}`);
+        console.log(`[yondermesh] LaunchAgent 已安装: ${LAUNCH_AGENT_PLIST()}`);
         return 0;
       } catch (err) {
         console.error(`[yondermesh] 安装失败: ${String(err)}`);
