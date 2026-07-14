@@ -615,7 +615,7 @@ async function main(): Promise<number> {
       return await cmdUpdate(flags);
 
     case 'mcp':
-      return await cmdMcp(flags);
+      return await cmdMcp();
 
     case 'doctor':
       return cmdDoctor(flags);

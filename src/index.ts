@@ -52,6 +52,10 @@ export type {
 } from './daemon/index.js';
 export { defaultDaemonConfig, defaultDataDir } from './daemon/config.js';
 
+// MCP Server（LOOP-011）
+export { McpServer, parseRelativeTime } from './mcp/server.js';
+export type { McpToolDef, McpToolResult } from './mcp/server.js';
+
 // 安装与 release 管理（LOOP-008）
 export {
   buildRelease,
