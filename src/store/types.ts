@@ -163,6 +163,8 @@ export interface SessionQuery {
   /** projectPath 前缀匹配（目录边界安全） */
   projectPrefix?: string;
   limit?: number;
+  /** 是否包含 archived（被去重的）session，默认 false */
+  includeArchived?: boolean;
 }
 
 /** session 列表项 */

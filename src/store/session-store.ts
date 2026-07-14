@@ -40,7 +40,7 @@ import type {
 /** 行记录的松散类型 */
 type Row = Record<string, unknown>;
 
-import { expandSource } from './source-aliases.js';
+import { expandSource, normalizeSource, sessionMatchKey } from './source-aliases.js';
 
 // node:sqlite 是实验性内置，vitest/vite 静态解析会误判为裸包 sqlite。
 // 用 createRequire 在运行时加载，绕过 vite 预优化；类型仍取自 @types/node。
@@ -292,6 +292,11 @@ export class SessionStore {
     const conditions: string[] = [];
     const params: (string | number)[] = [];
 
+    // 默认排除 archived（被去重的）session
+    if (!query.includeArchived) {
+      conditions.push("retention = 'live'");
+    }
+
     if (query.deviceId) {
       conditions.push('device_id = ?');
       params.push(query.deviceId);
@@ -393,6 +398,94 @@ export class SessionStore {
       totalMessages: totals.total_messages as number,
     };
   }
+
+  // ─── 跨源去重 ──────────────────────────────────────────────────────────
+
+  /**
+   * 跨源去重：cass (coverage B) 导入的 session 如果与原生 adapter (coverage A)
+   * 导入的是同一个物理 session，标记 B 为 import_alias_of 并设 retention=archived。
+   *
+   * 匹配键 = normalizeSource(source) + extractCanonicalId(native_session_id)
+   * 例如 cass 的 `-Users-zoran/.../6378ff08-....jsonl` 和原生 `6378ff08-...` 匹配。
+   *
+   * 幂等：已标记为 archived 的 session 不会重复处理。
+   */
+  deduplicateCrossSource(): { deduped: number; total: number; unique: number } {
+    // 取出 source_instance 的 coverage 映射
+    const instances = this.db
+      .prepare('SELECT id, coverage FROM source_instances')
+      .all() as Row[];
+    const coverageMap = new Map<string, Coverage>();
+    for (const inst of instances) {
+      coverageMap.set(inst.id as string, inst.coverage as Coverage);
+    }
+
+    // 取出全部 live session（尚未被标记 archived 的）
+    const sessions = this.db
+      .prepare("SELECT id, source_instance_id, source, native_session_id FROM sessions WHERE retention = 'live'")
+      .all() as Row[];
+
+    // 按 matchKey 分组
+    const groups = new Map<string, Array<{ id: string; coverage: Coverage }>>();
+    for (const s of sessions) {
+      const key = sessionMatchKey(s.source as string, s.native_session_id as string);
+      const cov = coverageMap.get(s.source_instance_id as string) ?? 'B';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push({ id: s.id as string, coverage: cov });
+    }
+
+    let deduped = 0;
+    const now = Date.now();
+    const updateRetention = this.db
+      .prepare("UPDATE sessions SET retention = 'archived', updated_at = ? WHERE id = ? AND retention = 'live'");
+
+    for (const [, group] of groups) {
+      if (group.length < 2) continue;
+      // 找出 A 覆盖的 session 作为 canonical
+      const aSessions = group.filter((s) => s.coverage === 'A');
+      if (aSessions.length === 0) continue; // 无 A 覆盖，无法去重
+      const canonical = aSessions[0]!;
+      // B 覆盖的标记为 archived 并建关系
+      for (const s of group) {
+        if (s.coverage !== 'B') continue;
+        updateRetention.run(now, s.id);
+        this.addRelationship({
+          fromSessionId: s.id,
+          toSessionId: canonical.id,
+          relationType: 'import_alias_of',
+          evidence: 'cross-source dedup: B coverage matched to A by sessionMatchKey',
+        });
+        deduped++;
+      }
+    }
+
+    return { deduped, total: sessions.length, unique: sessions.length - deduped };
+  }
+
+  /**
+   * 按真实 CLI agent 分组统计（排除 archived）。
+   * 返回按 count 降序排列的 { source, count, rootCount, subagentCount } 列表。
+   */
+ getSourceBreakdown(): Array<{ source: string; count: number; rootCount: number; subagentCount: number }> {
+   const rows = this.db
+     .prepare(
+       `SELECT source, topology, message_count FROM sessions WHERE retention = 'live'`,
+     )
+     .all() as Row[];
+   // 在 TS 层按 normalizeSource 聚合
+   const map = new Map<string, { count: number; rootCount: number; subagentCount: number }>();
+   for (const r of rows) {
+     const key = normalizeSource(r.source as string);
+     if (!map.has(key)) map.set(key, { count: 0, rootCount: 0, subagentCount: 0 });
+     const e = map.get(key)!;
+     e.count++;
+     if ((r.topology as string) === 'root') e.rootCount++;
+     if ((r.topology as string) === 'subagent') e.subagentCount++;
+   }
+   return [...map.entries()]
+     .map(([source, v]) => ({ source, ...v }))
+     .sort((a, b) => b.count - a.count);
+ }
 
   // ─── scan_runs ───────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeSource, expandSource } from '../src/store/source-aliases.js';
+import { normalizeSource, expandSource, extractCanonicalId, sessionMatchKey } from '../src/store/source-aliases.js';
 
 describe('Source 别名归一化', () => {
   it('normalizeSource: claude 变体归一化为 claude', () => {
@@ -65,5 +65,34 @@ describe('Source 别名归一化', () => {
       // 原始名称也应该在展开列表中（或其 lowercase 形式）
       expect(expanded).toContain(raw.toLowerCase());
     }
+  });
+});
+
+
+describe('extractCanonicalId & sessionMatchKey', () => {
+  it('从路径化 ID 提取 UUID', () => {
+    expect(extractCanonicalId('-Users-zoran/projects/6378ff08-251c-431d-8da7-abcb6c724459.jsonl'))
+      .toBe('6378ff08-251c-431d-8da7-abcb6c724459');
+  });
+
+  it('纯 UUID 原样返回（小写）', () => {
+    expect(extractCanonicalId('6378ff08-251c-431d-8da7-abcb6c724459'))
+      .toBe('6378ff08-251c-431d-8da7-abcb6c724459');
+  });
+
+  it('无 UUID 返回原始值', () => {
+    expect(extractCanonicalId('some-random-id')).toBe('some-random-id');
+  });
+
+  it('sessionMatchKey: cass 和原生 session 生成相同 key', () => {
+    const cassKey = sessionMatchKey('claude_code', '-Users-zoran/projects/6378ff08-251c-431d-8da7-abcb6c724459.jsonl');
+    const nativeKey = sessionMatchKey('claude-code', '6378ff08-251c-431d-8da7-abcb6c724459');
+    expect(cassKey).toBe(nativeKey);
+  });
+
+  it('sessionMatchKey: 不同 session 生成不同 key', () => {
+    const a = sessionMatchKey('claude-code', '6378ff08-251c-431d-8da7-abcb6c724459');
+    const b = sessionMatchKey('claude-code', 'faa5258c-360d-4d76-b8ad-c28b4f412621');
+    expect(a).not.toBe(b);
   });
 });

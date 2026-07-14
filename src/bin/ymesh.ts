@@ -37,6 +37,7 @@ import {
  resolveEntrySymlink as ENTRY_SYMLINK,
   resolveLaunchAgentPlist as LAUNCH_AGENT_PLIST,
 } from '../install/index.js';
+import { mountAll, verifyAll, unmountAll, detectInstalledClis } from '../mount/index.js';
 
 import { McpServer } from '../mcp/server.js';
 import {
@@ -153,6 +154,7 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   mcp unregister      从 Claude Code 和 Codex 注销
   mcp status          查看 MCP 注册状态
   doctor              运行系统诊断（检查安装、数据库、daemon、日志健康状态）
+  mount [status|all|remove]  管理跨 CLI 挂载（MCP/Skill/Plugin 到所有已安装的 CLI agent）
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -171,6 +173,7 @@ sessions 过滤选项:
   --project <path>    按 projectPath 精确匹配
   --from <time>       起始时间（epoch ms 或 ISO 日期）
   --to <time>         截止时间（epoch ms 或 ISO 日期）
+  --include-archived  包含被去重的 session（默认不显示）
 
 示例:
   ymesh scan
@@ -198,15 +201,15 @@ function cmdScan(flags: Record<string, string | boolean>): number {
   const deviceId = (flags.device as string) ?? hostname();
   const store = openStore(flags.db as string | undefined);
 
-  const results: Array<{ source: string; scanned: number; inserted: number; updated: number }> = [];
+  const importStats: Array<{ adapter: string; scanned: number; inserted: number; updated: number }> = [];
 
   // cass
   try {
     const importer = new CassImporter(store, { deviceId });
     const stats = importer.import();
-    results.push({ source: 'cass', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+    importStats.push({ adapter: 'cass', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
   } catch (err) {
-    results.push({ source: 'cass', scanned: 0, inserted: 0, updated: 0 });
+    importStats.push({ adapter: 'cass', scanned: 0, inserted: 0, updated: 0 });
     if (!flags.json) {
       console.error(`[cass] 跳过: ${String(err).split('\n')[0]}`);
     }
@@ -216,9 +219,9 @@ function cmdScan(flags: Record<string, string | boolean>): number {
   try {
     const importer = new ClaudeCodeImporter(store, { deviceId });
     const stats = importer.import();
-    results.push({ source: 'claude', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+    importStats.push({ adapter: 'claude', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
   } catch (err) {
-    results.push({ source: 'claude', scanned: 0, inserted: 0, updated: 0 });
+    importStats.push({ adapter: 'claude', scanned: 0, inserted: 0, updated: 0 });
     if (!flags.json) {
       console.error(`[claude] 跳过: ${String(err).split('\n')[0]}`);
     }
@@ -228,22 +231,33 @@ function cmdScan(flags: Record<string, string | boolean>): number {
   try {
     const importer = new CodexImporter(store, { deviceId });
     const stats = importer.import();
-    results.push({ source: 'codex', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+    importStats.push({ adapter: 'codex', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
   } catch (err) {
-    results.push({ source: 'codex', scanned: 0, inserted: 0, updated: 0 });
+    importStats.push({ adapter: 'codex', scanned: 0, inserted: 0, updated: 0 });
     if (!flags.json) {
       console.error(`[codex] 跳过: ${String(err).split('\n')[0]}`);
     }
   }
 
+  // 跨源去重：cass (B) 与原生 adapter (A) 的重复 session 标记为 archived
+  const dedup = store.deduplicateCrossSource();
+
+  // 按真实 CLI agent 分组统计
+  const breakdown = store.getSourceBreakdown();
+
   store.close();
 
   if (flags.json) {
-    console.log(JSON.stringify({ results }, null, 2));
+    console.log(JSON.stringify({ importStats, dedup, breakdown }, null, 2));
   } else {
-    console.log('\n扫描完成：\n');
-    for (const r of results) {
-      console.log(`  ${r.source.padEnd(10)}  扫描 ${r.scanned}  新增 ${r.inserted}  更新 ${r.updated}`);
+    console.log('\n扫描完成（已去重）：\n');
+    for (const cli of breakdown) {
+      const label = cli.source.padEnd(14);
+      const topology = cli.subagentCount > 0 ? `  (root ${cli.rootCount} / sub ${cli.subagentCount})` : '';
+      console.log(`  ${label} ${String(cli.count).padStart(5)} sessions${topology}`);
+    }
+    if (dedup.deduped > 0) {
+      console.log(`\n  去重前 ${dedup.total} → 去重 ${dedup.deduped} → 去重后 ${dedup.unique}`);
     }
     console.log();
   }
@@ -320,17 +334,18 @@ function cmdStatus(flags: Record<string, string | boolean>): number {
 function cmdSessions(flags: Record<string, string | boolean>): number {
   const store = openStore(flags.db as string | undefined);
 
-  const query = {
-    limit: parseLimit(flags),
-    source: flags.source as string | undefined,
-    topology: flags.topology as 'root' | 'subagent' | 'sidechain' | undefined,
-    cwd: flags.cwd as string | undefined,
-    cwdPrefix: flags['cwd-prefix'] as string | undefined,
-    projectPath: flags.project as string | undefined,
-    projectPrefix: (flags['project-prefix'] as string | undefined),
-    startedAtFrom: parseTime(flags.from),
-    startedAtTo: parseTime(flags.to),
-  };
+ const query = {
+   limit: parseLimit(flags),
+   source: flags.source as string | undefined,
+   topology: flags.topology as 'root' | 'subagent' | 'sidechain' | undefined,
+   cwd: flags.cwd as string | undefined,
+   cwdPrefix: flags['cwd-prefix'] as string | undefined,
+   projectPath: flags.project as string | undefined,
+   projectPrefix: (flags['project-prefix'] as string | undefined),
+   startedAtFrom: parseTime(flags.from),
+   startedAtTo: parseTime(flags.to),
+   includeArchived: flags['include-archived'] === true,
+ };
 
   const sessions = store.querySessions(query);
   const stats = store.getSessionStats(query);
@@ -520,6 +535,49 @@ function cmdReleases(flags: Record<string, string | boolean>): number {
   return 0;
 }
 
+// --- mount command ---
+
+/** mount: manage non-invasive extensions across all installed CLIs */
+function cmdMount(flags: Record<string, string | boolean>): number {
+  const subcommand = typeof flags._sub === "string" ? flags._sub : (process.argv[3] ?? "status");
+
+  if (subcommand === "all" || subcommand === "add") {
+    console.log("[yondermesh] Mounting extensions to all installed CLIs...");
+    const results = mountAll();
+    for (const r of results) {
+      const icon = r.success ? "  OK" : "  --";
+      console.log("  " + icon + "  " + r.target + ": " + r.extension + " (" + r.strategy + ") " + r.message);
+    }
+    const ok = results.filter((r) => r.success).length;
+    console.log("[yondermesh] " + ok + "/" + results.length + " mounts succeeded");
+    return results.every((r) => r.success) ? 0 : 1;
+  }
+
+  if (subcommand === "remove" || subcommand === "unmount") {
+    console.log("[yondermesh] Removing all mounts...");
+    const results = unmountAll();
+    for (const r of results) {
+      console.log("  " + r.target + ": " + r.extension + " " + r.message);
+    }
+    return 0;
+  }
+
+  // default: status
+  console.log("[yondermesh] Mount status:");
+  const clis = detectInstalledClis(homedir());
+  console.log("  Installed CLIs: " + clis.map((c) => c.id).join(", ") + " (" + clis.length + " total)");
+  const statuses = verifyAll();
+  for (const s of statuses) {
+    const icon = s.mounted ? "  MOUNTED" : "  --";
+    console.log("  " + icon + "  " + s.cli + ": " + s.extension + " [" + s.strategy + "]");
+  }
+
+  if (flags.json === true) {
+    console.log(JSON.stringify({ clis: clis.map((c) => c.id), mounts: statuses }, null, 2));
+  }
+  return 0;
+}
+
 // --- doctor command ---
 
 /** doctor: run system diagnostics */
@@ -692,6 +750,9 @@ async function main(): Promise<number> {
 
     case 'doctor':
       return cmdDoctor(flags);
+
+    case 'mount':
+      return cmdMount(flags);
 
     case 'rollback':
       {
