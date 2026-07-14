@@ -28,6 +28,11 @@ export interface DaemonConfig {
   skipClaude?: boolean;
   /** 是否跳过 Codex 实时监听 */
   skipCodex?: boolean;
+  /**
+   * 是否在 reconcile 和新 session 检测时自动挂载扩展到已安装的 CLI。
+   * 默认 true。设为 false 可关闭 auto-mount 行为（仅手动 `ymesh mount all`）。
+   */
+  autoMount?: boolean;
 }
 
 /** 默认数据目录（支持 YONDERMESH_HOME 环境变量覆盖） */
@@ -44,5 +49,6 @@ export function defaultDaemonConfig(): DaemonConfig {
     pidFile: join(dataDir, 'daemon.pid'),
     reconcileIntervalMs: 60 * 1000, // 1 分钟
     debounceMs: 1_000, // 1 秒
+    autoMount: true,
   };
 }

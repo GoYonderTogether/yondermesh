@@ -20,6 +20,7 @@ import { SessionStore, expandSource } from '../store/index.js';
 import { CassImporter, resolveCassDbPath } from '../cass/index.js';
 import { ClaudeCodeImporter, resolveClaudeProjectsPath } from '../claude/index.js';
 import { CodexImporter, resolveCodexSessionsPath } from '../codex/index.js';
+import { mountAll } from '../mount/index.js';
 import type { DaemonConfig } from './config.js';
 import { defaultDaemonConfig } from './config.js';
 
@@ -115,9 +116,14 @@ export class YondermeshDaemon {
 
     // 启动定时 reconcile
     this.reconcileTimer = setInterval(() => {
-      this.fullScan().catch((err) => {
-        this.watchErrors.push(`reconcile error: ${String(err)}`);
-      });
+      this.fullScan()
+        .then(() => {
+          // 层 1：reconcile 后自动挂载（幂等：mountAll 内部策略先 remove 再 add）
+          if (this.config.autoMount) this.autoMount('reconcile');
+        })
+        .catch((err) => {
+          this.watchErrors.push(`reconcile error: ${String(err)}`);
+        });
     }, this.config.reconcileIntervalMs);
 
     // 确保进程不会因为 watcher 保持存活（调用方自己决定是否 hold）
@@ -354,6 +360,9 @@ export class YondermeshDaemon {
           process.stderr.write(
             `[yondermesh] 新 session 检测到: ${key} ${sessionId}\n`,
           );
+          // 层 3：session 创建 hook——新 session 入库后自动挂载，
+          // 确保 CLI 下次启动新 session 时 yondermesh 扩展已就位
+          if (this.config.autoMount) this.autoMount(`session-hook:${key}`);
         }
       }
     }, this.config.debounceMs);
@@ -389,6 +398,28 @@ export class YondermeshDaemon {
       return row?.id;
     } catch {
       return undefined;
+    }
+  }
+
+  // ─── 自动挂载 ─────────────────────────────────────────────────────────
+
+  /**
+   * 调用 mountAll 将扩展挂载到所有已安装的 CLI。
+   * 幂等：mountAll 内部策略会先 remove 再 add，已挂载的不会重复堆积。
+   * 失败只记录到 watchErrors，不抛出，不影响 daemon 主流程。
+   */
+  private autoMount(reason: string): void {
+    try {
+      const results = mountAll();
+      // unsupported（CLI 不支持该扩展类型）不计入分母，
+      // 与 cmdInstall / cmdMount 的统计口径保持一致
+      const attempted = results.filter((r) => r.strategy !== 'unsupported');
+      const ok = attempted.filter((r) => r.success).length;
+      process.stderr.write(
+        `[yondermesh] auto-mount: ${ok}/${attempted.length} mounts OK (${reason})\n`,
+      );
+    } catch (err) {
+      this.watchErrors.push(`auto-mount error (${reason}): ${String(err)}`);
     }
   }
 

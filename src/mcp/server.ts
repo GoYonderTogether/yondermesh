@@ -12,6 +12,14 @@ import { homedir } from 'node:os';
 import type { SessionStore } from '../store/index.js';
 import type { SessionQuery, SessionRecord, SessionTopology } from '../store/types.js';
 import { buildSessionHandoff } from './codex-handoff.js';
+import {
+  extractProject,
+  loadExtractIndex,
+  projectExtractDir,
+  projectHashOf,
+  queryExtracts,
+} from '../extract/index.js';
+import type { ExtractOptions, QueryOptions } from '../extract/index.js';
 
 // ---------------------------------------------------------------------------
 // 类型
@@ -329,6 +337,57 @@ export class McpServer {
           },
         },
       },
+      {
+        name: 'extract_project_history',
+        description:
+          '提取指定项目所有 session 历史中的用户需求（user 消息）和 agent 响应（assistant 消息），分别存为可索引的 NDJSONL 文件。这是了解用户在某个项目上真实需求的第一步。force_refresh=false 且已有提取结果时直接返回现有统计不重新提取。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            project_path: { type: 'string', description: '项目路径（cwd 前缀匹配）' },
+            force_refresh: { type: 'boolean', description: 'true 时强制重新提取；false 且已有结果时直接返回现有统计', default: false },
+          },
+          required: ['project_path'],
+        },
+      },
+      {
+        name: 'query_user_requirements',
+        description:
+          '查询某项目的用户需求（user 消息）。可按关键词、session、时间、ID 过滤。每条含 id、sessionId、content、timestamp。需先调用 extract_project_history 完成提取。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            project_path: { type: 'string', description: '项目路径（需与 extract 时一致）' },
+            keyword: { type: 'string', description: '关键词模糊匹配（大小写不敏感，匹配 content）' },
+            session_id: { type: 'string', description: '按 session ID 过滤' },
+            from: { type: 'string', description: '起始时间，ISO 8601 或相对时间如 7d / 24h / 30m' },
+            to: { type: 'string', description: '结束时间，ISO 8601 或相对时间' },
+            limit: { type: 'number', description: '返回条数上限，默认 20', default: 20 },
+            offset: { type: 'number', description: '跳过前 N 条，默认 0', default: 0 },
+            id: { type: 'number', description: '按精确 ID（=行号，1-based）查询，命中时忽略其它过滤' },
+          },
+          required: ['project_path'],
+        },
+      },
+      {
+        name: 'query_agent_responses',
+        description:
+          '查询某项目的 agent 响应（assistant 消息）。可按关键词、session、时间、ID 过滤。需先调用 extract_project_history 完成提取。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            project_path: { type: 'string', description: '项目路径（需与 extract 时一致）' },
+            keyword: { type: 'string', description: '关键词模糊匹配（大小写不敏感，匹配 content）' },
+            session_id: { type: 'string', description: '按 session ID 过滤' },
+            from: { type: 'string', description: '起始时间，ISO 8601 或相对时间如 7d / 24h / 30m' },
+            to: { type: 'string', description: '结束时间，ISO 8601 或相对时间' },
+            limit: { type: 'number', description: '返回条数上限，默认 20', default: 20 },
+            offset: { type: 'number', description: '跳过前 N 条，默认 0', default: 0 },
+            id: { type: 'number', description: '按精确 ID（=行号，1-based）查询，命中时忽略其它过滤' },
+          },
+          required: ['project_path'],
+        },
+      },
     ];
   }
 
@@ -354,6 +413,12 @@ export class McpServer {
         return this.postMessage(args);
       case 'get_messages':
         return this.getMessages(args);
+      case 'extract_project_history':
+        return this.extractProjectHistory(args);
+      case 'query_user_requirements':
+        return this.queryUserRequirements(args);
+      case 'query_agent_responses':
+        return this.queryAgentResponses(args);
       default:
         return { content: `未知工具: ${name}`, isError: true };
     }
@@ -557,6 +622,93 @@ export class McpServer {
 
     return { content: JSON.stringify(messages) };
   }
+
+  // -- extract 工具 -----------------------------------------------------
+
+  private extractProjectHistory(args: Record<string, unknown>): McpToolResult {
+    const projectPath = args.project_path;
+    if (typeof projectPath !== 'string' || !projectPath) {
+      return { content: '缺少必填参数 project_path', isError: true };
+    }
+    const forceRefresh = args.force_refresh === true;
+    const projectHash = projectHashOf(projectPath);
+
+    // force_refresh=false 且已有提取结果：直接返回现有统计，不重新提取
+    if (!forceRefresh) {
+      const existing = loadExtractIndex(projectHash);
+      if (existing) {
+        return {
+          content: JSON.stringify({
+            projectHash: existing.projectHash,
+            projectPath: existing.projectPath,
+            requirementCount: existing.requirementCount,
+            responseCount: existing.responseCount,
+            sessionCount: existing.sessionCount,
+            extractedAt: existing.extractedAt,
+            extractsDir: projectExtractDir(existing.projectHash),
+            refreshed: false,
+          }),
+        };
+      }
+    }
+
+    const options: ExtractOptions = { cwdPrefix: projectPath };
+    const result = extractProject(options);
+    return {
+      content: JSON.stringify({
+        projectHash: result.projectHash,
+        projectPath: result.projectPath,
+        requirementCount: result.requirementCount,
+        responseCount: result.responseCount,
+        sessionCount: result.sessionCount,
+        extractedAt: result.extractedAt,
+        extractsDir: projectExtractDir(result.projectHash),
+        refreshed: true,
+      }),
+    };
+  }
+
+  private queryUserRequirements(args: Record<string, unknown>): McpToolResult {
+    const projectPath = args.project_path;
+    if (typeof projectPath !== 'string' || !projectPath) {
+      return { content: '缺少必填参数 project_path', isError: true };
+    }
+    const projectHash = projectHashOf(projectPath);
+    const opts = buildExtractQueryOptions(args);
+    const entries = queryExtracts(projectHash, 'requirements', opts);
+    return { content: JSON.stringify(entries) };
+  }
+
+  private queryAgentResponses(args: Record<string, unknown>): McpToolResult {
+    const projectPath = args.project_path;
+    if (typeof projectPath !== 'string' || !projectPath) {
+      return { content: '缺少必填参数 project_path', isError: true };
+    }
+    const projectHash = projectHashOf(projectPath);
+    const opts = buildExtractQueryOptions(args);
+    const entries = queryExtracts(projectHash, 'responses', opts);
+    return { content: JSON.stringify(entries) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// extract 查询选项构建
+// ---------------------------------------------------------------------------
+
+function buildExtractQueryOptions(args: Record<string, unknown>): QueryOptions {
+  const opts: QueryOptions = {};
+  if (typeof args.id === 'number') opts.id = args.id;
+  if (typeof args.keyword === 'string' && args.keyword) opts.keyword = args.keyword;
+  if (typeof args.session_id === 'string' && args.session_id) opts.sessionId = args.session_id;
+  const rawLimit = typeof args.limit === 'number' ? args.limit : 20;
+  opts.limit = Math.min(Math.max(1, rawLimit), 500);
+  const rawOffset = typeof args.offset === 'number' ? args.offset : 0;
+  opts.offset = Math.max(0, rawOffset);
+  const from = parseRelativeTime(typeof args.from === 'string' ? args.from : undefined);
+  if (from !== null) opts.startedAtFrom = from;
+  const to = parseRelativeTime(typeof args.to === 'string' ? args.to : undefined);
+  if (to !== null) opts.startedAtTo = to;
+  return opts;
 }
 
 // ---------------------------------------------------------------------------
