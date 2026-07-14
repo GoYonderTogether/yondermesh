@@ -201,9 +201,11 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   update [--local]    从 Git 源码更新（构建失败自动回退）；--local 跳过 clone，从本地源码打包
   rollback            手动回退到上一个 release 版本
   mcp                 启动 MCP server（stdio JSON-RPC，供其他 agent 挂载）
+  mcp call <tool> [args]  终端直接调用 MCP 工具（如 ymesh mcp call who_is_working）
   mcp register        注册 MCP server 到 Claude Code 和 Codex（安装后新 session 自动可用）
   mcp unregister      从 Claude Code 和 Codex 注销
   mcp status          查看 MCP 注册状态
+  active              快速查看当前正在运行的 session（谁在干活）
   doctor              运行系统诊断（检查安装、数据库、daemon、日志健康状态）
   mount [status|all|remove]  管理跨 CLI 挂载（MCP/Skill/Plugin 到所有已安装的 CLI agent）
   extract             提取项目全部 user 需求与 assistant 响应到 NDJSONL 文件（按行号/ID 索引）
@@ -432,6 +434,41 @@ function cmdStatus(flags: Record<string, string | boolean>): number {
 }
 
 /** sessions 命令 */
+// ─── active 命令 ──────────────────────────────────────────────────────────
+
+/** active 命令：快速查看谁在跑（复用 MCP list_active_sessions 的底层逻辑） */
+function cmdActive(flags: Record<string, string | boolean>): number {
+  const store = openStore(flags.db as string | undefined);
+  const withinMin = typeof flags.within === 'string' ? parseInt(flags.within, 10) : 30;
+  const withinMs = withinMin * 60_000;
+
+  const summary = store.getActiveSessionsSummary(withinMs);
+  store.close();
+
+  if (flags.json) {
+    console.log(JSON.stringify(summary, null, 2));
+    return 0;
+  }
+
+  console.log();
+  console.log(`  活跃 session: ${summary.totalActive} (live ${summary.liveCount})`);
+  console.log(`  subagent:    ${summary.subagentActive}`);
+  console.log();
+
+  if (summary.sessions && summary.sessions.length > 0) {
+    for (const s of summary.sessions) {
+      const status = s.isLive ? 'LIVE' : 'idle';
+      const cwd = s.cwd ? s.cwd.replace(process.env.HOME ?? '', '~') : '-';
+      const agoSec = Math.round((Date.now() - s.lastSeenAt) / 1000);
+      console.log(`  [${status.padEnd(4)}] ${s.source.padEnd(8)} ${String(agoSec).padStart(5)}s ago  msgs=${s.messageCount}  ${cwd}`);
+    }
+  } else {
+    console.log('  (最近没有活跃 session)');
+  }
+  console.log();
+  return 0;
+}
+
 function cmdSessions(flags: Record<string, string | boolean>): number {
   const store = openStore(flags.db as string | undefined);
 
@@ -995,6 +1032,38 @@ async function cmdMcp(flags: Record<string, string | boolean>): Promise<number> 
     return 0;
   }
 
+  // mcp call <tool> <json_args>：终端直接调用 MCP 工具
+  if (sub === 'call') {
+    const toolName = positional[1];
+    if (!toolName) {
+      console.error('用法: ymesh mcp call <tool> [json_args]');
+      console.error('示例: ymesh mcp call who_is_working');
+      console.error('      ymesh mcp call search_sessions \'{"limit":5}\'');
+      return 1;
+    }
+    const argsJson = positional[2] ?? '{}';
+    let parsedArgs: Record<string, unknown>;
+    try {
+      parsedArgs = JSON.parse(argsJson);
+    } catch {
+      console.error(`参数 JSON 解析失败: ${argsJson}`);
+      return 1;
+    }
+    const config = defaultDaemonConfig();
+    const store = new SessionStore(config.dbPath);
+    const mcp = new McpServer(store);
+    const result = await mcp.callTool(toolName, parsedArgs);
+    store.close();
+    // callTool 返回 content 是 JSON 字符串，直接输出
+    try {
+      const data = JSON.parse(result.content);
+      console.log(JSON.stringify(data, null, 2));
+    } catch {
+      console.log(result.content);
+    }
+    return result.isError ? 1 : 0;
+  }
+
   // 默认：启动 MCP server（stdio JSON-RPC）
   const config = defaultDaemonConfig();
   const dbPath = config.dbPath;
@@ -1438,6 +1507,9 @@ async function main(): Promise<number> {
     case 'sessions':
     case 'query':
       return cmdSessions(flags);
+
+    case 'active':
+      return cmdActive(flags);
 
     case 'daemon':
       return await cmdDaemon(flags);
