@@ -90,3 +90,19 @@ If helping a community user (not the maintainer):
 1. Run diagnostics to collect evidence.
 2. Check known-issues.md for matching solutions.
 3. If unresolved, help the user file an issue with diagnostic output attached.
+
+## Cross-CLI Usage
+
+This skill auto-installs for Codex (via ~/.codex/skills/ symlink). For other CLIs:
+
+- Any agent can run the diagnostic script directly:
+  `bash ~/.yondermesh/releases/current/skills/yondermesh-diagnose/scripts/diagnose.sh`
+- Or use the CLI: `ymesh doctor`
+- The script is bash-only, no Node.js or npm required for diagnostics.
+
+## Distribution
+
+Skills are bundled into each release. The install command links them to CLI skill
+directories. When `ymesh update` switches the current release, skill symlinks
+automatically follow the new version. Developers push skill changes to git; users
+get them via `ymesh update`.

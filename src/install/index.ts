@@ -49,5 +49,8 @@ export {
 export { updateFromGit } from './updater.js';
 export type { UpdateResult, HealthCheck } from './updater.js';
 
+// Skill 分发
+export { linkSkills, unlinkSkills } from './skill-linker.js';
+
 // Git 版本计算
 export { resolveVersion, describeVersion, gitShortHash, gitBranch } from './version.js';

@@ -31,6 +31,7 @@ import {
   rollbackRelease,
   getCurrentRelease,
 } from './release.js';
+import { linkSkills } from './skill-linker.js';
 
 /** 更新锁文件路径 */
 function updateLockPath(): string {
@@ -99,6 +100,13 @@ export function updateFromGit(
 
     // 4. 安装新 release
     installRelease(release);
+
+    // 4.5 重新链接 skill（current 已切换，symlink 自动指向新版本）
+    try {
+      linkSkills();
+    } catch {
+ // skill 链接失败不影响更新成功
+    }
 
     // 5. 健康检查
     const check = healthCheck ?? defaultHealthCheck;

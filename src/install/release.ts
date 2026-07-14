@@ -68,6 +68,13 @@ export function buildRelease(projectRoot: string, force = false): ReleaseResult 
   const distDst = path.join(target, 'dist');
   copyDir(distSrc, distDst);
 
+  // 2.5 复制 skills 到 release 目录（skill 随版本发布）
+  const skillsSrc = path.join(projectRoot, 'skills');
+  if (fs.existsSync(skillsSrc)) {
+    const skillsDst = path.join(target, 'skills');
+    copyDir(skillsSrc, skillsDst);
+  }
+
   // 3. 复制 package.json（只保留必要的 dependencies）
   const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8'));
   const releasePkg = {

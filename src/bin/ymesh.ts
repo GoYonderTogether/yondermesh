@@ -31,12 +31,20 @@ import {
   startService,
   stopService,
   getServiceStatus,
-  updateFromGit,
-  resolveEntrySymlink as ENTRY_SYMLINK,
+ updateFromGit,
+ linkSkills,
+ unlinkSkills,
+ resolveEntrySymlink as ENTRY_SYMLINK,
   resolveLaunchAgentPlist as LAUNCH_AGENT_PLIST,
 } from '../install/index.js';
 
 import { McpServer } from '../mcp/server.js';
+import {
+  registerAll,
+  unregisterAll,
+  checkRegistration,
+  buildYmeshArgs,
+} from '../mcp/register.js';
 
 // 读取 package.json 的版本号
 const projectRoot = dirname(dirname(dirname(new URL(import.meta.url).pathname)));
@@ -141,6 +149,10 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   update              从 Git 源码更新（构建失败自动回退）
   rollback            手动回退到上一个 release 版本
   mcp                 启动 MCP server（stdio JSON-RPC，供其他 agent 挂载）
+  mcp register        注册 MCP server 到 Claude Code 和 Codex（安装后新 session 自动可用）
+  mcp unregister      从 Claude Code 和 Codex 注销
+  mcp status          查看 MCP 注册状态
+  doctor              运行系统诊断（检查安装、数据库、daemon、日志健康状态）
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -403,6 +415,15 @@ function cmdInstall(flags: Record<string, string | boolean>): number {
     console.log(`[yondermesh] 已安装: ${ENTRY_SYMLINK()} → ${release.entryPath}`);
     console.log('[yondermesh] 提示：将以下路径加入 PATH 以全局使用：');
     console.log('  export PATH="$HOME/.yondermesh/bin:$PATH"');
+
+    // 链接 skill 到已安装的 CLI
+    const skillResult = linkSkills();
+    if (skillResult.linked.length > 0) {
+      console.log(`[yondermesh] 已链接 skill: ${skillResult.linked.join(', ')}`);
+    }
+    if (skillResult.skipped.length > 0) {
+      console.log(`[yondermesh] skill 跳过: ${skillResult.skipped.join('; ')}`);
+    }
     return 0;
   } catch (err) {
     console.error(`[yondermesh] 安装失败: ${String(err)}`);
@@ -431,6 +452,10 @@ function cmdService(flags: Record<string, string | boolean>): number {
       try {
         uninstallService();
         console.log('[yondermesh] LaunchAgent 已卸载');
+        const removed = unlinkSkills();
+        if (removed.removed.length > 0) {
+          console.log(`[yondermesh] 已移除 skill 链接: ${removed.removed.join(', ')}`);
+        }
         return 0;
       } catch (err) {
         console.error(`[yondermesh] 卸载失败: ${String(err)}`);
@@ -532,15 +557,63 @@ function cmdDoctor(flags: Record<string, string | boolean>): number {
 
 // ─── mcp 命令（LOOP-011）────────────────────────────────────────────────────────────────
 
-/** mcp 命令：启动 MCP server（stdio JSON-RPC） */
-async function cmdMcp(): Promise<number> {
+/** mcp 命令：启动 server 或管理注册 */
+async function cmdMcp(flags: Record<string, string | boolean>): Promise<number> {
+  // 子命令：register / unregister / status
+  const positional = process.argv.slice(process.argv.indexOf('mcp') + 1);
+  const sub = positional[0] ?? '';
+
+  if (sub === 'register') {
+    const args = buildYmeshArgs();
+    const result = registerAll(args);
+    const targets: string[] = [];
+    if (result.claude) targets.push('Claude Code');
+    if (result.codex) targets.push('Codex');
+    if (targets.length > 0) {
+      console.log(`[yondermesh] MCP server 已注册到: ${targets.join(', ')}`);
+      console.log('[yondermesh] 新 session 将自动加载。正在运行的 session 需要重启或使用 /mcp 重连。');
+      return 0;
+    }
+    if (result.errors.length > 0) {
+      console.error(`[yondermesh] 注册失败: ${result.errors.join('; ')}`);
+    } else {
+      console.log('[yondermesh] 未发现 Claude Code 或 Codex 配置，无需注册。');
+    }
+    return 1;
+  }
+
+  if (sub === 'unregister') {
+    const result = unregisterAll();
+    const targets: string[] = [];
+    if (result.claude) targets.push('Claude Code');
+    if (result.codex) targets.push('Codex');
+    if (targets.length > 0) {
+      console.log(`[yondermesh] 已从 ${targets.join(', ')} 注销`);
+    } else {
+      console.log('[yondermesh] 没有找到注册记录');
+    }
+    return 0;
+  }
+
+  if (sub === 'status') {
+    const status = checkRegistration();
+    if (flags.json) {
+      console.log(JSON.stringify(status, null, 2));
+    } else {
+      console.log(`\n  Claude Code:  ${status.claude.registered ? '已注册' : '未注册'}  (${status.claude.path ?? '-'})`);
+      console.log(`  Codex:        ${status.codex.registered ? '已注册' : '未注册'}  (${status.codex.path ?? '-'})\n`);
+    }
+    return 0;
+  }
+
+  // 默认：启动 MCP server（stdio JSON-RPC）
   const config = defaultDaemonConfig();
   const dbPath = config.dbPath;
   const store = new SessionStore(dbPath);
   const mcp = new McpServer(store);
   await mcp.start();
   return new Promise((resolve) => {
-    process.stdin.on("end", () => resolve(0));
+   process.stdin.on("end", () => resolve(0));
   });
 }
 
@@ -615,7 +688,7 @@ async function main(): Promise<number> {
       return await cmdUpdate(flags);
 
     case 'mcp':
-      return await cmdMcp();
+      return await cmdMcp(flags);
 
     case 'doctor':
       return cmdDoctor(flags);
