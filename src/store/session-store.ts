@@ -40,6 +40,8 @@ import type {
 /** 行记录的松散类型 */
 type Row = Record<string, unknown>;
 
+import { expandSource } from './source-aliases.js';
+
 // node:sqlite 是实验性内置，vitest/vite 静态解析会误判为裸包 sqlite。
 // 用 createRequire 在运行时加载，绕过 vite 预优化；类型仍取自 @types/node。
 const nodeRequire = createRequire(import.meta.url);
@@ -295,8 +297,15 @@ export class SessionStore {
       params.push(query.deviceId);
     }
     if (query.source) {
-      conditions.push('source = ?');
-      params.push(query.source);
+      // 展开别名：--source claude → IN ('claude', 'claude-code', 'claude_code')
+      const aliases = expandSource(query.source);
+      if (aliases.length === 1) {
+        conditions.push('source = ?');
+        params.push(aliases[0]!);
+      } else {
+        conditions.push(`source IN (${aliases.map(() => '?').join(', ')})`);
+        params.push(...aliases);
+      }
     }
     if (query.topology) {
       conditions.push('topology = ?');

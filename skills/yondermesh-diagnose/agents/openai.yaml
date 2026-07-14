@@ -1,0 +1,4 @@
+interface:
+  display_name: "yondermesh Diagnostics"
+  short_description: "Diagnose runtime issues: db health, daemon status, logs, adapter coverage"
+  default_prompt: "Check yondermesh system health and diagnose any issues"

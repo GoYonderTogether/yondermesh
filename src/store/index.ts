@@ -4,6 +4,7 @@
 
 export { SessionStore } from './session-store.js';
 export { SCHEMA } from './schema.js';
+export { normalizeSource, expandSource } from './source-aliases.js';
 export type {
   Coverage,
   IngestResult,

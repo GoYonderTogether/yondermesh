@@ -9,8 +9,9 @@
  */
 
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, basename } from 'node:path';
-import { hostname } from 'node:os';
+import { dirname, basename, join } from 'node:path';
+import { hostname, homedir } from 'node:os';
+import { execSync } from 'node:child_process';
 
 import { SessionStore } from '../store/index.js';
 import { CassImporter } from '../cass/index.js';
@@ -34,6 +35,8 @@ import {
   resolveEntrySymlink as ENTRY_SYMLINK,
   resolveLaunchAgentPlist as LAUNCH_AGENT_PLIST,
 } from '../install/index.js';
+
+import { McpServer } from '../mcp/server.js';
 
 // 读取 package.json 的版本号
 const projectRoot = dirname(dirname(dirname(new URL(import.meta.url).pathname)));
@@ -137,6 +140,7 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   releases            列出已安装的 release 版本
   update              从 Git 源码更新（构建失败自动回退）
   rollback            手动回退到上一个 release 版本
+  mcp                 启动 MCP server（stdio JSON-RPC，供其他 agent 挂载）
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -491,6 +495,55 @@ function cmdReleases(flags: Record<string, string | boolean>): number {
   return 0;
 }
 
+// --- doctor command ---
+
+/** doctor: run system diagnostics */
+function cmdDoctor(flags: Record<string, string | boolean>): number {
+  const dataDir = process.env.YONDERMESH_HOME ?? join(homedir(), '.yondermesh');
+  const scriptDir = dirname(new URL(import.meta.url).pathname);
+
+  const candidates = [
+    join(scriptDir, '..', '..', 'skills', 'yondermesh-diagnose', 'scripts', 'diagnose.sh'),
+    join(dataDir, 'skills', 'yondermesh-diagnose', 'scripts', 'diagnose.sh'),
+  ];
+
+  let scriptPath = "";
+  for (const c of candidates) {
+    try { if (existsSync(c)) { scriptPath = c; break; } } catch { /* */ }
+  }
+
+  if (!scriptPath) {
+    console.error("[yondermesh] diagnostic script not found.");
+    for (const c of candidates) console.error("  expected: " + c);
+    return 1;
+  }
+
+  const section = typeof flags.section === "string" ? flags.section : "all";
+  const args = ["bash", scriptPath, "--section", section];
+  if (flags.verbose === true) args.push("--verbose");
+
+  try {
+    execSync(args.join(" "), { encoding: "utf-8", stdio: "inherit", env: { ...process.env } });
+    return 0;
+  } catch (err) {
+    return (err as { status?: number }).status ?? 1;
+  }
+}
+
+// ─── mcp 命令（LOOP-011）────────────────────────────────────────────────────────────────
+
+/** mcp 命令：启动 MCP server（stdio JSON-RPC） */
+async function cmdMcp(): Promise<number> {
+  const config = defaultDaemonConfig();
+  const dbPath = config.dbPath;
+  const store = new SessionStore(dbPath);
+  const mcp = new McpServer(store);
+  await mcp.start();
+  return new Promise((resolve) => {
+    process.stdin.on("end", () => resolve(0));
+  });
+}
+
 // ─── update 命令（LOOP-009） ───────────────────────────────────────────
 
 /** update 命令：从 Git 源码更新并自动回退 */
@@ -560,6 +613,12 @@ async function main(): Promise<number> {
 
     case 'update':
       return await cmdUpdate(flags);
+
+    case 'mcp':
+      return await cmdMcp(flags);
+
+    case 'doctor':
+      return cmdDoctor(flags);
 
     case 'rollback':
       {
