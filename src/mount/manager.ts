@@ -20,8 +20,26 @@ import {
   mcpTomlStrategy,
   skillSymlinkStrategy,
   claudeMcpStrategy,
+  alwaysOnStrategy,
 } from './strategies.js';
 import type { Extension, MountResult, MountStatus, CliTarget } from './types.js';
+
+/** 生成 awareness 段落内容 */
+function generateContextBlock(): string {
+  return [
+    '## yondermesh',
+    '',
+    'yondermesh is installed on this machine. It indexes all CLI agent sessions (Claude Code, Codex, cass) into a local SQLite vault.',
+    '',
+    'Available capabilities:',
+    '- **MCP tools**: query sessions by time/project/source/topology (if MCP server is mounted)',
+    '- **CLI**: run `ymesh help` for commands (scan, status, sessions, doctor, mount)',
+    '- **Skill**: `$yondermesh-diagnose` for system health checks',
+    '- **Session query**: `ymesh sessions --json --limit 10` to see recent work',
+    '',
+    'Use these to recall prior work context, check what other agents did, or diagnose issues.',
+  ].join('\n');
+}
 
 /** yondermesh 默认挂载的扩展列表 */
 export function defaultExtensions(_home?: string): Extension[] {
@@ -48,6 +66,13 @@ export function defaultExtensions(_home?: string): Extension[] {
       skillPath: skillsRoot,
     });
   }
+
+  // always-on awareness (全局指令文件注入)
+  exts.push({
+    type: 'plugin',
+    name: 'yondermesh-awareness',
+    contextBlock: generateContextBlock(),
+  });
 
   return exts;
 }
@@ -131,6 +156,9 @@ function mountExtension(cli: CliTarget, ext: Extension, home: string): MountResu
       case 'claude-mcp':
         result = claudeMcpStrategy.mount(ext, home);
         break;
+      case 'always-on':
+        result = alwaysOnStrategy.mount(ext, paths.instructionFile);
+        break;
       default:
         return { strategy: cap.strategy, target: cli.id, extension: ext.name, success: false, message: 'unknown strategy' };
     }
@@ -161,7 +189,10 @@ function checkMount(cli: CliTarget, ext: Extension, home: string): MountStatus {
       case 'claude-mcp':
         mounted = claudeMcpStrategy.isMounted(ext.name);
         break;
-    }
+      case 'always-on':
+        mounted = alwaysOnStrategy.isMounted(ext.name, paths.instructionFile);
+        break;
+      }
 
     return { cli: cli.id, extension: ext.name, type: ext.type, strategy: cap.strategy, mounted };
   }
@@ -187,6 +218,9 @@ function unmountExtension(cli: CliTarget, ext: Extension, home: string): MountRe
         break;
       case 'claude-mcp':
         result = claudeMcpStrategy.unmount(ext.name);
+        break;
+      case 'always-on':
+        result = alwaysOnStrategy.unmount(ext.name, paths.instructionFile);
         break;
       default:
         return { strategy: cap.strategy, target: cli.id, extension: ext.name, success: false, message: 'unknown strategy' };

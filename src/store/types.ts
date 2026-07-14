@@ -69,6 +69,16 @@ export interface SessionIngestInput {
   /** 本次内容来源等级，写入 revision 以保留 provenance */
   sourceKind?: Coverage;
   messages: SessionMessageInput[];
+  /** 元数据（LOOP-012） */
+  model?: string;
+  cliVersion?: string;
+  originator?: string;
+  entrySource?: string;
+  threadSource?: string;
+  estimatedCostUsd?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  toolCallCount?: number;
 }
 
 /** 入库结果 */
@@ -165,6 +175,8 @@ export interface SessionQuery {
   limit?: number;
   /** 是否包含 archived（被去重的）session，默认 false */
   includeArchived?: boolean;
+  /** 按模型过滤 */
+  model?: string;
 }
 
 /** session 列表项 */
@@ -184,6 +196,16 @@ export interface SessionRecord {
   messageCount: number;
   startedAt: number | null;
   lastSeenAt: number;
+  /** 元数据（LOOP-012） */
+  model: string | null;
+  cliVersion: string | null;
+  originator: string | null;
+  entrySource: string | null;
+  threadSource: string | null;
+  estimatedCostUsd: number | null;
+  totalInputTokens: number | null;
+  totalOutputTokens: number | null;
+  toolCallCount: number | null;
 }
 
 /** 查询统计结果 */

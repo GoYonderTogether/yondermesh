@@ -249,6 +249,92 @@ describe('skill-symlink strategy', () => {
   });
 });
 
+// ── always-on strategy ──
+
+describe('always-on strategy (AGENTS.md / CLAUDE.md injection)', () => {
+  const awarenessExt: Extension = {
+    type: 'plugin',
+    name: 'yondermesh-awareness',
+    contextBlock: '## yondermesh\n\nTools available: MCP, CLI, skill.',
+  };
+
+  it('mount: injects block into a fresh instruction file', () => {
+    const file = path.join(tmpHome, 'AGENTS.md');
+    const result = alwaysOnStrategy.mount(awarenessExt, file);
+    expect(result.success).toBe(true);
+
+    const content = fs.readFileSync(file, 'utf-8');
+    expect(content).toContain(CONTEXT_BLOCK_START);
+    expect(content).toContain(CONTEXT_BLOCK_END);
+    expect(content).toContain('## yondermesh');
+  });
+
+  it('mount: preserves existing content in the file', () => {
+    const file = path.join(tmpHome, 'CLAUDE.md');
+    fs.writeFileSync(file, '# My Config\n\nDo good things.\n');
+
+    alwaysOnStrategy.mount(awarenessExt, file);
+
+    const content = fs.readFileSync(file, 'utf-8');
+    expect(content).toContain('# My Config');
+    expect(content).toContain('Do good things.');
+    expect(content).toContain(CONTEXT_BLOCK_START);
+  });
+
+  it('mount: overwrites existing yondermesh block (idempotent)', () => {
+    const file = path.join(tmpHome, 'AGENTS.md');
+    fs.writeFileSync(file, '# Before\n\n');
+
+    alwaysOnStrategy.mount(awarenessExt, file);
+    // mount again with different content
+    const ext2 = { ...awarenessExt, contextBlock: '## yondermesh v2\n\nUpdated.' };
+    alwaysOnStrategy.mount(ext2, file);
+
+    const content = fs.readFileSync(file, 'utf-8');
+    expect(content).toContain('v2');
+    expect(content).not.toContain('Tools available');
+    // should only have one block
+    expect((content.match(/YONDERMESH_AWARENESS_START/g) || []).length).toBe(1);
+  });
+
+  it('isMounted: checks block presence', () => {
+    const file = path.join(tmpHome, 'AGENTS.md');
+    expect(alwaysOnStrategy.isMounted('test', file)).toBe(false);
+
+    alwaysOnStrategy.mount(awarenessExt, file);
+    expect(alwaysOnStrategy.isMounted('test', file)).toBe(true);
+  });
+
+  it('unmount: removes block, preserves surrounding content', () => {
+    const file = path.join(tmpHome, 'AGENTS.md');
+    fs.writeFileSync(file, '# Header\n\nSome instructions.\n');
+    alwaysOnStrategy.mount(awarenessExt, file);
+
+    // verify block was added
+    let content = fs.readFileSync(file, 'utf-8');
+    expect(content).toContain(CONTEXT_BLOCK_START);
+    expect(content).toContain('# Header');
+
+    const result = alwaysOnStrategy.unmount('yondermesh-awareness', file);
+    expect(result.success).toBe(true);
+
+    content = fs.readFileSync(file, 'utf-8');
+    expect(content).not.toContain(CONTEXT_BLOCK_START);
+    expect(content).not.toContain(CONTEXT_BLOCK_END);
+    expect(content).toContain('# Header');
+    expect(content).toContain('Some instructions.');
+  });
+
+  it('unmount: on a file with no block is a no-op', () => {
+    const file = path.join(tmpHome, 'AGENTS.md');
+    fs.writeFileSync(file, '# Just content\n');
+    const result = alwaysOnStrategy.unmount('test', file);
+    expect(result.success).toBe(true);
+    const content = fs.readFileSync(file, 'utf-8');
+    expect(content).toContain('# Just content');
+  });
+});
+
 // ── CLI registry ──
 
 describe('CLI registry', () => {
@@ -286,3 +372,5 @@ describe('CLI registry', () => {
     }
   });
 });
+import { alwaysOnStrategy } from '../src/mount/strategies.js';
+import { CONTEXT_BLOCK_START, CONTEXT_BLOCK_END } from '../src/mount/types.js';

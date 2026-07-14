@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 
 import type { Extension, MountResult } from './types.js';
+import { CONTEXT_BLOCK_START, CONTEXT_BLOCK_END } from './types.js';
 
 // ── mcp-json 策略 (Cursor / Gemini / Windsurf / Continue) ──
 
@@ -176,6 +177,69 @@ export const claudeMcpStrategy = {
     }
   },
 };
+
+// ── always-on 策略 ──
+
+/**
+ * 向全局指令文件注入一个带边界标记的段落。
+ * 每次新 session 启动时，CLI 会读取这些文件并注入到上下文中。
+ * 段落内容告诉 agent：yondermesh 已安装，MCP 工具可用，CLI 命令可用。
+ */
+export const alwaysOnStrategy = {
+  mount(ext: Extension, instructionFile: string): MountResult {
+    try {
+      if (!ext.contextBlock) {
+        return { strategy: 'always-on', target: '', extension: ext.name, success: false, message: 'no contextBlock provided' };
+      }
+      let content = readTextSafe(instructionFile);
+      // 先移除已有段落
+      content = removeBlock(content);
+      // 追加新段落
+      const block = `${CONTEXT_BLOCK_START}\n${ext.contextBlock}\n${CONTEXT_BLOCK_END}\n`;
+      content = content.trimEnd() + '\n\n' + block;
+      const dir = path.dirname(instructionFile);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(instructionFile, content, 'utf-8');
+      return { strategy: 'always-on', target: '', extension: ext.name, success: true, message: `injected into ${instructionFile}` };
+    } catch (e) {
+      return { strategy: 'always-on', target: '', extension: ext.name, success: false, message: String(e) };
+    }
+  },
+
+ unmount(_extName: string, instructionFile: string): MountResult {
+   try {
+     let content = readTextSafe(instructionFile);
+     content = removeBlock(content);
+     content = content.trimEnd();
+     if (content) content += '\n';
+     fs.writeFileSync(instructionFile, content, 'utf-8');
+      return { strategy: 'always-on', target: '', extension: 'yondermesh-awareness', success: true, message: `removed from ${instructionFile}` };
+   } catch (e) {
+      return { strategy: 'always-on', target: '', extension: 'yondermesh-awareness', success: false, message: String(e) };
+   }
+ },
+
+  isMounted(_extName: string, instructionFile: string): boolean {
+    const content = readTextSafe(instructionFile);
+    return content.includes(CONTEXT_BLOCK_START);
+  },
+};
+
+/** 从内容中移除 always-on 段落（含边界标记） */
+function removeBlock(content: string): string {
+  const startIdx = content.indexOf(CONTEXT_BLOCK_START);
+  if (startIdx === -1) return content;
+  const endIdx = content.indexOf(CONTEXT_BLOCK_END);
+  if (endIdx === -1) return content; // 残缺标记，不处理
+  // 移除标记段及其后的换行
+  let before = content.slice(0, startIdx);
+  let after = content.slice(endIdx + CONTEXT_BLOCK_END.length);
+  // 清理前后的空行
+  before = before.trimEnd();
+  after = after.replace(/^\s*\n/, '');
+  if (before && after) return before + '\n\n' + after;
+  return before + after;
+}
 
 // ── 私有辅助 ──
 

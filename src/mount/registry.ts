@@ -5,6 +5,8 @@
  * 新增 CLI 只需在 CLI_REGISTRY 数组中追加一项。
  */
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { CliTarget } from './types.js';
 
 export const CLI_REGISTRY: CliTarget[] = [
@@ -17,16 +19,17 @@ export const CLI_REGISTRY: CliTarget[] = [
       {
         strategy: 'mcp-toml',
         extensionTypes: ['mcp-server'],
-        resolve: (home) => ({
-          configPath: join(home, '.codex', 'config.toml'),
-        }),
+        resolve: (home) => ({ configPath: join(home, '.codex', 'config.toml') }),
       },
       {
         strategy: 'skill-symlink',
         extensionTypes: ['skill'],
-        resolve: (home) => ({
-          skillsDir: join(home, '.codex', 'skills'),
-        }),
+        resolve: (home) => ({ skillsDir: join(home, '.codex', 'skills') }),
+      },
+      {
+        strategy: 'always-on',
+        extensionTypes: ['plugin'],
+        resolve: (home) => ({ instructionFile: join(home, '.codex', 'AGENTS.md') }),
       },
     ],
   },
@@ -39,10 +42,12 @@ export const CLI_REGISTRY: CliTarget[] = [
       {
         strategy: 'claude-mcp',
         extensionTypes: ['mcp-server'],
-        resolve: (home) => ({
-          cliBinary: 'claude',
-          home,
-        }),
+        resolve: (home) => ({ cliBinary: 'claude', home }),
+      },
+      {
+        strategy: 'always-on',
+        extensionTypes: ['plugin'],
+        resolve: (home) => ({ instructionFile: join(home, '.claude', 'CLAUDE.md') }),
       },
     ],
   },
@@ -55,16 +60,17 @@ export const CLI_REGISTRY: CliTarget[] = [
       {
         strategy: 'mcp-json',
         extensionTypes: ['mcp-server'],
-        resolve: (home) => ({
-          configPath: join(home, '.cursor', 'mcp.json'),
-        }),
+        resolve: (home) => ({ configPath: join(home, '.cursor', 'mcp.json') }),
       },
       {
         strategy: 'skill-symlink',
         extensionTypes: ['skill'],
-        resolve: (home) => ({
-          skillsDir: join(home, '.cursor', 'skills'),
-        }),
+        resolve: (home) => ({ skillsDir: join(home, '.cursor', 'skills') }),
+      },
+      {
+        strategy: 'always-on',
+        extensionTypes: ['plugin'],
+        resolve: (home) => ({ instructionFile: join(home, '.cursorrules') }),
       },
     ],
   },
@@ -77,9 +83,12 @@ export const CLI_REGISTRY: CliTarget[] = [
       {
         strategy: 'mcp-json',
         extensionTypes: ['mcp-server'],
-        resolve: (home) => ({
-          configPath: join(home, '.gemini', 'settings.json'),
-        }),
+        resolve: (home) => ({ configPath: join(home, '.gemini', 'settings.json') }),
+      },
+      {
+        strategy: 'always-on',
+        extensionTypes: ['plugin'],
+        resolve: (home) => ({ instructionFile: join(home, '.gemini', 'GEMINI.md') }),
       },
     ],
   },
@@ -92,16 +101,17 @@ export const CLI_REGISTRY: CliTarget[] = [
       {
         strategy: 'mcp-json',
         extensionTypes: ['mcp-server'],
-        resolve: (home) => ({
-          configPath: join(home, '.windsurf', 'mcp_config.json'),
-        }),
+        resolve: (home) => ({ configPath: join(home, '.windsurf', 'mcp_config.json') }),
       },
       {
         strategy: 'skill-symlink',
         extensionTypes: ['skill'],
-        resolve: (home) => ({
-          skillsDir: join(home, '.windsurf', 'skills'),
-        }),
+        resolve: (home) => ({ skillsDir: join(home, '.windsurf', 'skills') }),
+      },
+      {
+        strategy: 'always-on',
+        extensionTypes: ['plugin'],
+        resolve: (home) => ({ instructionFile: join(home, '.windsurfrules') }),
       },
     ],
   },
@@ -114,9 +124,12 @@ export const CLI_REGISTRY: CliTarget[] = [
       {
         strategy: 'skill-symlink',
         extensionTypes: ['skill'],
-        resolve: (home) => ({
-          skillsDir: join(home, '.trae', 'skills'),
-        }),
+        resolve: (home) => ({ skillsDir: join(home, '.trae', 'skills') }),
+      },
+      {
+        strategy: 'always-on',
+        extensionTypes: ['plugin'],
+        resolve: (home) => ({ instructionFile: join(home, '.trae', 'project_rules.md') }),
       },
     ],
   },
@@ -129,16 +142,11 @@ export const CLI_REGISTRY: CliTarget[] = [
       {
         strategy: 'skill-symlink',
         extensionTypes: ['skill'],
-        resolve: (home) => ({
-          skillsDir: join(home, '.continue', 'skills'),
-        }),
+        resolve: (home) => ({ skillsDir: join(home, '.continue', 'skills') }),
       },
     ],
   },
 ];
-
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 
 /** 返回所有已安装的 CLI */
 export function detectInstalledClis(home: string): CliTarget[] {
