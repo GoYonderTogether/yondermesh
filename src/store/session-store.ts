@@ -96,6 +96,10 @@ export class SessionStore {
     if (input.totalInputTokens !== undefined) { sets.push('total_input_tokens = ?'); params.push(input.totalInputTokens); }
     if (input.totalOutputTokens !== undefined) { sets.push('total_output_tokens = ?'); params.push(input.totalOutputTokens); }
     if (input.toolCallCount !== undefined) { sets.push('tool_call_count = ?'); params.push(input.toolCallCount); }
+    if (input.totalCacheReadTokens !== undefined) { sets.push('total_cache_read_tokens = ?'); params.push(input.totalCacheReadTokens); }
+    if (input.totalCacheCreationTokens !== undefined) { sets.push('total_cache_creation_tokens = ?'); params.push(input.totalCacheCreationTokens); }
+    if (input.grandTotalTokens !== undefined) { sets.push('grand_total_tokens = ?'); params.push(input.grandTotalTokens); }
+    if (input.apiCallCount !== undefined) { sets.push('api_call_count = ?'); params.push(input.apiCallCount); }
 
     if (sets.length === 0) return;
     params.push(sessionId);
@@ -207,6 +211,8 @@ export class SessionStore {
         this.db
           .prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?')
           .run(now, sessionId);
+        // 即使内容不变也刷新元数据（model、tokens、cost 等可能由 adapter 新增解析）
+        this.updateMetadata(sessionId, input);
         const revRow = this.db
           .prepare('SELECT revision_number FROM session_revisions WHERE id = ?')
           .get(existing.current_revision_id as number) as Row | undefined;

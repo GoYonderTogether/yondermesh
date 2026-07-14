@@ -79,6 +79,15 @@ interface CassConversationRow {
   started_at: number | null;
   agent_slug: string | null;
   workspace_path: string | null;
+  primary_model: string | null;
+  estimated_cost_usd: number | null;
+  total_input_tokens: number | null;
+  total_output_tokens: number | null;
+  total_cache_read_tokens: number | null;
+  total_cache_creation_tokens: number | null;
+  grand_total_tokens: number | null;
+  api_call_count: number | null;
+  tool_call_count: number | null;
 }
 
 /** cass messages 行 */
@@ -230,17 +239,19 @@ export class CassImporter {
     sourceInstanceId: string,
     deviceId: string,
  ): Omit<CassImportStats, 'scanRunId' | 'sourceInstanceId'> {
-   const convStmt = cass.prepare(
-     `SELECT c.id, c.agent_id, c.workspace_id, c.source_id, c.external_id, c.started_at,
-             c.primary_model, c.estimated_cost_usd,
-             c.total_input_tokens, c.total_output_tokens, c.tool_call_count,
-             c.user_message_count, c.assistant_message_count,
-             a.slug AS agent_slug, w.path AS workspace_path
-      FROM conversations c
-      LEFT JOIN agents a ON a.id = c.agent_id
-      LEFT JOIN workspaces w ON w.id = c.workspace_id
-      ORDER BY c.id`,
-   );
+  const convStmt = cass.prepare(
+    `SELECT c.id, c.agent_id, c.workspace_id, c.source_id, c.external_id, c.started_at,
+            c.primary_model, c.estimated_cost_usd,
+            c.total_input_tokens, c.total_output_tokens, c.tool_call_count,
+            c.total_cache_read_tokens, c.total_cache_creation_tokens,
+            c.grand_total_tokens, c.api_call_count,
+            c.user_message_count, c.assistant_message_count,
+            a.slug AS agent_slug, w.path AS workspace_path
+     FROM conversations c
+     LEFT JOIN agents a ON a.id = c.agent_id
+     LEFT JOIN workspaces w ON w.id = c.workspace_id
+     ORDER BY c.id`,
+  );
     const msgStmt = cass.prepare(
       'SELECT idx, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY idx',
     );
@@ -294,6 +305,15 @@ export class CassImporter {
         startedAt: conv.started_at ?? undefined,
         sourceKind: 'B',
         messages,
+        model: conv.primary_model ?? undefined,
+        estimatedCostUsd: conv.estimated_cost_usd ?? undefined,
+        totalInputTokens: conv.total_input_tokens ?? undefined,
+        totalOutputTokens: conv.total_output_tokens ?? undefined,
+        toolCallCount: conv.tool_call_count ?? undefined,
+        totalCacheReadTokens: conv.total_cache_read_tokens ?? undefined,
+        totalCacheCreationTokens: conv.total_cache_creation_tokens ?? undefined,
+        grandTotalTokens: conv.grand_total_tokens ?? undefined,
+        apiCallCount: conv.api_call_count ?? undefined,
       });
 
       if (result.created) inserted++;

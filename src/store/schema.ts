@@ -153,4 +153,8 @@ export const MIGRATION_COLUMNS: { table: string; column: string; type: string }[
   { table: 'sessions', column: 'total_input_tokens', type: 'INTEGER' },
   { table: 'sessions', column: 'total_output_tokens', type: 'INTEGER' },
   { table: 'sessions', column: 'tool_call_count', type: 'INTEGER' },
+  { table: 'sessions', column: 'total_cache_read_tokens', type: 'INTEGER' },
+  { table: 'sessions', column: 'total_cache_creation_tokens', type: 'INTEGER' },
+  { table: 'sessions', column: 'grand_total_tokens', type: 'INTEGER' },
+  { table: 'sessions', column: 'api_call_count', type: 'INTEGER' },
 ];

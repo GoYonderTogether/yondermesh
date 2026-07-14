@@ -95,6 +95,10 @@ function buildCassDb(
         total_input_tokens INTEGER,
         total_output_tokens INTEGER,
         tool_call_count INTEGER,
+        total_cache_read_tokens INTEGER,
+        total_cache_creation_tokens INTEGER,
+        grand_total_tokens INTEGER,
+        api_call_count INTEGER,
         user_message_count INTEGER,
         assistant_message_count INTEGER
       );

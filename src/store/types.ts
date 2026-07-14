@@ -79,6 +79,10 @@ export interface SessionIngestInput {
   totalInputTokens?: number;
   totalOutputTokens?: number;
   toolCallCount?: number;
+  totalCacheReadTokens?: number;
+  totalCacheCreationTokens?: number;
+  grandTotalTokens?: number;
+  apiCallCount?: number;
 }
 
 /** 入库结果 */
