@@ -431,9 +431,15 @@ function cmdInstall(flags: Record<string, string | boolean>): number {
     console.log('[yondermesh] 提示：将以下路径加入 PATH 以全局使用：');
     console.log('  export PATH="$HOME/.yondermesh/bin:$PATH"');
 
-    // 链接 skill 到已安装的 CLI
-    const skillResult = linkSkills();
-    if (skillResult.linked.length > 0) {
+   // 链接 skill 到已安装的 CLI
+   const skillResult = linkSkills();
+   // mountAll 已经包含 skill linking，这里 linkSkills 作为向后兼容保留
+   console.log('[yondermesh] 挂载扩展到所有已安装 CLI...');
+   const mountResults = mountAll();
+   const mountOk = mountResults.filter((r) => r.success).length;
+   console.log(`[yondermesh] ${mountOk}/${mountResults.length} 个挂载成功`);
+   void skillResult;
+   if (skillResult.linked.length > 0) {
       console.log(`[yondermesh] 已链接 skill: ${skillResult.linked.join(', ')}`);
     }
     if (skillResult.skipped.length > 0) {
