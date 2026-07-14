@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import { SCHEMA } from './schema.js';
+import { MIGRATION_COLUMNS } from './schema.js';
 import type {
   Coverage,
   IngestResult,
@@ -62,6 +63,38 @@ export class SessionStore {
   /** 应用 schema（幂等，可重复调用） */
   ensureSchema(): void {
     this.db.exec(SCHEMA);
+    this.runMigrations();
+  }
+
+  /** 幂等列迁移：检测列是否存在，缺失才 ALTER TABLE ADD COLUMN */
+  private runMigrations(): void {
+    for (const { table, column, type } of MIGRATION_COLUMNS) {
+      const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Row[];
+      const exists = cols.some((c) => c.name === column);
+      if (!exists) {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+      }
+    }
+  }
+
+  /** 写入元数据列（首次入库和更新时调用） */
+  private updateMetadata(sessionId: string, input: SessionIngestInput): void {
+    const sets: string[] = [];
+    const params: (string | number | null)[] = [];
+
+    if (input.model !== undefined) { sets.push('model = ?'); params.push(input.model); }
+    if (input.cliVersion !== undefined) { sets.push('cli_version = ?'); params.push(input.cliVersion); }
+    if (input.originator !== undefined) { sets.push('originator = ?'); params.push(input.originator); }
+    if (input.entrySource !== undefined) { sets.push('entry_source = ?'); params.push(input.entrySource); }
+    if (input.threadSource !== undefined) { sets.push('thread_source = ?'); params.push(input.threadSource); }
+    if (input.estimatedCostUsd !== undefined) { sets.push('estimated_cost_usd = ?'); params.push(input.estimatedCostUsd); }
+    if (input.totalInputTokens !== undefined) { sets.push('total_input_tokens = ?'); params.push(input.totalInputTokens); }
+    if (input.totalOutputTokens !== undefined) { sets.push('total_output_tokens = ?'); params.push(input.totalOutputTokens); }
+    if (input.toolCallCount !== undefined) { sets.push('tool_call_count = ?'); params.push(input.toolCallCount); }
+
+    if (sets.length === 0) return;
+    params.push(sessionId);
+    this.db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`).run(...params);
   }
 
   /** 列出所有业务表（不含 sqlite 内部表） */
@@ -123,32 +156,34 @@ export class SessionStore {
         .get(sessionId) as Row | undefined;
 
       // 首次创建：session + revision 1 + 消息
-      if (!existing) {
-        const startedAt = input.startedAt ?? now;
-        this.db
-          .prepare(
-            `INSERT INTO sessions
-               (id, device_id, source_instance_id, native_session_id, source, cwd, project_path,
-                topology, presence, retention, sync_state, content_hash, current_revision_id,
-                message_count, started_at, last_seen_at, ended_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present', 'live', 'local', ?, NULL, ?, ?, ?, NULL, ?, ?)`,
-          )
-          .run(
-            sessionId,
-            input.deviceId,
-            input.sourceInstanceId,
-            input.nativeSessionId,
-            input.source,
-            input.cwd ?? null,
-            input.projectPath ?? null,
-            input.topology ?? 'root',
-            hash,
-            messageCount,
-            startedAt,
-            now,
-            now,
-            now,
-          );
+     if (!existing) {
+       const startedAt = input.startedAt ?? now;
+       this.db
+         .prepare(
+           `INSERT INTO sessions
+              (id, device_id, source_instance_id, native_session_id, source, cwd, project_path,
+               topology, presence, retention, sync_state, content_hash, current_revision_id,
+               message_count, started_at, last_seen_at, ended_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present', 'live', 'local', ?, NULL, ?, ?, ?, NULL, ?, ?)`,
+         )
+         .run(
+           sessionId,
+           input.deviceId,
+           input.sourceInstanceId,
+           input.nativeSessionId,
+           input.source,
+           input.cwd ?? null,
+           input.projectPath ?? null,
+           input.topology ?? 'root',
+           hash,
+           messageCount,
+           startedAt,
+           now,
+           now,
+           now,
+         );
+       // 写入元数据列（如果有值）
+       this.updateMetadata(sessionId, input);
 
         const revisionId = this.insertRevision(sessionId, 1, hash, messageCount, input.sourceKind);
         this.insertMessages(sessionId, revisionId, input.messages);
@@ -179,20 +214,21 @@ export class SessionStore {
         };
       }
 
-      // 内容变化：新 revision
-      const nextNumber =
-        ((this.db
-          .prepare('SELECT COALESCE(MAX(revision_number), 0) AS n FROM session_revisions WHERE session_id = ?')
-          .get(sessionId) as Row).n as number) + 1;
-      const revisionId = this.insertRevision(sessionId, nextNumber, hash, messageCount, input.sourceKind);
-      this.insertMessages(sessionId, revisionId, input.messages);
-      this.db
-        .prepare(
-          `UPDATE sessions
-           SET current_revision_id = ?, content_hash = ?, message_count = ?, last_seen_at = ?, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(revisionId, hash, messageCount, now, now, sessionId);
+     // 内容变化：新 revision
+     const nextNumber =
+       ((this.db
+         .prepare('SELECT COALESCE(MAX(revision_number), 0) AS n FROM session_revisions WHERE session_id = ?')
+         .get(sessionId) as Row).n as number) + 1;
+     const revisionId = this.insertRevision(sessionId, nextNumber, hash, messageCount, input.sourceKind);
+     this.insertMessages(sessionId, revisionId, input.messages);
+     this.db
+       .prepare(
+         `UPDATE sessions
+          SET current_revision_id = ?, content_hash = ?, message_count = ?, last_seen_at = ?, updated_at = ?
+          WHERE id = ?`,
+       )
+       .run(revisionId, hash, messageCount, now, now, sessionId);
+     this.updateMetadata(sessionId, input);
 
       this.db.exec('COMMIT');
       return { sessionId, created: false, newRevision: true, revisionNumber: nextNumber, messageCount };
@@ -487,6 +523,95 @@ export class SessionStore {
      .sort((a, b) => b.count - a.count);
  }
 
+  // ─── agent_messages ──────────────────────────────────────────────────
+
+  /** 投递一条跨 session 消息，返回消息 id */
+  postMessage(input: {
+    toSessionId?: string;
+    toProject?: string;
+    fromSessionId?: string;
+    body: string;
+    kind?: string;
+  }): number {
+    const now = Date.now();
+    const result = this.db
+      .prepare(
+        `INSERT INTO agent_messages (to_session_id, to_project, from_session_id, body, kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.toSessionId ?? null,
+        input.toProject ?? null,
+        input.fromSessionId ?? null,
+        input.body,
+        input.kind ?? 'info',
+        now,
+      );
+    return Number(result.lastInsertRowid);
+  }
+
+  /** 查询 agent 间消息（读取时自动标记为已读） */
+  queryAgentMessages(filter: {
+    forSessionId?: string;
+    forProject?: string;
+    sinceMs?: number;
+    unreadOnly?: boolean;
+  }): Array<{
+    id: number;
+    toSessionId: string | null;
+    toProject: string | null;
+    fromSessionId: string | null;
+    body: string;
+    kind: string;
+    createdAt: number;
+    readAt: number | null;
+  }> {
+    const conditions: string[] = [];
+    const params: (string | number)[] = [];
+
+    if (filter.forSessionId) {
+      conditions.push('to_session_id = ?');
+      params.push(filter.forSessionId);
+    }
+    if (filter.forProject) {
+      conditions.push('to_project = ?');
+      params.push(filter.forProject);
+    }
+    if (filter.sinceMs) {
+      conditions.push('created_at >= ?');
+      params.push(filter.sinceMs);
+    }
+    if (filter.unreadOnly) {
+      conditions.push('read_at IS NULL');
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(
+        `SELECT id, to_session_id, to_project, from_session_id, body, kind, created_at, read_at
+         FROM agent_messages ${where} ORDER BY created_at ASC`,
+      )
+      .all(...params) as Row[];
+
+    // 自动标记为已读
+    const updateRead = this.db.prepare('UPDATE agent_messages SET read_at = ? WHERE id = ? AND read_at IS NULL');
+    const now = Date.now();
+    for (const r of rows) {
+      updateRead.run(now, r.id as number);
+    }
+
+    return rows.map((r) => ({
+      id: r.id as number,
+      toSessionId: (r.to_session_id as string) ?? null,
+      toProject: (r.to_project as string) ?? null,
+      fromSessionId: (r.from_session_id as string) ?? null,
+      body: r.body as string,
+      kind: r.kind as string,
+      createdAt: r.created_at as number,
+      readAt: (r.read_at as number) ?? null,
+    }));
+  }
+
   // ─── scan_runs ───────────────────────────────────────────────────────
 
   /** 开始一次扫描，返回 run id */
@@ -622,6 +747,15 @@ export class SessionStore {
       messageCount: row.message_count as number,
       startedAt: (row.started_at as number | null) ?? null,
       lastSeenAt: row.last_seen_at as number,
+      model: (row.model as string | null) ?? null,
+      cliVersion: (row.cli_version as string | null) ?? null,
+      originator: (row.originator as string | null) ?? null,
+      entrySource: (row.entry_source as string | null) ?? null,
+      threadSource: (row.thread_source as string | null) ?? null,
+      estimatedCostUsd: (row.estimated_cost_usd as number | null) ?? null,
+      totalInputTokens: (row.total_input_tokens as number | null) ?? null,
+      totalOutputTokens: (row.total_output_tokens as number | null) ?? null,
+      toolCallCount: (row.tool_call_count as number | null) ?? null,
     };
   }
 }

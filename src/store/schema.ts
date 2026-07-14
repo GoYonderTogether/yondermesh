@@ -43,6 +43,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   ended_at              INTEGER,
   created_at            INTEGER NOT NULL,
   updated_at            INTEGER NOT NULL,
+  -- 元数据扩展（LOOP-012）
+  model                 TEXT,
+  cli_version           TEXT,
+  originator            TEXT,
+  entry_source          TEXT,
+  thread_source         TEXT,
+  estimated_cost_usd    REAL,
+  total_input_tokens    INTEGER,
+  total_output_tokens   INTEGER,
+  tool_call_count       INTEGER,
   UNIQUE (device_id, source_instance_id, native_session_id),
   FOREIGN KEY (source_instance_id) REFERENCES source_instances(id)
 );
@@ -112,4 +122,35 @@ CREATE INDEX IF NOT EXISTS idx_rel_from               ON session_relationships(f
 CREATE INDEX IF NOT EXISTS idx_rel_to                 ON session_relationships(to_session_id);
 CREATE INDEX IF NOT EXISTS idx_rel_type               ON session_relationships(relation_type);
 CREATE INDEX IF NOT EXISTS idx_scanruns_instance      ON scan_runs(source_instance_id);
+
+-- 7. agent_messages：跨 session 消息总线
+CREATE TABLE IF NOT EXISTS agent_messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  to_session_id   TEXT,
+  to_project      TEXT,
+  from_session_id TEXT,
+  body            TEXT NOT NULL,
+  kind            TEXT NOT NULL DEFAULT 'info',
+  created_at      INTEGER NOT NULL,
+  read_at         INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_msg_to_session         ON agent_messages(to_session_id);
+CREATE INDEX IF NOT EXISTS idx_msg_to_project         ON agent_messages(to_project);
+CREATE INDEX IF NOT EXISTS idx_msg_created            ON agent_messages(created_at DESC);
 `;
+
+/**
+ * 已有数据库的列迁移。在 ensureSchema 之后执行，幂等。
+ */
+export const MIGRATION_COLUMNS: { table: string; column: string; type: string }[] = [
+  { table: 'sessions', column: 'model', type: 'TEXT' },
+  { table: 'sessions', column: 'cli_version', type: 'TEXT' },
+  { table: 'sessions', column: 'originator', type: 'TEXT' },
+  { table: 'sessions', column: 'entry_source', type: 'TEXT' },
+  { table: 'sessions', column: 'thread_source', type: 'TEXT' },
+  { table: 'sessions', column: 'estimated_cost_usd', type: 'REAL' },
+  { table: 'sessions', column: 'total_input_tokens', type: 'INTEGER' },
+  { table: 'sessions', column: 'total_output_tokens', type: 'INTEGER' },
+  { table: 'sessions', column: 'tool_call_count', type: 'INTEGER' },
+];
