@@ -229,15 +229,18 @@ export class CassImporter {
     cass: DatabaseSyncType,
     sourceInstanceId: string,
     deviceId: string,
-  ): Omit<CassImportStats, 'scanRunId' | 'sourceInstanceId'> {
-    const convStmt = cass.prepare(
-      `SELECT c.id, c.agent_id, c.workspace_id, c.source_id, c.external_id, c.started_at,
-              a.slug AS agent_slug, w.path AS workspace_path
-       FROM conversations c
-       LEFT JOIN agents a ON a.id = c.agent_id
-       LEFT JOIN workspaces w ON w.id = c.workspace_id
-       ORDER BY c.id`,
-    );
+ ): Omit<CassImportStats, 'scanRunId' | 'sourceInstanceId'> {
+   const convStmt = cass.prepare(
+     `SELECT c.id, c.agent_id, c.workspace_id, c.source_id, c.external_id, c.started_at,
+             c.primary_model, c.estimated_cost_usd,
+             c.total_input_tokens, c.total_output_tokens, c.tool_call_count,
+             c.user_message_count, c.assistant_message_count,
+             a.slug AS agent_slug, w.path AS workspace_path
+      FROM conversations c
+      LEFT JOIN agents a ON a.id = c.agent_id
+      LEFT JOIN workspaces w ON w.id = c.workspace_id
+      ORDER BY c.id`,
+   );
     const msgStmt = cass.prepare(
       'SELECT idx, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY idx',
     );

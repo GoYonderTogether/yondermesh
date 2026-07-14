@@ -215,3 +215,32 @@ export interface SessionStats {
   subagentSessions: number;
   totalMessages: number;
 }
+
+/** 活跃 session 摘要项（最近 N 分钟内有 lastSeenAt 的 session） */
+export interface ActiveSessionSummary {
+  sessionId: string;
+  source: string;
+  cwd: string | null;
+  projectPath: string | null;
+  topology: SessionTopology;
+  lastSeenAt: number;
+  messageCount: number;
+  /** 最近 LIVE_THRESHOLD_MS 内有 lastSeenAt 视为 live（正在写入） */
+  isLive: boolean;
+}
+
+/** 活跃 session 聚合摘要 */
+export interface ActiveSummary {
+  /** 最近 withinMs 内活跃的 session 数 */
+  totalActive: number;
+  /** 最近 LIVE_THRESHOLD_MS 内正在写入的 session 数 */
+  liveCount: number;
+  /** 活跃 session 中 subagent 数 */
+  subagentActive: number;
+  /** 活跃 session 中 root 数 */
+  rootActive: number;
+  /** 按 source 分组统计 */
+  bySource: Record<string, number>;
+  /** 按 lastSeenAt 倒序排列的活跃 session 列表 */
+  sessions: ActiveSessionSummary[];
+}

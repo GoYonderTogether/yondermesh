@@ -13,7 +13,8 @@ export type MountStrategyType =
   | 'mcp-toml'      // TOML 配置文件写入 [mcp_servers.*] 段 (Codex)
   | 'skill-symlink' // skill 目录 symlink (Codex/Cursor/Trae/Continue/Windsurf)
   | 'claude-mcp'    // claude mcp add/remove CLI (Claude Code)
-  | 'always-on';    // 注入全局指令文件段落 (AGENTS.md/CLAUDE.md/GEMINI.md/.cursorrules)
+  | 'always-on'     // 注入全局指令文件段落 (AGENTS.md/CLAUDE.md/GEMINI.md/.cursorrules)
+  | 'unsupported';  // CLI 不支持该扩展类型（用于 status 显示与统计过滤）
 
 /** MCP Server 定义 */
 export interface McpServerDef {

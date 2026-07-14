@@ -8,16 +8,18 @@
  * 支持 --json 全局标志，输出 JSON 格式。
  */
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
 import { hostname, homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
 
 import { SessionStore } from '../store/index.js';
+import type { ActiveSummary, SessionStats, SessionRecord } from '../store/index.js';
 import { CassImporter } from '../cass/index.js';
 import { ClaudeCodeImporter } from '../claude/index.js';
 import { CodexImporter } from '../codex/index.js';
-import { YondermeshDaemon, defaultDaemonConfig } from '../daemon/index.js';
+import { YondermeshDaemon, defaultDaemonConfig, defaultDataDir } from '../daemon/index.js';
 import type { DaemonConfig } from '../daemon/index.js';
 
 import {
@@ -38,6 +40,13 @@ import {
   resolveLaunchAgentPlist as LAUNCH_AGENT_PLIST,
 } from '../install/index.js';
 import { mountAll, verifyAll, unmountAll, detectInstalledClis } from '../mount/index.js';
+import {
+  extractProject,
+  queryExtracts,
+  projectHashOf,
+  listExtracts,
+} from '../extract/index.js';
+import type { ExtractKind } from '../extract/index.js';
 
 import { McpServer } from '../mcp/server.js';
 import {
@@ -46,11 +55,52 @@ import {
   checkRegistration,
   buildYmeshArgs,
 } from '../mcp/register.js';
+import { buildSessionHandoff } from '../mcp/codex-handoff.js';
+import type { HandoffPackage } from '../mcp/codex-handoff.js';
 
 // 读取 package.json 的版本号
 const projectRoot = dirname(dirname(dirname(new URL(import.meta.url).pathname)));
 const packageJson = JSON.parse(readFileSync(`${projectRoot}/package.json`, 'utf-8'));
 const VERSION = packageJson.version as string;
+
+/**
+ * 解析源码根目录（用于 install / update --local）。
+ *
+ * 优先级：
+ *   1. 环境变量 YONDERMESH_DEV_ROOT（用户显式指定源码根）
+ *   2. 从当前文件向上查找 package.json，命中 name === 'yondermesh' 且同目录含 tsconfig.json
+ *      （tsconfig.json 用于排除 release 目录——release 的 package.json 也有 name=yondermesh）
+ *   3. 回退到 import.meta.url 推算的目录（dev 模式正确，release 模式指向 release 目录）
+ */
+function resolveProjectRoot(): string {
+  // 1. 环境变量
+  const envRoot = process.env.YONDERMESH_DEV_ROOT;
+  if (envRoot && existsSync(envRoot)) {
+    return envRoot;
+  }
+
+  // 2. 向上查找 package.json + tsconfig.json
+  let dir = dirname(new URL(import.meta.url).pathname);
+  for (let i = 0; i < 10; i++) {
+    const pkgPath = join(dir, 'package.json');
+    if (existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+        if (pkg.name === 'yondermesh' && existsSync(join(dir, 'tsconfig.json'))) {
+          return dir;
+        }
+      } catch {
+        /* package.json 解析失败，继续向上 */
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break; // 到达文件系统根
+    dir = parent;
+  }
+
+  // 3. 回退
+  return dirname(dirname(dirname(new URL(import.meta.url).pathname)));
+}
 
 // ─── 参数解析 ────────────────────────────────────────────────────────────
 
@@ -144,10 +194,11 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   status              显示 daemon 状态和最近扫描结果
   sessions            列出 session（支持过滤）
   daemon              启动后台 daemon（实时监听 + 定时 reconcile）
+                      选项: --db <path> --data-dir <dir> --pid-file <path>
   install             本地构建 release 并安装
   service <action>    管理 LaunchAgent (install|uninstall|start|stop|status)
   releases            列出已安装的 release 版本
-  update              从 Git 源码更新（构建失败自动回退）
+  update [--local]    从 Git 源码更新（构建失败自动回退）；--local 跳过 clone，从本地源码打包
   rollback            手动回退到上一个 release 版本
   mcp                 启动 MCP server（stdio JSON-RPC，供其他 agent 挂载）
   mcp register        注册 MCP server 到 Claude Code 和 Codex（安装后新 session 自动可用）
@@ -155,6 +206,10 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   mcp status          查看 MCP 注册状态
   doctor              运行系统诊断（检查安装、数据库、daemon、日志健康状态）
   mount [status|all|remove]  管理跨 CLI 挂载（MCP/Skill/Plugin 到所有已安装的 CLI agent）
+  extract             提取项目全部 user 需求与 assistant 响应到 NDJSONL 文件（按行号/ID 索引）
+  handoff <id>        提取 session 浓缩 handoff 包（compacted 摘要 + tool call + plan），用于任务接管
+  state <action>      管理运行时状态文件 (sync|show)
+  mailbox <action>    文件系统跨 session 通信 (post|get|list)
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -175,6 +230,23 @@ sessions 过滤选项:
   --to <time>         截止时间（epoch ms 或 ISO 日期）
   --include-archived  包含被去重的 session（默认不显示）
 
+extract 选项:
+  --cwd-prefix <path>  项目目录前缀（默认当前 cwd）
+  --project <path>     projectPath 精确匹配（与 --cwd-prefix 二选一）
+  --from / --to        session 起始时间区间过滤
+  --requirements       查询需求文件（user 消息）
+  --responses          查询响应文件（assistant 消息）
+  --id <n>             按行号/ID 精确取一条（1-based）
+  --keyword <text>     关键词模糊匹配（大小写不敏感）
+  --session <id>       按 yondermesh session ID 过滤
+  --limit <n>          查询返回条数上限
+  --offset <n>         查询跳过前 N 条
+  --list               列出所有已提取过的项目
+
+handoff 选项:
+  --json              以 JSON 格式输出 handoff 包
+  --tail <n>          尾部消息条数（默认 30）
+
 示例:
   ymesh scan
   ymesh sessions --limit 50
@@ -182,6 +254,10 @@ sessions 过滤选项:
   ymesh sessions --cwd-prefix /Users/zoran/projects --json
   ymesh status
   ymesh daemon
+  ymesh extract --cwd-prefix /Users/zoran/projects/yondermesh
+  ymesh extract --requirements --id 3
+  ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb
+  ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb --json --tail 50
 `);
   return 0;
 }
@@ -290,6 +366,22 @@ function cmdStatus(flags: Record<string, string | boolean>): number {
     }
   }
 
+  // 读取 daemon 持久化的 watchedPaths（仅在 daemon 运行时有效）
+  let watchedPaths: string[] = [];
+  if (daemonRunning) {
+    try {
+      const watchedPathsFile = join(config.dataDir, 'watched-paths.json');
+      if (existsSync(watchedPathsFile)) {
+        const parsed = JSON.parse(readFileSync(watchedPathsFile, 'utf-8')) as { paths?: string[] };
+        if (Array.isArray(parsed.paths)) {
+          watchedPaths = parsed.paths;
+        }
+      }
+    } catch {
+      /* 文件不可读或格式错误时按空数组处理 */
+    }
+  }
+
   // 获取 DB 统计
   let stats: { totalSessions: number; rootSessions: number; subagentSessions: number; totalMessages: number } | null = null;
   let lastScanRuns: unknown[] = [];
@@ -309,6 +401,7 @@ function cmdStatus(flags: Record<string, string | boolean>): number {
       daemonRunning,
       daemonPid,
       dbPath,
+      watchedPaths,
       stats,
       recentScans: lastScanRuns,
     }, null, 2));
@@ -316,6 +409,14 @@ function cmdStatus(flags: Record<string, string | boolean>): number {
     console.log(`\nyondermesh 状态\n`);
     console.log(`  daemon:  ${daemonRunning ? `运行中 (PID ${daemonPid})` : '未运行'}`);
     console.log(`  DB 路径: ${dbPath}`);
+    console.log(`\n  实时监听目录 (${watchedPaths.length}):`);
+    if (watchedPaths.length > 0) {
+      for (const p of watchedPaths) {
+        console.log(`    ${p}`);
+      }
+    } else {
+      console.log(`    (无)`);
+    }
     if (stats) {
       console.log(`\n  数据统计:`);
       console.log(`    总 session:  ${stats.totalSessions}`);
@@ -349,11 +450,13 @@ function cmdSessions(flags: Record<string, string | boolean>): number {
 
   const sessions = store.querySessions(query);
   const stats = store.getSessionStats(query);
+  const activeSummary = store.getActiveSessionsSummary();
   store.close();
 
   if (flags.json) {
-    console.log(JSON.stringify({ sessions, stats }, null, 2));
+    console.log(JSON.stringify({ summary: activeSummary, sessions, stats }, null, 2));
   } else {
+    printRuntimeSummary(activeSummary, stats);
     console.log(`\n共 ${sessions.length} 条 session（总计 ${stats.totalSessions}）\n`);
     for (const s of sessions) {
       const time = s.startedAt ? new Date(s.startedAt).toISOString().slice(0, 19) : '???';
@@ -365,11 +468,45 @@ function cmdSessions(flags: Record<string, string | boolean>): number {
   return 0;
 }
 
+/** 打印运行时摘要：总 session 数 + 最近 30 分钟活跃 session 列表（最多 10 条） */
+function printRuntimeSummary(
+  summary: ActiveSummary,
+  stats: SessionStats,
+): void {
+  const home = process.env.HOME ?? '';
+  console.log('\n本机运行时状态：');
+  console.log(`  总 session: ${stats.totalSessions} (root ${stats.rootSessions} / subagent ${stats.subagentSessions})`);
+  console.log(`  最近 30 分钟活跃: ${summary.totalActive} 个 (其中 subagent ${summary.subagentActive} 个)`);
+  const shown = summary.sessions.slice(0, 10);
+  for (const s of shown) {
+    const shortId = shortIdOf(s.sessionId);
+    const cwd = s.cwd ? s.cwd.replace(home, '~') : '-';
+    const time = formatHHMM(s.lastSeenAt);
+    const source = s.source.padEnd(12);
+    console.log(`    - ${shortId}  ${source}  ${cwd}  ${time} 最近活动`);
+  }
+  console.log();
+}
+
+/** 短 id：前 12 字符 + ...（不足则原样） */
+function shortIdOf(id: string): string {
+  return id.length > 12 ? id.slice(0, 12) + '...' : id;
+}
+
+/** 格式化为本地时区 HH:MM */
+function formatHHMM(ms: number): string {
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
 /** daemon 命令 */
 async function cmdDaemon(flags: Record<string, string | boolean>): Promise<number> {
   const config: Partial<DaemonConfig> = {};
   if (flags.db) config.dbPath = flags.db as string;
   if (flags['data-dir']) config.dataDir = flags['data-dir'] as string;
+  if (flags['pid-file']) config.pidFile = flags['pid-file'] as string;
 
   const daemon = new YondermeshDaemon(config);
 
@@ -420,10 +557,12 @@ async function cmdDaemon(flags: Record<string, string | boolean>): Promise<numbe
 /** install 命令：本地构建 release 并安装 */
 function cmdInstall(flags: Record<string, string | boolean>): number {
   const force = flags.force === true;
+  const sourceRoot = resolveProjectRoot();
   console.log('[yondermesh] 开始本地构建...');
+  console.log(`[yondermesh] 源码目录: ${sourceRoot}`);
 
   try {
-    const release = buildRelease(projectRoot, force);
+    const release = buildRelease(sourceRoot, force);
     console.log(`[yondermesh] 构建 release ${release.version} → ${release.releasePath}`);
 
     installRelease(release);
@@ -436,8 +575,10 @@ function cmdInstall(flags: Record<string, string | boolean>): number {
    // mountAll 已经包含 skill linking，这里 linkSkills 作为向后兼容保留
    console.log('[yondermesh] 挂载扩展到所有已安装 CLI...');
    const mountResults = mountAll();
-   const mountOk = mountResults.filter((r) => r.success).length;
-   console.log(`[yondermesh] ${mountOk}/${mountResults.length} 个挂载成功`);
+   // unsupported 不算入分母——只统计实际尝试的挂载
+   const mountAttempted = mountResults.filter((r) => r.strategy !== 'unsupported');
+   const mountOk = mountAttempted.filter((r) => r.success).length;
+   console.log(`[yondermesh] ${mountOk}/${mountAttempted.length} 个挂载成功`);
    void skillResult;
    if (skillResult.linked.length > 0) {
       console.log(`[yondermesh] 已链接 skill: ${skillResult.linked.join(', ')}`);
@@ -448,6 +589,7 @@ function cmdInstall(flags: Record<string, string | boolean>): number {
     return 0;
   } catch (err) {
     console.error(`[yondermesh] 安装失败: ${String(err)}`);
+    console.error('[yondermesh] 提示：如果从 release 跑 install 失败，请用 `npm run dev -- install --force` 从源码跑，或者 `ymesh update --local`');
     return 1;
   }
 }
@@ -550,19 +692,22 @@ function cmdMount(flags: Record<string, string | boolean>): number {
   if (subcommand === "all" || subcommand === "add") {
     console.log("[yondermesh] Mounting extensions to all installed CLIs...");
     const results = mountAll();
-    for (const r of results) {
+    // unsupported 不算入分母，也不显示——只统计实际尝试的挂载
+    const attempted = results.filter((r) => r.strategy !== "unsupported");
+    for (const r of attempted) {
       const icon = r.success ? "  OK" : "  --";
       console.log("  " + icon + "  " + r.target + ": " + r.extension + " (" + r.strategy + ") " + r.message);
     }
-    const ok = results.filter((r) => r.success).length;
-    console.log("[yondermesh] " + ok + "/" + results.length + " mounts succeeded");
-    return results.every((r) => r.success) ? 0 : 1;
+    const ok = attempted.filter((r) => r.success).length;
+    console.log("[yondermesh] " + ok + "/" + attempted.length + " mounts succeeded");
+    return attempted.every((r) => r.success) ? 0 : 1;
   }
 
   if (subcommand === "remove" || subcommand === "unmount") {
     console.log("[yondermesh] Removing all mounts...");
     const results = unmountAll();
     for (const r of results) {
+      if (r.strategy === "unsupported") continue; // 跳过不支持的扩展
       console.log("  " + r.target + ": " + r.extension + " " + r.message);
     }
     return 0;
@@ -573,15 +718,195 @@ function cmdMount(flags: Record<string, string | boolean>): number {
   const clis = detectInstalledClis(homedir());
   console.log("  Installed CLIs: " + clis.map((c) => c.id).join(", ") + " (" + clis.length + " total)");
   const statuses = verifyAll();
-  for (const s of statuses) {
+  // 过滤掉 unsupported——CLI 不支持的扩展不应在 status 里误报
+  const visibleStatuses = statuses.filter((s) => s.strategy !== "unsupported");
+  for (const s of visibleStatuses) {
     const icon = s.mounted ? "  MOUNTED" : "  --";
     console.log("  " + icon + "  " + s.cli + ": " + s.extension + " [" + s.strategy + "]");
   }
 
   if (flags.json === true) {
-    console.log(JSON.stringify({ clis: clis.map((c) => c.id), mounts: statuses }, null, 2));
+    console.log(JSON.stringify({ clis: clis.map((c) => c.id), mounts: visibleStatuses }, null, 2));
   }
   return 0;
+}
+
+// --- extract command (LOOP-013) ---
+
+/** extract 命令：提取项目需求/响应，或查询已提取的 NDJSONL 文件 */
+function cmdExtract(flags: Record<string, string | boolean>): number {
+  // --list：列出所有已提取过的项目
+  if (flags.list === true) {
+    const items = listExtracts();
+    if (flags.json) {
+      console.log(JSON.stringify({ projects: items }, null, 2));
+    } else {
+      console.log(`\n已提取项目（${items.length}）:\n`);
+      for (const it of items) {
+        const time = new Date(it.extractedAt).toISOString().slice(0, 19);
+        console.log(`  ${it.projectHash}  ${time}  ${String(it.sessionCount).padStart(4)} sess  ${String(it.requirementCount).padStart(5)} req  ${String(it.responseCount).padStart(5)} resp  ${it.projectPath}`);
+      }
+      console.log();
+    }
+    return 0;
+  }
+
+  const wantsReqs = flags.requirements === true;
+  const wantsResps = flags.responses === true;
+
+  // 查询模式：--requirements 或 --responses
+  if (wantsReqs || wantsResps) {
+    const kind: ExtractKind = wantsReqs ? 'requirements' : 'responses';
+    let projectHash = flags['project-hash'] as string | undefined;
+    if (!projectHash) {
+      const p = (flags['cwd-prefix'] as string | undefined) ?? process.cwd();
+      projectHash = projectHashOf(p);
+    }
+    const idNum = flags.id !== undefined && flags.id !== true ? Number(flags.id) : undefined;
+    const entries = queryExtracts(projectHash, kind, {
+      id: idNum !== undefined && !isNaN(idNum) ? idNum : undefined,
+      keyword: flags.keyword !== undefined && flags.keyword !== true ? (flags.keyword as string) : undefined,
+      sessionId: flags.session !== undefined && flags.session !== true ? (flags.session as string) : undefined,
+      limit: parseLimit(flags),
+      offset: flags.offset !== undefined && flags.offset !== true ? Number(flags.offset) : undefined,
+    });
+    if (flags.json) {
+      console.log(JSON.stringify({ kind, projectHash, count: entries.length, entries }, null, 2));
+    } else {
+      console.log(`\n${kind} (${projectHash}): ${entries.length} 条\n`);
+      for (const e of entries) {
+        const time = e.timestamp ? new Date(e.timestamp).toISOString().slice(0, 19) : '???';
+        const preview = e.content.replace(/\n/g, ' ').slice(0, 120);
+        console.log(`  [${e.id}] ${time} ${e.source.padEnd(8)} ${(e.sessionNativeId || '').slice(0, 12)}`);
+        console.log(`      ${preview}`);
+      }
+      console.log();
+    }
+    return 0;
+  }
+
+  // 默认：提取模式
+  const cwdPrefix = (flags['cwd-prefix'] as string | undefined) ?? process.cwd();
+  try {
+    const result = extractProject({
+      cwdPrefix,
+      projectPath: flags.project as string | undefined,
+      startedAtFrom: parseTime(flags.from),
+      startedAtTo: parseTime(flags.to),
+      dbPath: flags.db as string | undefined,
+    });
+    if (flags.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`\n提取完成 (${result.projectHash})`);
+      console.log(`  项目:     ${result.projectPath}`);
+      console.log(`  session:  ${result.sessionCount}`);
+      console.log(`  需求:     ${result.requirementCount} → ${result.requirementsFile}`);
+      console.log(`  响应:     ${result.responseCount} → ${result.responsesFile}`);
+      console.log(`  索引:     ${result.indexFile}`);
+      console.log(`  查询示例: ymesh extract --requirements --id 1\n`);
+    }
+    return 0;
+  } catch (err) {
+    console.error(`[yondermesh] 提取失败: ${String(err)}`);
+    return 1;
+  }
+}
+
+// --- handoff command (LOOP-014) ---
+
+/** handoff 命令：提取 session 的浓缩 handoff 包，用于任务接管 */
+function cmdHandoff(flags: Record<string, string | boolean>): number {
+  // 从 process.argv 取 handoff 后的位置参数（session_id），与 cmdService/cmdMcp 模式一致
+  const handoffIdx = process.argv.indexOf('handoff');
+  const sessionId = handoffIdx >= 0 ? (process.argv[handoffIdx + 1] ?? '') : '';
+  if (!sessionId || sessionId.startsWith('--')) {
+    console.error('用法: ymesh handoff <session_id> [--json] [--tail <n>]');
+    return 1;
+  }
+
+  const tailNum = (() => {
+    const v = flags.tail;
+    if (v === undefined || typeof v === 'boolean') return 30;
+    const n = parseInt(v, 10);
+    return isNaN(n) ? 30 : n;
+  })();
+
+  const claudePath = join(homedir(), '.claude', 'projects');
+  const codexPath = join(homedir(), '.codex', 'sessions');
+  const pkg = buildSessionHandoff(sessionId, claudePath, codexPath, { tailMessages: tailNum });
+  if (!pkg) {
+    console.error(`[yondermesh] 找不到 session ${sessionId} 的源文件`);
+    return 1;
+  }
+
+  if (flags.json) {
+    console.log(JSON.stringify(pkg, null, 2));
+    return 0;
+  }
+
+  printHandoffHuman(pkg);
+  return 0;
+}
+
+/** 人类可读格式打印 handoff 包 */
+function printHandoffHuman(pkg: HandoffPackage): void {
+  const meta = pkg.session_meta;
+  console.log(`\n=== Session Handoff: ${pkg.session_id ?? '(unknown)'} ===`);
+  console.log(`  来源:     ${pkg.source}`);
+  console.log(`  Live:     ${pkg.is_live ? '是' : '否'}  最近活动: ${pkg.last_activity_sec_ago >= 0 ? pkg.last_activity_sec_ago + 's 前' : '?'}`);
+  console.log(`  消息数:   ${pkg.message_count}`);
+  if (meta.cwd) console.log(`  CWD:      ${meta.cwd}`);
+  if (meta.topology) console.log(`  拓扑:     ${meta.topology}`);
+  if (meta.model) console.log(`  Model:    ${meta.model}`);
+  if (meta.cliVersion) console.log(`  CLI:      ${meta.cliVersion}`);
+  if (meta.originator) console.log(`  Origin:   ${meta.originator}`);
+  console.log(`  文件:     ${pkg.file_path}`);
+
+  // compacted 摘要
+  if (pkg.compacted_summaries.length > 0) {
+    console.log(`\n--- Compacted 摘要 (${pkg.compacted_summaries.length}) ---`);
+    for (const c of pkg.compacted_summaries) {
+      console.log(`\n[window ${c.window_number}]`);
+      console.log(c.message);
+    }
+  }
+
+  // 最后 user 消息
+  if (pkg.last_user_message) {
+    console.log('\n--- 最后一条真实 user 消息 ---');
+    console.log(pkg.last_user_message);
+  }
+
+  // 尾部近况
+  if (pkg.recent_messages.length > 0) {
+    console.log(`\n--- 尾部近况 (${pkg.recent_messages.length}) ---`);
+    for (const m of pkg.recent_messages) {
+      const ts = m.timestamp ? new Date(m.timestamp).toISOString().slice(11, 19) : '';
+      if (m.role === 'function_call') {
+        console.log(`  [${m.seq}] ${ts} ${m.role}: ${m.name ?? '?'}`);
+        if (m.arguments) console.log(`        args: ${m.arguments}`);
+      } else if (m.role === 'function_call_output') {
+        console.log(`  [${m.seq}] ${ts} ${m.role}:`);
+        if (m.output) console.log(`        out:  ${m.output}`);
+      } else if (m.role === 'custom_tool_call' || m.role === 'custom_tool_call_output') {
+        console.log(`  [${m.seq}] ${ts} ${m.role}: ${m.name ?? '?'}`);
+        if (m.arguments) console.log(`        args: ${m.arguments}`);
+        if (m.output) console.log(`        out:  ${m.output}`);
+      } else {
+        const preview = m.content.replace(/\n/g, '\n        ');
+        console.log(`  [${m.seq}] ${ts} ${m.role}: ${preview}`);
+      }
+    }
+  }
+
+  // task plan
+  if (pkg.task_plan) {
+    console.log('\n--- Task Plan ---');
+    console.log(pkg.task_plan);
+  }
+
+  console.log('');
 }
 
 // --- doctor command ---
@@ -683,8 +1008,47 @@ async function cmdMcp(flags: Record<string, string | boolean>): Promise<number> 
 
 // ─── update 命令（LOOP-009） ───────────────────────────────────────────
 
-/** update 命令：从 Git 源码更新并自动回退 */
+/** update 命令：从 Git 源码或本地源码更新并自动回退 */
 async function cmdUpdate(flags: Record<string, string | boolean>): Promise<number> {
+  const useLocal = flags.local === true;
+
+  // --local 模式：跳过 git clone，直接用本地源码打包
+  if (useLocal) {
+    const sourceRoot = resolveProjectRoot();
+    const previousVersion = getCurrentRelease();
+
+    console.log(`[yondermesh] 正在从本地源码更新...`);
+    console.log(`  源码目录: ${sourceRoot}`);
+
+    try {
+      const release = buildRelease(sourceRoot, true);
+      installRelease(release);
+
+      // 重新链接 skill（current 已切换，symlink 自动指向新版本）
+      try {
+        linkSkills();
+      } catch {
+        // skill 链接失败不影响更新成功
+      }
+
+      console.log(`[yondermesh] 更新成功: ${previousVersion ?? '(none)'} → ${release.version}`);
+      return 0;
+    } catch (err) {
+      // 失败时尝试自动回退到 previous release
+      const rolled = rollbackRelease();
+      console.error(`[yondermesh] 更新失败: ${String(err)}`);
+      if (rolled) {
+        console.error(`[yondermesh] 已自动回退到 ${basename(rolled)}`);
+      } else if (previousVersion) {
+        console.error(`[yondermesh] 当前版本仍为 ${previousVersion}（未切换）`);
+      } else {
+        console.error(`[yondermesh] 未能回退（没有 previous release）`);
+      }
+      return 1;
+    }
+  }
+
+  // 默认模式：从 Git 拉取后打包
   const repoUrl = (flags.repo as string) ?? 'https://github.com/GoYonderTogether/yondermesh.git';
   const branch = (flags.branch as string) ?? 'main';
 
@@ -707,6 +1071,345 @@ async function cmdUpdate(flags: Record<string, string | boolean>): Promise<numbe
     console.error('[yondermesh] 请手动检查并解决问题后重试。');
     return 1;
   }
+}
+
+// ─── state 命令（文件系统信号通道）─────────────────────────────────────────
+
+/** 解析 data-dir，支持 --data-dir 覆盖（跟 daemon 一致） */
+function resolveDataDir(flags: Record<string, string | boolean>): string {
+  return typeof flags['data-dir'] === 'string' ? flags['data-dir'] : defaultDataDir();
+}
+
+/** state 命令：把运行时状态写到文件系统，或从文件系统读取状态 */
+function cmdState(flags: Record<string, string | boolean>): number {
+  // 子命令：sync / show（从 process.argv 直接取，与 cmdService/cmdMcp 模式一致）
+  const positional = process.argv.slice(process.argv.indexOf('state') + 1);
+  const action = positional[0] ?? '';
+
+  const dataDir = resolveDataDir(flags);
+  const stateDir = join(dataDir, 'state');
+  const defaultStateFile = join(stateDir, 'current.json');
+
+  switch (action) {
+    case 'sync':
+      return cmdStateSync(flags, dataDir, defaultStateFile);
+    case 'show':
+      return cmdStateShow(flags, defaultStateFile);
+    default:
+      console.error('用法: ymesh state sync|show [--output <path>] [--data-dir <dir>] [--json]');
+      return 1;
+  }
+}
+
+/** state sync：写当前状态到文件系统 */
+function cmdStateSync(
+  flags: Record<string, string | boolean>,
+  dataDir: string,
+  defaultStateFile: string,
+): number {
+  const outputFile = typeof flags.output === 'string' ? flags.output : defaultStateFile;
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+
+  const store = openStore(dbPath);
+  const activeSummary = store.getActiveSessionsSummary();
+  const stats = store.getSessionStats({});
+  const recentSessions = store.querySessions({ limit: 10 });
+  store.close();
+
+  const payload = {
+    syncedAt: new Date().toISOString(),
+    deviceId: hostname(),
+    stats,
+    activeSummary,
+    recentSessions,
+  };
+
+  try {
+    mkdirSync(dirname(outputFile), { recursive: true });
+    writeFileSync(outputFile, JSON.stringify(payload, null, 2) + '\n', 'utf-8');
+  } catch (err) {
+    console.error(`[yondermesh] 写状态文件失败: ${String(err)}`);
+    return 1;
+  }
+
+  console.log(`[yondermesh] 状态已同步到 ${outputFile}`);
+  return 0;
+}
+
+/** state show：从文件系统读取状态 */
+function cmdStateShow(flags: Record<string, string | boolean>, stateFile: string): number {
+  if (!existsSync(stateFile)) {
+    console.log('[yondermesh] 无状态文件，请先运行 ymesh state sync');
+    return 1;
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(readFileSync(stateFile, 'utf-8'));
+  } catch (err) {
+    console.error(`[yondermesh] 读取状态文件失败: ${String(err)}`);
+    return 1;
+  }
+
+  // JSON 模式直接输出原始 JSON
+  if (flags.json) {
+    console.log(JSON.stringify(payload, null, 2));
+    return 0;
+  }
+
+  // 文本模式友好显示
+  const p = payload as {
+    syncedAt?: string;
+    deviceId?: string;
+    stats?: SessionStats;
+    activeSummary?: ActiveSummary;
+    recentSessions?: SessionRecord[];
+  };
+  console.log(`\nyondermesh 状态快照\n`);
+  console.log(`  同步时间: ${p.syncedAt ?? '???'}`);
+  console.log(`  设备:     ${p.deviceId ?? '???'}`);
+  if (p.stats) {
+    console.log(`\n  数据统计:`);
+    console.log(`    总 session:  ${p.stats.totalSessions}`);
+    console.log(`    根 session:  ${p.stats.rootSessions}`);
+    console.log(`    子 agent:    ${p.stats.subagentSessions}`);
+    console.log(`    总消息:      ${p.stats.totalMessages}`);
+  }
+  if (p.activeSummary) {
+    console.log(`\n  最近 30 分钟活跃: ${p.activeSummary.totalActive} 个 (live ${p.activeSummary.liveCount})`);
+  }
+  if (p.recentSessions && p.recentSessions.length > 0) {
+    console.log(`\n  最近 session (${p.recentSessions.length}):\n`);
+    for (const s of p.recentSessions) {
+      const time = s.startedAt ? new Date(s.startedAt).toISOString().slice(0, 19) : '???';
+      const cwd = s.cwd ? s.cwd.replace(process.env.HOME ?? '', '~') : '-';
+      console.log(`    ${time}  ${s.source.padEnd(8)}  ${s.topology.padEnd(9)}  ${String(s.messageCount).padStart(4)} msg  ${cwd}`);
+    }
+  }
+  console.log();
+  return 0;
+}
+
+// ─── mailbox 命令（文件系统跨 session 通信）─────────────────────────────────
+
+/** 邮箱消息类型 */
+type MailKind = 'info' | 'warning' | 'question' | 'task_update';
+
+/** 邮箱消息 */
+interface MailMessage {
+  id: string;
+  toSessionId: string;
+  fromSessionId: string | null;
+  body: string;
+  kind: MailKind;
+  postedAt: string;
+  readAt: string | null;
+}
+
+/** 合法的 kind 列表 */
+const MAIL_KINDS: MailKind[] = ['info', 'warning', 'question', 'task_update'];
+
+/** mailbox 命令：通过文件系统投递和读取跨 session 消息 */
+function cmdMailbox(flags: Record<string, string | boolean>): number {
+  // 子命令：post / get / list
+  const positional = process.argv.slice(process.argv.indexOf('mailbox') + 1);
+  const action = positional[0] ?? '';
+
+  const dataDir = resolveDataDir(flags);
+  const mailboxDir = join(dataDir, 'mailbox');
+
+  switch (action) {
+    case 'post':
+      return cmdMailboxPost(flags, mailboxDir);
+    case 'get':
+      return cmdMailboxGet(flags, mailboxDir);
+    case 'list':
+      return cmdMailboxList(flags, mailboxDir);
+    default:
+      console.error('用法: ymesh mailbox post|get|list [--data-dir <dir>] [--json]');
+      return 1;
+  }
+}
+
+/** mailbox post：投递消息 */
+function cmdMailboxPost(flags: Record<string, string | boolean>, mailboxDir: string): number {
+  const to = typeof flags.to === 'string' ? flags.to : '';
+  const body = typeof flags.body === 'string' ? flags.body : '';
+  if (!to || !body) {
+    console.error('用法: ymesh mailbox post --to <session_id> --body <内容> [--from <session_id>] [--kind info|warning|question|task_update]');
+    return 1;
+  }
+
+  const from = typeof flags.from === 'string' ? flags.from : null;
+  const rawKind = typeof flags.kind === 'string' ? flags.kind : 'info';
+  if (!MAIL_KINDS.includes(rawKind as MailKind)) {
+    console.error(`[yondermesh] 无效 kind: ${rawKind}（可选: ${MAIL_KINDS.join(', ')}）`);
+    return 1;
+  }
+  const kind = rawKind as MailKind;
+
+  const msg: MailMessage = {
+    id: randomUUID(),
+    toSessionId: to,
+    fromSessionId: from,
+    body,
+    kind,
+    postedAt: new Date().toISOString(),
+    readAt: null,
+  };
+
+  const filePath = join(mailboxDir, `${to}.jsonl`);
+  try {
+    mkdirSync(mailboxDir, { recursive: true });
+    appendFileSync(filePath, JSON.stringify(msg) + '\n', 'utf-8');
+  } catch (err) {
+    console.error(`[yondermesh] 投递失败: ${String(err)}`);
+    return 1;
+  }
+
+  console.log(`[yondermesh] 消息已投递到 ${to} (id: ${msg.id})`);
+  return 0;
+}
+
+/** mailbox get：读取消息（不自动标记已读） */
+function cmdMailboxGet(flags: Record<string, string | boolean>, mailboxDir: string): number {
+  const forSession = typeof flags.for === 'string' ? flags.for : '';
+  if (!forSession) {
+    console.error('用法: ymesh mailbox get --for <session_id> [--unread-only] [--since-minutes 60] [--json]');
+    return 1;
+  }
+
+  const filePath = join(mailboxDir, `${forSession}.jsonl`);
+  if (!existsSync(filePath)) {
+    if (flags.json) {
+      console.log(JSON.stringify({ messages: [], count: 0 }, null, 2));
+    } else {
+      console.log(`[yondermesh] 邮箱 ${forSession} 无消息`);
+    }
+    return 0;
+  }
+
+  const sinceMinutes = (() => {
+    const v = flags['since-minutes'];
+    if (typeof v !== 'string') return 60;
+    const n = parseInt(v, 10);
+    return isNaN(n) ? 60 : n;
+  })();
+  const sinceMs = sinceMinutes > 0 ? Date.now() - sinceMinutes * 60 * 1000 : 0;
+  const unreadOnly = flags['unread-only'] === true;
+
+  let messages: MailMessage[] = [];
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        messages.push(JSON.parse(trimmed) as MailMessage);
+      } catch {
+        // 跳过损坏行
+      }
+    }
+  } catch (err) {
+    console.error(`[yondermesh] 读取邮箱失败: ${String(err)}`);
+    return 1;
+  }
+
+  // 按时间过滤
+  messages = messages.filter((m) => {
+    const postedMs = Date.parse(m.postedAt);
+    if (!isNaN(postedMs) && sinceMs > 0 && postedMs < sinceMs) return false;
+    return true;
+  });
+
+  // 按 unread 过滤
+  if (unreadOnly) {
+    messages = messages.filter((m) => m.readAt === null);
+  }
+
+  if (flags.json) {
+    console.log(JSON.stringify({ messages, count: messages.length }, null, 2));
+    return 0;
+  }
+
+  // 文本模式
+  if (messages.length === 0) {
+    console.log(`[yondermesh] 邮箱 ${forSession} 无消息（匹配当前过滤条件）`);
+    return 0;
+  }
+  console.log(`\n邮箱 ${forSession}（${messages.length} 条消息）\n`);
+  for (const m of messages) {
+    const time = m.postedAt ? m.postedAt.slice(0, 19).replace('T', ' ') : '???';
+    const from = m.fromSessionId ? shortIdOf(m.fromSessionId) : '(unknown)';
+    const read = m.readAt ? '[已读]' : '[未读]';
+    console.log(`  ${time}  ${m.kind.padEnd(12)}  ${read}  from: ${from}`);
+    console.log(`    ${m.body.replace(/\n/g, '\n    ')}`);
+  }
+  console.log();
+  return 0;
+}
+
+/** mailbox list：列出所有邮箱文件 */
+function cmdMailboxList(flags: Record<string, string | boolean>, mailboxDir: string): number {
+  if (!existsSync(mailboxDir)) {
+    if (flags.json) {
+      console.log(JSON.stringify({ mailboxes: [], count: 0 }, null, 2));
+    } else {
+      console.log('[yondermesh] 无邮箱目录');
+    }
+    return 0;
+  }
+
+  let files: string[] = [];
+  try {
+    files = readdirSync(mailboxDir).filter((f) => f.endsWith('.jsonl'));
+  } catch (err) {
+    console.error(`[yondermesh] 读取邮箱目录失败: ${String(err)}`);
+    return 1;
+  }
+
+  const mailboxes: Array<{ sessionId: string; messageCount: number; lastPostedAt: string | null }> = [];
+  for (const f of files) {
+    const sessionId = f.slice(0, -6); // 去掉 .jsonl
+    const filePath = join(mailboxDir, f);
+    try {
+      const content = readFileSync(filePath, 'utf-8');
+      const lines = content.split('\n').filter((l) => l.trim());
+      let lastPostedAt: string | null = null;
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line) as MailMessage;
+          if (msg.postedAt && (lastPostedAt === null || msg.postedAt > lastPostedAt)) {
+            lastPostedAt = msg.postedAt;
+          }
+        } catch {
+          // 跳过损坏行
+        }
+      }
+      mailboxes.push({ sessionId, messageCount: lines.length, lastPostedAt });
+    } catch {
+      // 跳过不可读文件
+    }
+  }
+
+  if (flags.json) {
+    console.log(JSON.stringify({ mailboxes, count: mailboxes.length }, null, 2));
+    return 0;
+  }
+
+  if (mailboxes.length === 0) {
+    console.log('[yondermesh] 无邮箱文件');
+    return 0;
+  }
+
+  console.log(`\n邮箱列表（${mailboxes.length}）:\n`);
+  console.log(`  ${'session_id'.padEnd(40)}  ${'msgs'.padStart(5)}  last`);
+  for (const mb of mailboxes) {
+    const time = mb.lastPostedAt ? mb.lastPostedAt.slice(0, 19).replace('T', ' ') : '-';
+    console.log(`  ${mb.sessionId.padEnd(40)}  ${String(mb.messageCount).padStart(5)}  ${time}`);
+  }
+  console.log();
+  return 0;
 }
 
 // ─── 主入口 ──────────────────────────────────────────────────────────────
@@ -759,6 +1462,18 @@ async function main(): Promise<number> {
 
     case 'mount':
       return cmdMount(flags);
+
+    case 'extract':
+      return cmdExtract(flags);
+
+    case 'handoff':
+      return cmdHandoff(flags);
+
+    case 'state':
+      return cmdState(flags);
+
+    case 'mailbox':
+      return cmdMailbox(flags);
 
     case 'rollback':
       {

@@ -86,6 +86,8 @@ interface ParsedSession {
   startedAt?: number;
   sidechain: boolean;
   messages: SessionMessageInput[];
+  model?: string;
+  cliVersion?: string;
 }
 
 /** 解析 Claude projects 根目录：rootPath 选项优先，否则回退默认路径 */
@@ -220,11 +222,14 @@ export class ClaudeCodeImporter {
         cwd: parsed.cwd,
         projectPath: parsed.cwd,
         startedAt: parsed.startedAt,
-        topology: 'root',
-        sourceKind: 'A',
-        messages: parsed.messages,
-      });
-      rootIdByNative.set(parsed.nativeId, result.sessionId);
+       topology: 'root',
+       sourceKind: 'A',
+       messages: parsed.messages,
+       model: parsed.model,
+       cliVersion: parsed.cliVersion,
+       threadSource: parsed.sidechain ? 'sidechain' : 'user',
+     });
+     rootIdByNative.set(parsed.nativeId, result.sessionId);
       this.tally(result, { inserted: () => inserted++, updated: () => updated++, unchanged: () => unchanged++ });
     }
 
@@ -244,11 +249,14 @@ export class ClaudeCodeImporter {
         cwd: parsed.cwd,
         projectPath: parsed.cwd,
         startedAt: parsed.startedAt,
-        topology: 'subagent',
-        sourceKind: 'A',
-        messages: parsed.messages,
-      });
-      this.tally(result, {
+       topology: 'subagent',
+       sourceKind: 'A',
+       messages: parsed.messages,
+       model: parsed.model,
+       cliVersion: parsed.cliVersion,
+       threadSource: parsed.sidechain ? 'sidechain' : 'user',
+     });
+     this.tally(result, {
         inserted: () => inserted++,
         updated: () => updated++,
         unchanged: () => unchanged++,
@@ -350,6 +358,8 @@ export class ClaudeCodeImporter {
     let cwd: string | undefined;
     let earliest: number | undefined;
     let sidechain = false;
+    let model: string | undefined;
+    let cliVersion: string | undefined;
     const messages: SessionMessageInput[] = [];
 
     for (const line of raw.split('\n')) {
@@ -373,6 +383,16 @@ export class ClaudeCodeImporter {
         cwd = obj.cwd;
       }
       if (obj.isSidechain === true) sidechain = true;
+      // 元数据提取（LOOP-012）：model 嵌套在 message.model，version 在顶层
+      if (model === undefined) {
+        const msg = obj.message as Record<string, unknown> | undefined;
+        if (msg && typeof msg.model === 'string' && msg.model.length > 0) {
+          model = msg.model;
+        }
+      }
+      if (cliVersion === undefined && typeof obj.version === 'string' && obj.version.length > 0) {
+        cliVersion = obj.version;
+      }
 
       const ts = this.parseTimestamp(obj.timestamp);
       if (ts !== undefined && (earliest === undefined || ts < earliest)) {
@@ -403,7 +423,7 @@ export class ClaudeCodeImporter {
       nativeId = sessionId && sessionId.length > 0 ? sessionId : relPath;
     }
 
-    return { nativeId, parentRootNativeId, cwd, startedAt: earliest, sidechain, messages };
+    return { nativeId, parentRootNativeId, cwd, startedAt: earliest, sidechain, messages, model, cliVersion };
   }
 
   /**

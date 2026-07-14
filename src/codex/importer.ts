@@ -119,6 +119,9 @@ interface SessionMetaPayload {
   cwd?: unknown;
   source?: unknown;
   thread_source?: unknown;
+  originator?: unknown;
+  cli_version?: unknown;
+  model_provider?: unknown;
 }
 
 /** 一个 session 段的解析结果（文件内同 id 合并后的结果） */
@@ -132,6 +135,12 @@ interface ParsedSession {
   /** subagent 的父 native id（仅 subagent 且 parent_thread_id 可读时有值） */
   parentNativeId?: string;
   messages: SessionMessageInput[];
+  /** 元数据（LOOP-012） */
+  modelProvider?: string;
+  cliVersion?: string;
+  originator?: string;
+  entrySource?: string;
+  threadSource?: string;
 }
 
 /** 文件内按 native id 累积的段（同 id 多次出现合并） */
@@ -144,6 +153,11 @@ interface SegmentAccum {
   messages: SessionMessageInput[];
   /** 首 session_meta 元数据已记录，重发不覆盖 */
   metaApplied: boolean;
+  modelProvider?: string;
+  cliVersion?: string;
+  originator?: string;
+  entrySource?: string;
+  threadSource?: string;
 }
 
 /** 聚合用消息：带稳定排序键（文件序 + 文件内行序），用于跨文件合并后确定性排序 */
@@ -163,6 +177,11 @@ interface LogicalAccum {
   startedAt?: number;
   /** 所有段的有序消息（每条带 fileOrder/seq 稳定排序键），入库前再统一稳定排序 */
   messages: OrderedMessage[];
+  modelProvider?: string;
+  cliVersion?: string;
+  originator?: string;
+  entrySource?: string;
+  threadSource?: string;
 }
 
 /** 解析 Codex sessions 根目录：rootPath 选项优先，否则回退默认路径 */
@@ -362,9 +381,14 @@ export class CodexImporter {
         projectPath: lg.cwd,
         startedAt: lg.startedAt,
         topology: lg.topology,
-        sourceKind: 'A',
-        messages,
-      });
+       sourceKind: 'A',
+       messages,
+       model: lg.modelProvider,
+       cliVersion: lg.cliVersion,
+       originator: lg.originator,
+       entrySource: lg.entrySource,
+       threadSource: lg.threadSource,
+     });
       sessionIdByNative.set(lg.nativeId, result.sessionId);
       if (lg.topology === 'subagent') {
         subagents++;
@@ -434,6 +458,11 @@ export class CodexImporter {
     if (lg.cwd === undefined && seg.cwd !== undefined) {
       lg.cwd = seg.cwd;
     }
+    if (lg.modelProvider === undefined && seg.modelProvider !== undefined) lg.modelProvider = seg.modelProvider;
+    if (lg.cliVersion === undefined && seg.cliVersion !== undefined) lg.cliVersion = seg.cliVersion;
+    if (lg.originator === undefined && seg.originator !== undefined) lg.originator = seg.originator;
+    if (lg.entrySource === undefined && seg.entrySource !== undefined) lg.entrySource = seg.entrySource;
+    if (lg.threadSource === undefined && seg.threadSource !== undefined) lg.threadSource = seg.threadSource;
     if (seg.topology === 'subagent') {
       lg.topology = 'subagent';
       if (lg.parentNativeId === undefined && seg.parentNativeId !== undefined) {
@@ -557,12 +586,17 @@ export class CodexImporter {
           currentId = id;
           const seg = ensureSegment(id);
           // 首 session_meta 记录元数据（cwd / 拓扑 / 父），重发不覆盖
-          if (!seg.metaApplied) {
-            seg.metaApplied = true;
-            if (typeof meta.cwd === 'string' && meta.cwd.length > 0) {
-              seg.cwd = meta.cwd;
-            }
-            const lineage = extractSubagentLineage(meta);
+         if (!seg.metaApplied) {
+           seg.metaApplied = true;
+           if (typeof meta.cwd === 'string' && meta.cwd.length > 0) {
+             seg.cwd = meta.cwd;
+           }
+           if (typeof meta.model_provider === 'string') seg.modelProvider = meta.model_provider;
+           if (typeof meta.cli_version === 'string') seg.cliVersion = meta.cli_version;
+           if (typeof meta.originator === 'string') seg.originator = meta.originator;
+           if (typeof meta.source === 'string') seg.entrySource = meta.source;
+           if (typeof meta.thread_source === 'string') seg.threadSource = meta.thread_source;
+           const lineage = extractSubagentLineage(meta);
             if (lineage.isSubagent) {
               seg.topology = 'subagent';
               seg.parentNativeId = lineage.parentNativeId;
@@ -597,6 +631,11 @@ export class CodexImporter {
       topology: seg.topology,
       parentNativeId: seg.parentNativeId,
       messages: seg.messages,
+      modelProvider: seg.modelProvider,
+      cliVersion: seg.cliVersion,
+      originator: seg.originator,
+      entrySource: seg.entrySource,
+      threadSource: seg.threadSource,
     }));
   }
 

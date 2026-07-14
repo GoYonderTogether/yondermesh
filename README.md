@@ -92,6 +92,41 @@ Now any agent can call `recall_recent_work`, `whats_on_device`, or `handoff_task
 └───────────────────────────────────────────────────────┘
 ```
 
+## CLI Coverage
+
+yondermesh 的 mount 系统把扩展（MCP server / skill / always-on 段落）挂载到各 CLI。
+支持的 CLI 及其挂载策略：
+
+| CLI | MCP 挂载 | Skill 挂载 | Always-on 注入 |
+|---|---|---|---|
+| codex | mcp-toml (`~/.codex/config.toml`) | skill-symlink (`~/.codex/skills/`) | `~/.codex/AGENTS.md` |
+| claude-code | claude-mcp (`claude mcp add`) | — | `~/.claude/CLAUDE.md` |
+| cursor | mcp-json (`~/.cursor/mcp.json`) | skill-symlink (`~/.cursor/skills/`) | `~/.cursorrules` |
+| gemini | mcp-json (`~/.gemini/settings.json`) | — | `~/.gemini/GEMINI.md` |
+| windsurf | mcp-json (`~/.windsurf/mcp_config.json`) | skill-symlink (`~/.windsurf/skills/`) | `~/.windsurfrules` |
+| trae | — | skill-symlink (`~/.trae/skills/`) | — |
+| trae-cn | — | skill-symlink (`~/.trae-cn/skills/`) | — |
+| continue | — | skill-symlink (`~/.continue/skills/`) | — |
+
+### Trae 四变体覆盖机制
+
+Trae 实际上有四个客户端变体需要全覆盖：Trae IDE（国际版）、Trae IDE CN（中文版）、
+Trae Work（国际版）、Trae Work CN（中文版）。ymesh 用 2 个 CliTarget 覆盖全部 4 个变体：
+
+- 物理上只有 2 个用户级目录：`~/.trae`（国际版）和 `~/.trae-cn`（中文版）。
+- 每个目录下 IDE 和 Work 共享用户级 `skills/` 目录（用不同 profile，但用户级 skills 是共享的）。
+- 所以挂 2 个 CliTarget（`trae` + `trae-cn`）即覆盖 4 个变体（IDE + Work × 国际 + 中文）。
+
+Trae 的挂载策略与其它 CLI 不同，需特别注意：
+
+- **不支持 always-on 注入**：Trae 不读取 `project_rules.md` 之类的全局指令文件
+  （它通过 system prompt + skills 目录注入，不读全局指令文件）。ymesh 改用
+  skill-symlink 挂载 `trae-awareness` skill 来替代 always-on awareness 段落，让 Trae
+  在 skill 列表里就能发现 ymesh。
+- **不支持文件挂 MCP**：Trae 的 MCP 通过 IDE UI 配置，不是文件可挂。如需在 Trae 里
+  使用 ymesh MCP 工具，请在 Trae 设置里手动添加 MCP server（command: `ymesh`，
+  args: `["mcp"]`）。
+
 ## Configuration
 
 `~/.yondermesh/config.yaml`:

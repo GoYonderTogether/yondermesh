@@ -117,7 +117,7 @@ export const CLI_REGISTRY: CliTarget[] = [
   },
   {
     id: 'trae',
-    displayName: 'Trae',
+    displayName: 'Trae (International, covers IDE + Work)',
     homeDir: '.trae',
     detect: (home) => existsSync(join(home, '.trae')),
     capabilities: [
@@ -126,10 +126,18 @@ export const CLI_REGISTRY: CliTarget[] = [
         extensionTypes: ['skill'],
         resolve: (home) => ({ skillsDir: join(home, '.trae', 'skills') }),
       },
+    ],
+  },
+  {
+    id: 'trae-cn',
+    displayName: 'Trae CN (Chinese, covers IDE + Work)',
+    homeDir: '.trae-cn',
+    detect: (home) => existsSync(join(home, '.trae-cn')),
+    capabilities: [
       {
-        strategy: 'always-on',
-        extensionTypes: ['plugin'],
-        resolve: (home) => ({ instructionFile: join(home, '.trae', 'project_rules.md') }),
+        strategy: 'skill-symlink',
+        extensionTypes: ['skill'],
+        resolve: (home) => ({ skillsDir: join(home, '.trae-cn', 'skills') }),
       },
     ],
   },

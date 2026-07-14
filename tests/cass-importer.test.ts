@@ -89,7 +89,14 @@ function buildCassDb(
         title TEXT,
         source_path TEXT,
         started_at INTEGER,
-        ended_at INTEGER
+        ended_at INTEGER,
+        primary_model TEXT,
+        estimated_cost_usd REAL,
+        total_input_tokens INTEGER,
+        total_output_tokens INTEGER,
+        tool_call_count INTEGER,
+        user_message_count INTEGER,
+        assistant_message_count INTEGER
       );
       CREATE TABLE messages (
         id INTEGER PRIMARY KEY,

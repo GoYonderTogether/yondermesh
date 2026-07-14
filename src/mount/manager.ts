@@ -67,6 +67,16 @@ export function defaultExtensions(_home?: string): Extension[] {
     });
   }
 
+  // trae-awareness skill (替代 always-on，让 trae 在 skill 列表里看到 ymesh)
+  const traeAwarenessSkillPath = join(resolveCurrentSymlink(), 'skills', 'trae-awareness');
+  if (existsSync(traeAwarenessSkillPath)) {
+    exts.push({
+      type: 'skill',
+      name: 'trae-awareness',
+      skillPath: traeAwarenessSkillPath,
+    });
+  }
+
   // always-on awareness (全局指令文件注入)
   exts.push({
     type: 'plugin',
@@ -167,7 +177,7 @@ function mountExtension(cli: CliTarget, ext: Extension, home: string): MountResu
     return result;
   }
 
-  return { strategy: 'mcp-json', target: cli.id, extension: ext.name, success: false, message: `CLI ${cli.id} does not support ${ext.type}` };
+  return { strategy: 'unsupported', target: cli.id, extension: ext.name, success: false, message: `CLI ${cli.id} does not support ${ext.type}` };
 }
 
 function checkMount(cli: CliTarget, ext: Extension, home: string): MountStatus {
@@ -197,7 +207,7 @@ function checkMount(cli: CliTarget, ext: Extension, home: string): MountStatus {
     return { cli: cli.id, extension: ext.name, type: ext.type, strategy: cap.strategy, mounted };
   }
 
-  return { cli: cli.id, extension: ext.name, type: ext.type, strategy: 'mcp-json', mounted: false };
+  return { cli: cli.id, extension: ext.name, type: ext.type, strategy: 'unsupported', mounted: false };
 }
 
 function unmountExtension(cli: CliTarget, ext: Extension, home: string): MountResult {
@@ -229,5 +239,5 @@ function unmountExtension(cli: CliTarget, ext: Extension, home: string): MountRe
     return result;
   }
 
-  return { strategy: 'mcp-json', target: cli.id, extension: ext.name, success: true, message: 'not supported by CLI' };
+  return { strategy: 'unsupported', target: cli.id, extension: ext.name, success: false, message: `CLI ${cli.id} does not support ${ext.type}` };
 }

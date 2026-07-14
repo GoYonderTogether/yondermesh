@@ -53,6 +53,8 @@ interface EntryOpts {
   cwd?: string;
   timestamp?: string;
   parentUuid?: string | null;
+  /** 嵌套在 message.model 的模型名（仅 assistant 行通常有） */
+  model?: string;
 }
 
 function entry(o: EntryOpts): Line {
@@ -62,7 +64,11 @@ function entry(o: EntryOpts): Line {
     parentUuid: o.parentUuid ?? null,
     isSidechain: o.isSidechain ?? false,
     type: o.type,
-    message: { role: o.role ?? o.type, content },
+    message: {
+      role: o.role ?? o.type,
+      content,
+      ...(o.model ? { model: o.model } : {}),
+    },
     ...(o.isMeta ? { isMeta: true } : {}),
     ...(o.timestamp ? { timestamp: o.timestamp } : {}),
     userType: 'external',
@@ -593,6 +599,67 @@ describe('LOOP-003 Claude Code 原生 adapter', () => {
     // 根用 sessionId 回退时 topology 仍为 root；子为 subagent
     const sub = sessions.find((s) => s.topology === 'subagent');
     expect(sub).toBeDefined();
+  });
+
+  // ── 验收门 11：元数据提取（LOOP-012） ─────────────────────────────────────
+
+  it('提取 assistant 行 message.model 与顶层 version 到 session 元数据', () => {
+    writeJsonl(path.join(projectRoot(tmpRoot), `${ROOT}.jsonl`), [
+      entry({
+        type: 'user',
+        text: 'hi',
+        sessionId: ROOT,
+        cwd: CWD,
+        timestamp: '2026-07-13T01:00:00.000Z',
+      }),
+      entry({
+        type: 'assistant',
+        sessionId: ROOT,
+        cwd: CWD,
+        timestamp: '2026-07-13T01:01:00.000Z',
+        model: 'glm-5.2', // 嵌套在 message.model（非顶层 obj.model）
+        blocks: [{ type: 'text', text: 'reply' }],
+      }),
+    ]);
+
+    new ClaudeCodeImporter(store, { rootPath: tmpRoot, deviceId: DEVICE }).import();
+
+    const s = store.querySessions({ deviceId: DEVICE })[0]!;
+    expect(s.model).toBe('glm-5.2');
+    expect(s.cliVersion).toBe('2.1.207'); // entry() 默认顶层 version
+  });
+
+  it('model 取首个非空 assistant 行，后续不同 model 不覆盖', () => {
+    writeJsonl(path.join(projectRoot(tmpRoot), `${ROOT}.jsonl`), [
+      entry({
+        type: 'user',
+        text: 'hi',
+        sessionId: ROOT,
+        cwd: CWD,
+        timestamp: '2026-07-13T01:00:00.000Z',
+      }),
+      entry({
+        type: 'assistant',
+        sessionId: ROOT,
+        cwd: CWD,
+        timestamp: '2026-07-13T01:01:00.000Z',
+        model: 'glm-5.2',
+        blocks: [{ type: 'text', text: 'first' }],
+      }),
+      entry({
+        type: 'assistant',
+        sessionId: ROOT,
+        cwd: CWD,
+        timestamp: '2026-07-13T01:02:00.000Z',
+        model: 'claude-opus-4-8',
+        blocks: [{ type: 'text', text: 'second' }],
+      }),
+    ]);
+
+    new ClaudeCodeImporter(store, { rootPath: tmpRoot, deviceId: DEVICE }).import();
+
+    const s = store.querySessions({ deviceId: DEVICE })[0]!;
+    expect(s.model).toBe('glm-5.2'); // 首个非空，后续不覆盖
   });
 
   // ── 默认路径解析 ─────────────────────────────────────────────────────────

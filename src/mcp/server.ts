@@ -5,12 +5,13 @@
  * v2: 实时 session 感知 + 跨 session 消息总线
  */
 
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 import type { SessionStore } from '../store/index.js';
 import type { SessionQuery, SessionRecord, SessionTopology } from '../store/types.js';
+import { buildSessionHandoff } from './codex-handoff.js';
 
 // ---------------------------------------------------------------------------
 // 类型
@@ -79,7 +80,6 @@ export function parseRelativeTime(input?: string): number | null {
 // ---------------------------------------------------------------------------
 
 const SERVER_INFO = { name: 'yondermesh', version: '0.1.0' } as const;
-const LIVE_THRESHOLD_MS = 120_000; // 2 分钟内有写入 = LIVE
 
 export class McpServer {
   readonly store: SessionStore;
@@ -228,13 +228,29 @@ export class McpServer {
       {
         name: 'get_session_detail',
         description:
-          '获取指定会话的消息记录。支持 live 模式直接读源文件获取实时内容（正在运行的会话也能读到最新消息）。用于了解某次会话的具体内容和决策过程，或查看另一个 agent 当前在做什么。',
+          '获取指定会话的消息记录。支持 live 模式直接读源文件获取实时内容（正在运行的会话也能读到最新消息）。用于了解某次会话的具体内容和决策过程，或查看另一个 agent 当前在做什么。新增 include_compacted / include_tool_calls / handoff_mode 参数用于任务接管场景（仅 live 模式生效，DB 模式忽略）。',
         inputSchema: {
           type: 'object',
           properties: {
             session_id: { type: 'string', description: '会话 ID' },
             live: { type: 'boolean', description: 'true=直接读源文件获取实时内容（推荐用于正在运行的 session）' },
             limit: { type: 'number', description: '只返回最后 N 条消息（大 session 时用）' },
+            include_compacted: { type: 'boolean', description: 'live 模式下附 compacted_summaries 数组（codex 压缩摘要），默认 false', default: false },
+            include_tool_calls: { type: 'boolean', description: 'live 模式下 recent messages 保留 function_call/function_call_output（带截断），默认 false', default: false },
+            handoff_mode: { type: 'boolean', description: 'true=等价于 live=true + include_compacted=true + include_tool_calls=true + 自动取尾部 30 条，专为任务接管设计，默认 false', default: false },
+          },
+          required: ['session_id'],
+        },
+      },
+      {
+        name: 'get_session_handoff',
+        description:
+          '专为任务接管设计：提取指定 session 的浓缩 handoff 包。直读源文件，返回 codex 压缩后的 compacted 摘要、最后一条真实 user 消息、尾部近况（保留 function_call/function_call_output/custom_tool_call，带截断）、task_plan（update_plan 等）、session 元数据与活跃状态。用于在另一个 agent 中断或需要接力时，快速获得完整上下文而不丢失 tool 调用细节。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            session_id: { type: 'string', description: '会话 ID（必填）' },
+            tail_messages: { type: 'number', description: '尾部含 tool call 的消息条数，默认 30', default: 30 },
           },
           required: ['session_id'],
         },
@@ -266,12 +282,21 @@ export class McpServer {
       {
         name: 'list_active_sessions',
         description:
-          '列出当前正在运行或最近活跃的 AI agent 会话。直查文件系统，不依赖扫描周期。用于了解当前有哪些 agent 正在工作，isLive=true 表示正在实时写入。这是了解机器上当前活动状态的第一步。',
+          '列出当前正在运行或最近活跃的 AI agent 会话，附带运行时摘要（总数 / live / subagent / by source）。直查数据库，反映最近扫描周期内的状态。',
         inputSchema: {
           type: 'object',
           properties: {
             within_minutes: { type: 'number', description: '查多少分钟内有活动的 session，默认 30', default: 30 },
           },
+        },
+      },
+      {
+        name: 'who_is_working',
+        description:
+          '快速查询本机当前有哪些 AI agent 正在工作。返回人类可读的摘要，包含正在运行的 session 数量、subagent 数量、每个活跃 session 的简短描述（id / source / 项目目录 / 最近活动时间）。用于任何 agent 在开始任务前快速感知机器上当前的活动状态。',
+        inputSchema: {
+          type: 'object',
+          properties: {},
         },
       },
       {
@@ -315,12 +340,16 @@ export class McpServer {
         return this.searchSessions(args);
       case 'get_session_detail':
         return this.getSessionDetail(args);
+      case 'get_session_handoff':
+        return this.getSessionHandoff(args);
       case 'get_session_relations':
         return this.getSessionRelations(args);
       case 'get_overview':
         return this.getOverview(args);
       case 'list_active_sessions':
         return this.listActiveSessions(args);
+      case 'who_is_working':
+        return this.whoIsWorking(args);
       case 'post_message':
         return this.postMessage(args);
       case 'get_messages':
@@ -357,11 +386,30 @@ export class McpServer {
       return { content: '缺少必填参数 session_id', isError: true };
     }
 
-    const live = args.live === true;
-    const limit = typeof args.limit === 'number' ? args.limit : undefined;
+    const handoffMode = args.handoff_mode === true;
+    // handoff_mode 隐含 live + include_compacted + include_tool_calls + 自动取尾部
+    const live = args.live === true || handoffMode;
+    const includeCompacted = args.include_compacted === true || handoffMode;
+    const includeToolCalls = args.include_tool_calls === true || handoffMode;
+    const limit = typeof args.limit === 'number' ? args.limit : (handoffMode ? 30 : undefined);
+
+    if (live && (handoffMode || includeCompacted || includeToolCalls)) {
+      // 富上下文模式：复用 handoff 共享解析（含 compacted + tool_call）
+      const pkg = buildSessionHandoff(sessionId, this.claudePath, this.codexPath, {
+        tailMessages: limit ?? 30,
+      });
+      if (!pkg) {
+        return { content: `找不到 session ${sessionId} 的源文件或文件为空`, isError: true };
+      }
+      const result: Record<string, unknown> = { messages: pkg.recent_messages };
+      if (includeCompacted) {
+        result.compacted_summaries = pkg.compacted_summaries;
+      }
+      return { content: JSON.stringify(result) };
+    }
 
     if (live) {
-      // 直接读源文件
+      // 直接读源文件（默认 live 模式，保持向后兼容）
       const messages = readLiveMessages(sessionId, this.claudePath, this.codexPath, limit);
       if (messages.length === 0) {
         return { content: `找不到 session ${sessionId} 的源文件或文件为空`, isError: true };
@@ -389,6 +437,20 @@ export class McpServer {
         })),
       ),
     };
+  }
+
+  private getSessionHandoff(args: Record<string, unknown>): McpToolResult {
+    const sessionId = args.session_id;
+    if (typeof sessionId !== 'string' || !sessionId) {
+      return { content: '缺少必填参数 session_id', isError: true };
+    }
+
+    const tailMessages = typeof args.tail_messages === 'number' ? args.tail_messages : 30;
+    const pkg = buildSessionHandoff(sessionId, this.claudePath, this.codexPath, { tailMessages });
+    if (!pkg) {
+      return { content: `找不到 session ${sessionId} 的源文件`, isError: true };
+    }
+    return { content: JSON.stringify(pkg) };
   }
 
   private getSessionRelations(args: Record<string, unknown>): McpToolResult {
@@ -428,55 +490,43 @@ export class McpServer {
 
   private listActiveSessions(args: Record<string, unknown>): McpToolResult {
     const withinMin = typeof args.within_minutes === 'number' ? args.within_minutes : 30;
-    const thresholdMs = withinMin * 60_000;
-    const now = Date.now();
+    const withinMs = withinMin * 60_000;
+    const summary = this.store.getActiveSessionsSummary(withinMs);
+    return { content: JSON.stringify(summary) };
+  }
 
-    const results: Array<Record<string, unknown>> = [];
+  private whoIsWorking(_args: Record<string, unknown>): McpToolResult {
+    const summary = this.store.getActiveSessionsSummary();
+    const home = homedir();
 
-    // 扫描 codex sessions
-    scanDir(this.codexPath, '.jsonl', (filePath) => {
-      const stat = statSync(filePath);
-      const ageMs = now - stat.mtimeMs;
-      if (ageMs > thresholdMs) return;
+    const lines: string[] = [];
+    lines.push(
+      `本机当前有 ${summary.totalActive} 个 session 活跃中（${summary.liveCount} 个 live，${summary.subagentActive} 个 subagent）：`,
+    );
 
-      const meta = peekSessionMeta(filePath, 'codex');
-      results.push({
-        sessionId: meta.sessionId ?? pathBaseName(filePath),
-        source: 'codex',
-        filePath,
-        isLive: ageMs < LIVE_THRESHOLD_MS,
-        lastActivitySecAgo: Math.round(ageMs / 1000),
-        cwd: meta.cwd ?? null,
-        projectPath: meta.cwd ?? null,
-        messageCount: meta.messageCount,
-        lineCount: meta.lineCount,
-      });
-    });
+    if (summary.totalActive === 0) {
+      lines.push('');
+      lines.push('（无活跃 session）');
+    } else {
+      lines.push('');
+      for (const s of summary.sessions) {
+        const tag = s.isLive ? '[live]' : '[    ]';
+        const idPrefix = s.topology === 'subagent' ? 'sub:' : '';
+        const shortId = shortIdOf(s.sessionId);
+        const cwd = s.cwd ? s.cwd.replace(home, '~') : '-';
+        const ago = formatRelativeAgo(s.lastSeenAt);
+        const source = s.source.padEnd(12);
+        lines.push(`${tag} ${idPrefix}${shortId}  ${source}  ${cwd}  最近 ${ago}`);
+      }
+    }
 
-    // 扫描 claude projects
-    scanDir(this.claudePath, '.jsonl', (filePath) => {
-      const stat = statSync(filePath);
-      const ageMs = now - stat.mtimeMs;
-      if (ageMs > thresholdMs) return;
+    const sourceParts = Object.entries(summary.bySource).map(([k, v]) => `${k}=${v}`);
+    if (sourceParts.length > 0) {
+      lines.push('');
+      lines.push(`按 source 分布: ${sourceParts.join(', ')}`);
+    }
 
-      const meta = peekSessionMeta(filePath, 'claude');
-      results.push({
-        sessionId: meta.sessionId ?? pathBaseName(filePath),
-        source: 'claude',
-        filePath,
-        isLive: ageMs < LIVE_THRESHOLD_MS,
-        lastActivitySecAgo: Math.round(ageMs / 1000),
-        cwd: meta.cwd ?? null,
-        projectPath: meta.cwd ?? null,
-        messageCount: meta.messageCount,
-        lineCount: meta.lineCount,
-      });
-    });
-
-    // 按 lastActivitySecAgo 升序（最活跃的在前）
-    results.sort((a, b) => (a.lastActivitySecAgo as number) - (b.lastActivitySecAgo as number));
-
-    return { content: JSON.stringify(results) };
+    return { content: lines.join('\n') };
   }
 
   private postMessage(args: Record<string, unknown>): McpToolResult {
@@ -512,81 +562,6 @@ export class McpServer {
 // ---------------------------------------------------------------------------
 // 文件系统扫描辅助
 // ---------------------------------------------------------------------------
-
-/** 递归扫描目录，对每个匹配文件调用 callback */
-function scanDir(dir: string, ext: string, cb: (filePath: string) => void): void {
-  if (!existsSync(dir)) return;
-
-  let entries: Array<{ name: string; isDirectory: () => boolean }>;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true }) as unknown as typeof entries;
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    const fullPath = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      scanDir(fullPath, ext, cb);
-    } else if (entry.name.endsWith(ext)) {
-      cb(fullPath);
-    }
-  }
-}
-
-/** 从文件名提取基础名（不含扩展名） */
-function pathBaseName(filePath: string): string {
-  const parts = filePath.split('/');
-  const filename = parts[parts.length - 1] ?? filePath;
-  return filename.replace(/\.jsonl$/, '');
-}
-
-/** 读取文件前几行提取 session meta */
-function peekSessionMeta(filePath: string, source: 'claude' | 'codex'): {
-  sessionId: string | null;
-  cwd: string | null;
-  messageCount: number;
-  lineCount: number;
-} {
-  let sessionId: string | null = null;
-  let cwd: string | null = null;
-  let messageCount = 0;
-  let lineCount = 0;
-
-  try {
-    const content = readFileSync(filePath, 'utf-8');
-    const lines = content.split('\n').filter((l) => l.trim());
-    lineCount = lines.length;
-
-    if (source === 'codex') {
-      for (const line of lines) {
-        try {
-          const d = JSON.parse(line);
-          if (d.type === 'session_meta' && d.payload) {
-            sessionId = d.payload.session_id ?? d.payload.id ?? null;
-            cwd = d.payload.cwd ?? null;
-          }
-          if (d.type === 'response_item') {
-            const p = d.payload ?? {};
-            if (p.role === 'user' || p.role === 'assistant') messageCount++;
-          }
-        } catch { /* skip */ }
-      }
-    } else {
-      // claude
-      for (const line of lines) {
-        try {
-          const d = JSON.parse(line);
-        if (!sessionId && d.sessionId) sessionId = d.sessionId;
-        if (!cwd && d.cwd) cwd = d.cwd;
-        if (d.type === 'user' || d.type === 'assistant') messageCount++;
-        } catch { /* skip */ }
-      }
-    }
-  } catch { /* file unreadable */ }
-
-  return { sessionId, cwd, messageCount, lineCount };
-}
 
 /** 从源文件实时读取消息（live 模式） */
 function readLiveMessages(
@@ -740,4 +715,19 @@ function formatSessionSummary(s: SessionRecord) {
     startedAt: s.startedAt,
     lastSeenAt: s.lastSeenAt,
   };
+}
+
+/** 短 id：前 12 字符 + ...（不足则原样） */
+function shortIdOf(id: string): string {
+  return id.length > 12 ? id.slice(0, 12) + '...' : id;
+}
+
+/** 相对时间格式化：最近 N 秒前 / N 分钟前 / N 小时前 */
+function formatRelativeAgo(ms: number): string {
+  const sec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (sec < 60) return `${sec} 秒前`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} 分钟前`;
+  const hr = Math.floor(min / 60);
+  return `${hr} 小时前`;
 }

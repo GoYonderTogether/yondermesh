@@ -56,6 +56,41 @@ export { defaultDaemonConfig, defaultDataDir } from './daemon/config.js';
 export { McpServer, parseRelativeTime } from './mcp/server.js';
 export type { McpToolDef, McpToolResult } from './mcp/server.js';
 
+// MCP 任务接管 handoff 包构造（LOOP-014）
+export {
+  buildSessionHandoff,
+  buildCodexHandoff,
+  buildClaudeHandoff,
+  findCodexSessionFile,
+  findClaudeSessionFile,
+} from './mcp/codex-handoff.js';
+export type {
+  BuildHandoffOptions,
+  CompactedSummary,
+  HandoffMessage,
+  HandoffPackage,
+  HandoffSessionMeta,
+} from './mcp/codex-handoff.js';
+
+// 需求与响应提取器（LOOP-013）
+export {
+  extractProject,
+  queryExtracts,
+  loadExtractIndex,
+  listExtracts,
+  extractsBaseDir,
+  projectHashOf,
+  projectExtractDir,
+} from './extract/index.js';
+export type {
+  ExtractEntry,
+  ExtractKind,
+  ExtractOptions,
+  ExtractResult,
+  QueryEntry,
+  QueryOptions,
+} from './extract/index.js';
+
 // 安装与 release 管理（LOOP-008）
 export {
   buildRelease,

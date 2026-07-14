@@ -17,6 +17,8 @@ import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import { SCHEMA } from './schema.js';
 import { MIGRATION_COLUMNS } from './schema.js';
 import type {
+  ActiveSessionSummary,
+  ActiveSummary,
   Coverage,
   IngestResult,
   Presence,
@@ -40,6 +42,9 @@ import type {
 
 /** 行记录的松散类型 */
 type Row = Record<string, unknown>;
+
+/** LIVE 阈值：最近 2 分钟内有 lastSeenAt 视为正在写入，与 MCP server 保持一致 */
+export const LIVE_THRESHOLD_MS = 120_000;
 
 import { expandSource, normalizeSource, sessionMatchKey } from './source-aliases.js';
 
@@ -197,10 +202,11 @@ export class SessionStore {
 
       // 已存在：比较内容
       if (existing.content_hash === hash) {
-        // 内容幂等：仅刷新 last_seen_at
+        // 内容幂等：只刷新 last_seen_at（表示"最近被 ymesh 看到"）
+        // 不刷新 updated_at —— updated_at 只在内容真的变化时更新，用于反映"最近真实活动"
         this.db
-          .prepare('UPDATE sessions SET last_seen_at = ?, updated_at = ? WHERE id = ?')
-          .run(now, now, sessionId);
+          .prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?')
+          .run(now, sessionId);
         const revRow = this.db
           .prepare('SELECT revision_number FROM session_revisions WHERE id = ?')
           .get(existing.current_revision_id as number) as Row | undefined;
@@ -432,6 +438,66 @@ export class SessionStore {
       rootSessions: totals.root_sessions as number,
       subagentSessions: totals.subagent_sessions as number,
       totalMessages: totals.total_messages as number,
+    };
+  }
+
+  /**
+   * 活跃 session 摘要：返回最近 withinMs 内有 lastSeenAt 的 session 聚合统计。
+   *
+   * 实现要点：
+   *   - 直查 sessions 表（retention='live'），按 last_seen_at 倒序
+   *   - 不拉消息，只读必要列
+   *   - 在 store 层完成聚合（liveCount / subagentActive / rootActive / bySource）
+   *   - isLive 判定：now - lastSeenAt < LIVE_THRESHOLD_MS（与 MCP server 一致）
+   */
+  getActiveSessionsSummary(withinMs: number = 30 * 60 * 1000): ActiveSummary {
+    const now = Date.now();
+    const threshold = now - withinMs;
+
+    // 用 updated_at（内容真的变化时才更新）而非 last_seen_at（每次扫描都刷新）
+    // 这样才能反映"最近真实活动"，而不是"最近被 ymesh 扫到"
+    const rows = this.db
+      .prepare(
+        `SELECT id, source, cwd, project_path, topology, updated_at, message_count
+         FROM sessions
+         WHERE retention = 'live' AND updated_at >= ?
+         ORDER BY updated_at DESC`,
+      )
+      .all(threshold) as Row[];
+
+    const sessions: ActiveSessionSummary[] = rows.map((r) => {
+      const lastActivity = r.updated_at as number;
+      return {
+        sessionId: r.id as string,
+        source: r.source as string,
+        cwd: (r.cwd as string | null) ?? null,
+        projectPath: (r.project_path as string | null) ?? null,
+        topology: r.topology as SessionTopology,
+        lastSeenAt: lastActivity,
+        messageCount: r.message_count as number,
+        isLive: now - lastActivity < LIVE_THRESHOLD_MS,
+      };
+    });
+
+    const bySource: Record<string, number> = {};
+    let liveCount = 0;
+    let subagentActive = 0;
+    let rootActive = 0;
+
+    for (const s of sessions) {
+      bySource[s.source] = (bySource[s.source] ?? 0) + 1;
+      if (s.isLive) liveCount++;
+      if (s.topology === 'subagent') subagentActive++;
+      if (s.topology === 'root') rootActive++;
+    }
+
+    return {
+      totalActive: sessions.length,
+      liveCount,
+      subagentActive,
+      rootActive,
+      bySource,
+      sessions,
     };
   }
 

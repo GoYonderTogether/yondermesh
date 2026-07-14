@@ -2,10 +2,12 @@
  * Session Store 模块入口
  */
 
-export { SessionStore } from './session-store.js';
+export { SessionStore, LIVE_THRESHOLD_MS } from './session-store.js';
 export { SCHEMA } from './schema.js';
 export { normalizeSource, expandSource, extractCanonicalId, sessionMatchKey } from './source-aliases.js';
 export type {
+  ActiveSessionSummary,
+  ActiveSummary,
   Coverage,
   IngestResult,
   MessageRole,

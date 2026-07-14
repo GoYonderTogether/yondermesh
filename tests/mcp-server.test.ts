@@ -134,7 +134,7 @@ describe('LOOP-011 验收门 1: listTools', () => {
 
   it('返回恰好 4 个工具', () => {
     const tools = mcp.listTools();
-    expect(tools).toHaveLength(7);
+    expect(tools).toHaveLength(9);
   });
 
   it('工具名称正确', () => {
@@ -142,6 +142,7 @@ describe('LOOP-011 验收门 1: listTools', () => {
     const names = tools.map((t) => t.name);
     expect(names).toContain('search_sessions');
     expect(names).toContain('get_session_detail');
+    expect(names).toContain('get_session_handoff');
     expect(names).toContain('get_session_relations');
     expect(names).toContain('get_overview');
   });
@@ -362,7 +363,7 @@ describe('LOOP-011 验收门 9: stdio 协议', () => {
       id: 2,
       method: 'tools/list',
     });
-    expect(resp.result.tools).toHaveLength(7);
+    expect(resp.result.tools).toHaveLength(9);
   });
 
   it('handleMessage 处理 tools/call 请求', async () => {

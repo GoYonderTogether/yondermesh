@@ -16,9 +16,9 @@ export interface DaemonConfig {
   dbPath: string;
   /** PID 文件路径（单实例锁） */
   pidFile: string;
-  /** 定时 reconcile 间隔（毫秒），默认 5 分钟 */
+  /** 定时 reconcile 间隔（毫秒），默认 1 分钟 */
   reconcileIntervalMs: number;
-  /** watch debounce 延迟（毫秒），默认 2 秒 */
+  /** watch debounce 延迟（毫秒），默认 1 秒 */
   debounceMs: number;
   /** 设备 id，默认 os.hostname() */
   deviceId?: string;
@@ -42,7 +42,7 @@ export function defaultDaemonConfig(): DaemonConfig {
     dataDir,
     dbPath: join(dataDir, 'yondermesh.db'),
     pidFile: join(dataDir, 'daemon.pid'),
-    reconcileIntervalMs: 5 * 60 * 1000, // 5 分钟
-    debounceMs: 2_000, // 2 秒
+    reconcileIntervalMs: 60 * 1000, // 1 分钟
+    debounceMs: 1_000, // 1 秒
   };
 }
