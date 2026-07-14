@@ -138,6 +138,10 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   update              从 Git 源码更新（构建失败自动回退）
   rollback            手动回退到上一个 release 版本
 
+安装方式:
+  curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
+  或: git clone ... && ./install.sh
+
 通用选项:
   --json              以 JSON 格式输出结果（便于脚本消费）
   --db <path>         指定数据库路径（默认 ~/.yondermesh/yondermesh.db）

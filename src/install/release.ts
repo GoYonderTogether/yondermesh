@@ -20,18 +20,14 @@ import {
   releaseEntry,
 } from './paths.js';
 
+import { resolveVersion, gitShortHash, gitBranch } from './version.js';
+
 /** release 构建结果 */
 export interface ReleaseResult {
   version: string;
   releasePath: string;
   entryPath: string;
   builtAt: number;
-}
-
-/** 读取 package.json 版本号 */
-function readVersion(projectRoot: string): string {
-  const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8'));
-  return pkg.version as string;
 }
 
 /**
@@ -41,7 +37,7 @@ function readVersion(projectRoot: string): string {
  * @param force 是否覆盖已存在的同名 release
  */
 export function buildRelease(projectRoot: string, force = false): ReleaseResult {
-  const version = readVersion(projectRoot);
+  const version = resolveVersion(projectRoot);
   const target = releaseDir(version);
 
   if (fs.existsSync(target) && !force) {
@@ -76,9 +72,12 @@ export function buildRelease(projectRoot: string, force = false): ReleaseResult 
   const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8'));
   const releasePkg = {
     name: pkg.name,
-    version: pkg.version,
+    version,
     type: 'module',
     dependencies: pkg.dependencies ?? {},
+    // git 元数据：用于溯源
+    gitHash: gitShortHash(projectRoot) ?? undefined,
+    gitBranch: gitBranch(projectRoot) ?? undefined,
   };
   fs.writeFileSync(
     path.join(target, 'package.json'),

@@ -91,6 +91,9 @@ export function updateFromGit(
     // 2. clone 或 fetch 到 staging
     syncStaging(repoUrl, branch);
 
+    // 2.5 安装依赖（staging 是全新目录，没有 node_modules）
+    execSync('npm ci', { cwd: stagingDir(), stdio: 'pipe', timeout: 120_000 });
+
     // 3. 在 staging 中构建 release
     const release = buildRelease(stagingDir(), true);
 

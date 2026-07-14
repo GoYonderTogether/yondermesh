@@ -48,3 +48,6 @@ export {
 // 更新与回退（LOOP-009）
 export { updateFromGit } from './updater.js';
 export type { UpdateResult, HealthCheck } from './updater.js';
+
+// Git 版本计算
+export { resolveVersion, describeVersion, gitShortHash, gitBranch } from './version.js';

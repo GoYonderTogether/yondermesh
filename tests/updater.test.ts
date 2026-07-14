@@ -40,13 +40,16 @@ describe('LOOP-009: 更新器', () => {
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ymesh-update-'));
     process.env.YONDERMESH_HOME = tmpHome;
 
-    // 建立 baseline：安装当前版本
+    // 建立 baseline：安装当前版本（用 FORCE_VERSION 避免 git 版本干扰）
+    process.env.YONDERMESH_FORCE_VERSION = '0.0.0-baseline';
     const release = buildRelease(PROJECT_ROOT, true);
     installRelease(release);
+    delete process.env.YONDERMESH_FORCE_VERSION;
   });
 
   afterEach(() => {
     delete process.env.YONDERMESH_HOME;
+    delete process.env.YONDERMESH_FORCE_VERSION;
     fs.rmSync(tmpHome, { recursive: true, force: true });
   });
 
@@ -82,22 +85,21 @@ describe('LOOP-009: 更新器', () => {
   });
 
   it('rollbackRelease 在有 previous 时成功回退', () => {
-    const pkgPath = path.join(PROJECT_ROOT, 'package.json');
-    const origPkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
     const PREV_SYMLINK = resolvePreviousSymlink();
 
     // 清理 previous 符号链接，确保干净基线
     try { fs.unlinkSync(PREV_SYMLINK); } catch { /* ok */ }
 
-    // 安装版本 A（9.9.1）
-    fs.writeFileSync(pkgPath, JSON.stringify({ ...origPkg, version: '9.9.1' }, null, 2));
+    // 安装版本 A
+    process.env.YONDERMESH_FORCE_VERSION = '9.9.1';
     const r1 = buildRelease(PROJECT_ROOT, true);
     installRelease(r1);
 
-    // 安装版本 B（9.9.2）——此时 previous=9.9.1
-    fs.writeFileSync(pkgPath, JSON.stringify({ ...origPkg, version: '9.9.2' }, null, 2));
+    // 安装版本 B ——此时 previous=9.9.1
+    process.env.YONDERMESH_FORCE_VERSION = '9.9.2';
     const r2 = buildRelease(PROJECT_ROOT, true);
     installRelease(r2);
+    delete process.env.YONDERMESH_FORCE_VERSION;
 
     // 验证 previous 存在
     expect(fs.existsSync(PREV_SYMLINK)).toBe(true);
@@ -109,9 +111,6 @@ describe('LOOP-009: 更新器', () => {
     // 回退后 current 应该是 9.9.1
     const afterRollback = getCurrentRelease();
     expect(afterRollback).toBe('9.9.1');
-
-    // 恢复 package.json
-    fs.writeFileSync(pkgPath, JSON.stringify(origPkg, null, 2) + '\n');
   });
 
   it('updateFromGit 失败时不崩溃，返回 success=false', () => {
