@@ -15,10 +15,35 @@ import { randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
 
 import { SessionStore } from '../store/index.js';
+import { detectAliveProcesses } from '../store/process-detector.js';
 import type { ActiveSummary, SessionStats, SessionRecord } from '../store/index.js';
 import { CassImporter } from '../cass/index.js';
 import { ClaudeCodeImporter } from '../claude/index.js';
 import { CodexImporter } from '../codex/index.js';
+import { HermesImporter } from '../hermes/index.js';
+import { WindsurfExtractor } from '../windsurf/index.js';
+import { ContinueImporter } from '../continue/index.js';
+import { OpenCodeImporter } from '../opencode/index.js';
+import { CopilotImporter } from '../copilot/index.js';
+import { OpenClawImporter } from '../openclaw/index.js';
+import { KimiImporter } from '../kimi/index.js';
+import { QwenCodeImporter } from '../qwen/index.js';
+import { GeminiImporter } from '../gemini/index.js';
+import { PiImporter } from '../pi/index.js';
+import { FactoryDroidImporter } from '../factory/index.js';
+import { VibeImporter } from '../vibe/index.js';
+import { CodeBuddyImporter } from '../codebuddy/index.js';
+import { ClineImporter } from '../cline/index.js';
+import { CrushImporter } from '../crush/index.js';
+import { OpenHandsImporter } from '../openhands/index.js';
+import { GooseImporter } from '../goose/index.js';
+import { AntigravityImporter } from '../antigravity/index.js';
+import { AiderImporter } from '../aider/index.js';
+import { TraeCliImporter } from '../trae-cli/index.js';
+import { CursorIdeExtractor } from '../cursor-ide/index.js';
+import { TraeIdeExtractor } from '../trae-ide/index.js';
+import { AmpImporter } from '../amp/index.js';
+import { ChatGptExtractor } from '../chatgpt/index.js';
 import { YondermeshDaemon, defaultDaemonConfig, defaultDataDir } from '../daemon/index.js';
 import type { DaemonConfig } from '../daemon/index.js';
 
@@ -36,10 +61,14 @@ import {
  updateFromGit,
  linkSkills,
  unlinkSkills,
+ installMenuBarApp,
+ uninstallMenuBarApp,
+ startMenuBarApp,
+ stopMenuBarApp,
  resolveEntrySymlink as ENTRY_SYMLINK,
   resolveLaunchAgentPlist as LAUNCH_AGENT_PLIST,
 } from '../install/index.js';
-import { mountAll, verifyAll, unmountAll, detectInstalledClis } from '../mount/index.js';
+import { mountAll, verifyAll, unmountAll, detectInstalledClis, findCli } from '../mount/index.js';
 import {
   extractProject,
   queryExtracts,
@@ -57,6 +86,16 @@ import {
 } from '../mcp/register.js';
 import { buildSessionHandoff } from '../mcp/codex-handoff.js';
 import type { HandoffPackage } from '../mcp/codex-handoff.js';
+import { MCP_TOOLS, listToolSchemas } from '../mcp/tools.js';
+import { MailboxCore } from '../mailbox/index.js';
+import type {
+  MailKind,
+  MailPriority,
+  MailboxMessage,
+  MessageFilter,
+  PostMessageInput,
+} from '../mailbox/index.js';
+import { MAIL_KINDS, MAIL_PRIORITIES } from '../mailbox/index.js';
 
 // 读取 package.json 的版本号
 const projectRoot = dirname(dirname(dirname(new URL(import.meta.url).pathname)));
@@ -190,13 +229,17 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
 命令:
   help                显示此帮助信息
   version             显示版本号
-  scan                扫描本机全部 session（cass + claude + codex）
+  scan                扫描本机全部 session（27 个 adapter：cass/claude/codex/hermes/
+                      windsurf/continue/opencode/copilot/openclaw/kimi/qwen/gemini/pi/
+                      factory/vibe/codebuddy/cline/crush/openhands/goose/antigravity/
+                      aider/trae-cli/cursor-ide/trae-ide/amp/chatgpt）
   status              显示 daemon 状态和最近扫描结果
+  agents              列出本机检测到的所有 agent 及其支持状态
   sessions            列出 session（支持过滤）
   daemon              启动后台 daemon（实时监听 + 定时 reconcile）
                       选项: --db <path> --data-dir <dir> --pid-file <path>
   install             本地构建 release 并安装
-  service <action>    管理 LaunchAgent (install|uninstall|start|stop|status)
+    service <action>    LaunchAgent + menubar app (install|uninstall|start|stop|status)
   releases            列出已安装的 release 版本
   update [--local]    从 Git 源码更新（构建失败自动回退）；--local 跳过 clone，从本地源码打包
   rollback            手动回退到上一个 release 版本
@@ -206,12 +249,16 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   mcp unregister      从 Claude Code 和 Codex 注销
   mcp status          查看 MCP 注册状态
   active              快速查看当前正在运行的 session（谁在干活）
+  waiting             查看等待你审阅的 session（agent 已完成回复）
   doctor              运行系统诊断（检查安装、数据库、daemon、日志健康状态）
   mount [status|all|remove]  管理跨 CLI 挂载（MCP/Skill/Plugin 到所有已安装的 CLI agent）
   extract             提取项目全部 user 需求与 assistant 响应到 NDJSONL 文件（按行号/ID 索引）
   handoff <id>        提取 session 浓缩 handoff 包（compacted 摘要 + tool call + plan），用于任务接管
   state <action>      管理运行时状态文件 (sync|show)
-  mailbox <action>    文件系统跨 session 通信 (post|get|list)
+  mailbox <action>    跨 session 消息总线 (post|get|pop|list|mark-read|check|whoami|unread)
+  launch              启动新 agent session（--cli <agent> --prompt "text" [--model <m>]）
+  inject              向运行中 session 注入消息（--cli <agent> --session <id> --message "text"）
+  transfer            跨 agent 转交 session（--cli <src> --session <id> --target <dst> [--output <path>]）
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -274,6 +321,184 @@ function cmdVersion(flags: Record<string, string | boolean>): number {
   return 0;
 }
 
+// ─── agent 检测基础设施 ──────────────────────────────────────────────────
+
+/** 在 PATH 中查找 CLI 二进制，返回绝对路径或 null */
+function which(bin: string): string | null {
+  try {
+    const result = execSync(`command -v ${bin} 2>/dev/null`, { encoding: 'utf-8', stdio: 'pipe' }).trim();
+    return result || null;
+  } catch {
+    return null;
+  }
+}
+
+/** agent 元数据条目 */
+interface AgentEntry {
+  name: string;
+  configDirs: string[];
+  cliBinary?: string;
+  collectionLevel: 'A' | 'B' | 'C';
+  appPath?: string;
+}
+
+/** 全量 agent 注册表（与 source-aliases.ts 的 SOURCE_MAP 对齐） */
+const AGENT_TABLE: AgentEntry[] = [
+  { name: 'claude', configDirs: ['.claude'], cliBinary: 'claude', collectionLevel: 'A' },
+  { name: 'codex', configDirs: ['.codex'], cliBinary: 'codex', collectionLevel: 'A' },
+  { name: 'hermes', configDirs: ['.hermes'], cliBinary: 'hermes', collectionLevel: 'A' },
+  { name: 'continue', configDirs: ['.continue'], cliBinary: 'cn', collectionLevel: 'A' },
+  { name: 'opencode', configDirs: ['.local/share/opencode', '.opencode'], cliBinary: 'opencode', collectionLevel: 'A' },
+  { name: 'copilot', configDirs: ['.copilot'], cliBinary: 'copilot', collectionLevel: 'A' },
+  { name: 'openclaw', configDirs: ['.openclaw'], cliBinary: 'openclaw', collectionLevel: 'A' },
+  { name: 'kimi', configDirs: ['.kimi'], cliBinary: 'kimi', collectionLevel: 'A' },
+  { name: 'qwen', configDirs: ['.qwen'], cliBinary: 'qwen', collectionLevel: 'A' },
+  { name: 'gemini', configDirs: ['.gemini'], cliBinary: 'gemini', collectionLevel: 'A' },
+  { name: 'pi', configDirs: ['.pi/agent', '.pi'], cliBinary: 'pi', collectionLevel: 'A' },
+  { name: 'omp', configDirs: ['.omp/agent', '.omp'], cliBinary: 'omp', collectionLevel: 'A' },
+  { name: 'gsd-pi', configDirs: ['.gsd/agent', '.gsd'], cliBinary: 'gsd', collectionLevel: 'A' },
+  { name: 'factory', configDirs: ['.factory'], cliBinary: 'droid', collectionLevel: 'A' },
+  { name: 'vibe', configDirs: ['.vibe'], cliBinary: 'vibe', collectionLevel: 'A' },
+  { name: 'codebuddy', configDirs: ['.codebuddy'], cliBinary: 'cbc', collectionLevel: 'A' },
+  { name: 'cline', configDirs: ['.cline'], cliBinary: 'cline', collectionLevel: 'A' },
+  { name: 'crush', configDirs: ['.config/crush', '.crush'], cliBinary: 'crush', collectionLevel: 'A' },
+  { name: 'openhands', configDirs: ['.openhands'], cliBinary: 'openhands', collectionLevel: 'A' },
+  { name: 'goose', configDirs: ['.local/share/goose', '.goose'], cliBinary: 'goose', collectionLevel: 'A' },
+  { name: 'antigravity', configDirs: ['.antigravity'], cliBinary: 'agy', collectionLevel: 'A' },
+  { name: 'aider', configDirs: ['.aider'], cliBinary: 'aider', collectionLevel: 'B' },
+  { name: 'trae_cli', configDirs: ['.trae-cli', '.config/trae-cli'], cliBinary: 'trae', collectionLevel: 'B' },
+  { name: 'windsurf', configDirs: ['.codeium/windsurf', '.windsurf'], cliBinary: 'windsurf', collectionLevel: 'B' },
+  { name: 'cursor-ide', configDirs: ['.cursor'], collectionLevel: 'B' },
+  { name: 'trae-ide', configDirs: ['.trae-cn', '.trae'], collectionLevel: 'B' },
+  { name: 'amp', configDirs: ['.config/amp', '.cache/amp'], cliBinary: 'amp', collectionLevel: 'B' },
+  { name: 'chatgpt', configDirs: [], collectionLevel: 'C', appPath: '/Applications/ChatGPT.app' },
+];
+
+/** canonical source → CLI_REGISTRY id 映射 */
+const REGISTRY_ID_MAP: Record<string, string> = {
+  'claude': 'claude-code',
+  'codex': 'codex',
+  'cursor-ide': 'cursor',
+  'gemini': 'gemini',
+  'windsurf': 'windsurf',
+  'trae-ide': 'trae-cn',
+  'continue': 'continue',
+  'hermes': 'hermes',
+  'factory': 'factory',
+  'vibe': 'vibe',
+  'codebuddy': 'codebuddy',
+};
+
+/** 有 wrapper.ts 的 agent 集合（claude/codex/chatgpt 无 wrapper） */
+const WRAPPER_SUPPORTED = new Set<string>([
+  'hermes', 'continue', 'opencode', 'copilot', 'openclaw',
+  'kimi', 'qwen', 'gemini', 'pi', 'omp', 'gsd-pi', 'factory', 'vibe',
+  'codebuddy', 'cline', 'crush', 'openhands', 'goose', 'antigravity',
+  'aider', 'trae_cli', 'windsurf', 'cursor-ide', 'trae-ide', 'amp',
+]);
+
+/** 类式 wrapper 的导出类名映射 */
+const WRAPPER_CLASS_NAME: Record<string, string> = {
+  hermes: 'HermesController',
+  continue: 'ContinueCliWrapper',
+  opencode: 'OpenCodeController',
+  copilot: 'CopilotWrapper',
+  openclaw: 'OpenClawController',
+  kimi: 'KimiController',
+  pi: 'PiController',
+  cline: 'ClineWrapper',
+  crush: 'CrushWrapper',
+  openhands: 'OpenHandsApiWrapper',
+  goose: 'GooseCliWrapper',
+  antigravity: 'AntigravityCliWrapper',
+};
+
+/** 检测 agent 是否已安装，返回匹配的配置目录（绝对路径）或 null */
+function detectAgentConfigDir(home: string, entry: AgentEntry): string | null {
+  for (const dir of entry.configDirs) {
+    const abs = join(home, dir);
+    if (existsSync(abs)) return abs;
+  }
+  return null;
+}
+
+/** 检测 daemon 是否运行 */
+function isDaemonRunning(pidFile: string): boolean {
+  if (!existsSync(pidFile)) return false;
+  try {
+    const pid = parseInt(readFileSync(pidFile, 'utf-8').trim(), 10);
+    if (!pid) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 检测全部 agent，返回结果数组 */
+interface AgentDetection {
+  agent: string;
+  installed: boolean;
+  configDir: string | null;
+  cliBinary: string | null;
+  collectionLevel: string;
+  scanStatus: string;
+  mountSupport: boolean;
+  wrapperSupport: boolean;
+  sessionCount: number;
+}
+
+function detectAllAgents(dbPath: string): AgentDetection[] {
+  const home = homedir();
+  const config = defaultDaemonConfig();
+  const daemonRunning = isDaemonRunning(config.pidFile);
+
+  // 从 store 获取各 source 的 session 数
+  const sessionCounts = new Map<string, number>();
+  try {
+    const store = new SessionStore(dbPath);
+    const breakdown = store.getSourceBreakdown();
+    for (const b of breakdown) {
+      sessionCounts.set(b.source, b.count);
+    }
+    store.close();
+  } catch {
+    /* DB 不可读 */
+  }
+
+  return AGENT_TABLE.map((entry) => {
+    const configDir = detectAgentConfigDir(home, entry);
+    const cliBinary = entry.cliBinary ? which(entry.cliBinary) : null;
+    const installed = !!configDir || !!cliBinary || (!!entry.appPath && existsSync(entry.appPath));
+
+    const registryId = REGISTRY_ID_MAP[entry.name];
+    const mountSupport = registryId ? !!findCli(registryId) : false;
+    const wrapperSupport = WRAPPER_SUPPORTED.has(entry.name);
+    const sessionCount = sessionCounts.get(entry.name) ?? 0;
+
+    let scanStatus: string;
+    if (!installed) {
+      scanStatus = 'missing';
+    } else if (daemonRunning) {
+      scanStatus = 'active';
+    } else {
+      scanStatus = 'scan';
+    }
+
+    return {
+      agent: entry.name,
+      installed,
+      configDir,
+      cliBinary,
+      collectionLevel: entry.collectionLevel,
+      scanStatus,
+      mountSupport,
+      wrapperSupport,
+      sessionCount,
+    };
+  });
+}
+
 /** scan 命令 */
 function cmdScan(flags: Record<string, string | boolean>): number {
   const deviceId = (flags.device as string) ?? hostname();
@@ -317,6 +542,294 @@ function cmdScan(flags: Record<string, string | boolean>): number {
     }
   }
 
+  // hermes
+  try {
+    const importer = new HermesImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'hermes', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'hermes', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[hermes] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // windsurf（B 级兼容 importer —— Cascade .pb 加密，hook transcript 采集）
+  try {
+    const extractor = new WindsurfExtractor(store, { deviceId });
+    const stats = extractor.extract();
+    importStats.push({ adapter: 'windsurf', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'windsurf', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[windsurf] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // continue（A 级原生 adapter —— @continuedev/cli，binary: cn）
+  try {
+    const importer = new ContinueImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'continue', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'continue', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[continue] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // opencode（A 级原生 adapter）
+  try {
+    const importer = new OpenCodeImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'opencode', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'opencode', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[opencode] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // copilot（A 级原生 adapter）
+  try {
+    const importer = new CopilotImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'copilot', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'copilot', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[copilot] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // openclaw（A 级原生 adapter）
+  try {
+    const importer = new OpenClawImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'openclaw', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'openclaw', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[openclaw] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // kimi（A 级原生 adapter）
+  try {
+    const importer = new KimiImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'kimi', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'kimi', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[kimi] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // qwen（A 级原生 adapter）
+  try {
+    const importer = new QwenCodeImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'qwen', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'qwen', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[qwen] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // gemini（A 级原生 adapter）
+  try {
+    const importer = new GeminiImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'gemini', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'gemini', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[gemini] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // pi（A 级原生 adapter —— Pi / oh-my-pi / gsd-pi 三 flavor 共享 importer）
+  try {
+    const importer = new PiImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'pi', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'pi', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[pi] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // factory（A 级原生 adapter —— Factory Droid）
+  try {
+    const importer = new FactoryDroidImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'factory', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'factory', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[factory] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // vibe（A 级原生 adapter —— Mistral AI）
+  try {
+    const importer = new VibeImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'vibe', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'vibe', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[vibe] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // codebuddy（A 级原生 adapter —— Tencent WorkBuddy/CodeBuddy）
+  try {
+    const importer = new CodeBuddyImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'codebuddy', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'codebuddy', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[codebuddy] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // cline（A 级原生 adapter）
+  try {
+    const importer = new ClineImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'cline', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'cline', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[cline] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // crush（A 级原生 adapter —— Charm）
+  try {
+    const importer = new CrushImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'crush', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'crush', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[crush] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // openhands（A 级原生 adapter）
+  try {
+    const importer = new OpenHandsImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'openhands', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'openhands', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[openhands] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // goose（A 级原生 adapter —— Block）
+  try {
+    const importer = new GooseImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'goose', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'goose', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[goose] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // antigravity（A 级原生 adapter —— Google IDE）
+  try {
+    const importer = new AntigravityImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'antigravity', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'antigravity', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[antigravity] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // aider（B 级兼容 adapter —— per-project markdown）
+  try {
+    const importer = new AiderImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'aider', scanned: stats.filesScanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'aider', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[aider] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // trae-cli（B 级兼容 adapter —— trae-agent trajectory JSON）
+  try {
+    const importer = new TraeCliImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'trae_cli', scanned: stats.filesScanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'trae_cli', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[trae_cli] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // cursor-ide（B 级兼容 importer —— state.vscdb 提取）
+  try {
+    const extractor = new CursorIdeExtractor(store, { deviceId });
+    const stats = extractor.extract();
+    importStats.push({ adapter: 'cursor-ide', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'cursor-ide', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[cursor-ide] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // trae-ide（B 级兼容 importer —— JSONL 摘要提取）
+  try {
+    const extractor = new TraeIdeExtractor(store, { deviceId });
+    const stats = extractor.extract();
+    importStats.push({ adapter: 'trae-ide', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'trae-ide', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[trae-ide] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // amp（B/C 级 adapter —— SaaS，amp threads export）
+  try {
+    const importer = new AmpImporter(store, { deviceId });
+    const stats = importer.import();
+    importStats.push({ adapter: 'amp', scanned: stats.threadsSeen, inserted: stats.inserted, updated: stats.updated });
+  } catch (err) {
+    importStats.push({ adapter: 'amp', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[amp] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
+  // chatgpt（C 级 discovery only —— 仅注册 source alias，不采集 session）
+  try {
+    const extractor = new ChatGptExtractor(store, { deviceId });
+    extractor.extract();
+    importStats.push({ adapter: 'chatgpt', scanned: 0, inserted: 0, updated: 0 });
+  } catch (err) {
+    importStats.push({ adapter: 'chatgpt', scanned: 0, inserted: 0, updated: 0 });
+    if (!flags.json) {
+      console.error(`[chatgpt] 跳过: ${String(err).split('\n')[0]}`);
+    }
+  }
+
   // 跨源去重：cass (B) 与原生 adapter (A) 的重复 session 标记为 archived
   const dedup = store.deduplicateCrossSource();
 
@@ -340,6 +853,207 @@ function cmdScan(flags: Record<string, string | boolean>): number {
     console.log();
   }
   return 0;
+}
+
+/** status 命令 */
+// ─── agents 命令 ──────────────────────────────────────────────────────────
+
+/** agents 命令：检测本机所有 agent 及其支持状态 */
+function cmdAgents(flags: Record<string, string | boolean>): number {
+  const config = defaultDaemonConfig();
+  const dbPath = (flags.db as string) ?? config.dbPath;
+  const detections = detectAllAgents(dbPath);
+
+  if (flags.json) {
+    console.log(JSON.stringify(detections, null, 2));
+    return 0;
+  }
+
+  console.log('\nDetected Agents:\n');
+  console.log(
+    `  ${'AGENT'.padEnd(14)} ${'STATUS'.padEnd(8)} ${'COLL'.padEnd(5)} ${'MOUNT'.padEnd(6)} ${'WRAPPER'.padEnd(8)} ${'SESSIONS'.padStart(8)}`,
+  );
+  for (const d of detections) {
+    console.log(
+      `  ${d.agent.padEnd(14)} ${d.scanStatus.padEnd(8)} ${d.collectionLevel.padEnd(5)} ${(d.mountSupport ? 'yes' : 'no').padEnd(6)} ${(d.wrapperSupport ? 'yes' : 'no').padEnd(8)} ${String(d.sessionCount).padStart(8)}`,
+    );
+  }
+  const installed = detections.filter((d) => d.installed).length;
+  console.log(`\n  已安装: ${installed}/${detections.length}`);
+  console.log();
+  return 0;
+}
+
+// ─── launch / inject / transfer 命令 ──────────────────────────────────────
+
+/** 动态加载 agent wrapper 模块 */
+async function loadWrapper(cli: string): Promise<any> {
+  const wrapperMap: Record<string, () => Promise<any>> = {
+    hermes: () => import('../hermes/index.js'),
+    continue: () => import('../continue/index.js'),
+    opencode: () => import('../opencode/index.js'),
+    copilot: () => import('../copilot/index.js'),
+    openclaw: () => import('../openclaw/index.js'),
+    kimi: () => import('../kimi/index.js'),
+    qwen: () => import('../qwen/index.js'),
+    gemini: () => import('../gemini/index.js'),
+    pi: () => import('../pi/index.js'),
+    factory: () => import('../factory/index.js'),
+    vibe: () => import('../vibe/index.js'),
+    codebuddy: () => import('../codebuddy/index.js'),
+    cline: () => import('../cline/index.js'),
+    crush: () => import('../crush/index.js'),
+    openhands: () => import('../openhands/index.js'),
+    goose: () => import('../goose/index.js'),
+    antigravity: () => import('../antigravity/index.js'),
+    aider: () => import('../aider/index.js'),
+    trae_cli: () => import('../trae-cli/index.js'),
+    windsurf: () => import('../windsurf/index.js'),
+    'cursor-ide': () => import('../cursor-ide/index.js'),
+    'trae-ide': () => import('../trae-ide/index.js'),
+    amp: () => import('../amp/index.js'),
+  };
+  const loader = wrapperMap[cli];
+  if (!loader) throw new Error(`Unknown CLI: ${cli}`);
+  return await loader();
+}
+
+/** 实例化类式 wrapper（若该 agent 使用类式 wrapper） */
+function instantiateWrapper(cli: string, mod: any): any | null {
+  const className = WRAPPER_CLASS_NAME[cli];
+  if (className && mod[className]) {
+    return new mod[className]();
+  }
+  return null;
+}
+
+/** launch 命令：启动新 session */
+async function cmdLaunch(flags: Record<string, string | boolean>): Promise<number> {
+  const cli = flags.cli as string;
+  const prompt = flags.prompt as string;
+  const model = flags.model as string | undefined;
+  if (!cli || !prompt) {
+    console.error('用法: ymesh launch --cli <agent> --prompt "text" [--model <model>] [--json]');
+    return 1;
+  }
+
+  try {
+    const mod = await loadWrapper(cli);
+    const opts: Record<string, unknown> = {};
+    if (model) opts.model = model;
+
+    let result: unknown;
+    const wrapper = instantiateWrapper(cli, mod);
+    if (wrapper && typeof wrapper.launch === 'function') {
+      result = await wrapper.launch(prompt, opts);
+    } else if (typeof mod.launch === 'function') {
+      result = await mod.launch({ prompt, ...opts });
+    } else {
+      throw new Error(`${cli} wrapper does not support launch()`);
+    }
+
+    if (flags.json) {
+      console.log(JSON.stringify({ cli, prompt, status: 'launched', result }, null, 2));
+    } else {
+      console.log(`[yondermesh] ${cli} session launched`);
+      if (result && typeof result === 'object') {
+        const r = result as Record<string, unknown>;
+        if (r.sessionId) console.log(`  session: ${r.sessionId}`);
+        else if (r.id) console.log(`  session: ${r.id}`);
+      }
+    }
+    return 0;
+  } catch (err) {
+    console.error(`[yondermesh] launch 失败: ${String(err)}`);
+    return 1;
+  }
+}
+
+/** inject 命令：向运行中 session 注入消息 */
+async function cmdInject(flags: Record<string, string | boolean>): Promise<number> {
+  const cli = flags.cli as string;
+  const session = flags.session as string;
+  const message = flags.message as string;
+  if (!cli || !session || !message) {
+    console.error('用法: ymesh inject --cli <agent> --session <id> --message "text" [--json]');
+    return 1;
+  }
+
+  try {
+    const mod = await loadWrapper(cli);
+    let result: unknown;
+    const wrapper = instantiateWrapper(cli, mod);
+    if (wrapper && typeof wrapper.inject === 'function') {
+      result = await wrapper.inject(session, message);
+    } else if (typeof mod.inject === 'function') {
+      result = await mod.inject(session, message);
+    } else {
+      throw new Error(`${cli} wrapper does not support inject()`);
+    }
+
+    if (flags.json) {
+      console.log(JSON.stringify({ cli, session, status: 'injected', result }, null, 2));
+    } else {
+      console.log(`[yondermesh] ${cli} session ${session} injected`);
+    }
+    return 0;
+  } catch (err) {
+    console.error(`[yondermesh] inject 失败: ${String(err)}`);
+    return 1;
+  }
+}
+
+/** transfer 命令：跨 agent 转交 session */
+async function cmdTransfer(flags: Record<string, string | boolean>): Promise<number> {
+  const cli = flags.cli as string;
+  const session = flags.session as string;
+  const target = flags.target as string;
+  const output = flags.output as string | undefined;
+  if (!cli || !session || !target) {
+    console.error('用法: ymesh transfer --cli <source-agent> --session <id> --target <target-agent> [--output <path>] [--json]');
+    return 1;
+  }
+
+  try {
+    const mod = await loadWrapper(cli);
+    let extractResult: unknown;
+    let transferResult: unknown;
+
+    const wrapper = instantiateWrapper(cli, mod);
+    if (wrapper && typeof wrapper.extractSession === 'function') {
+      extractResult = await wrapper.extractSession(session);
+    } else if (typeof mod.extractSession === 'function') {
+      extractResult = await mod.extractSession(session);
+    } else {
+      throw new Error(`${cli} wrapper does not support extractSession()`);
+    }
+
+    if (wrapper && typeof wrapper.transferSession === 'function') {
+      transferResult = await wrapper.transferSession(session, target);
+    } else if (typeof mod.transferSession === 'function') {
+      transferResult = await mod.transferSession(session, target);
+    } else {
+      throw new Error(`${cli} wrapper does not support transferSession()`);
+    }
+
+    const handoffText =
+      typeof transferResult === 'string'
+        ? transferResult
+        : JSON.stringify({ source: cli, target, session, extract: extractResult, transfer: transferResult }, null, 2);
+
+    if (output) {
+      writeFileSync(output, handoffText + '\n', 'utf-8');
+      console.log(`[yondermesh] handoff 已写入 ${output}`);
+    } else if (flags.json) {
+      console.log(JSON.stringify({ cli, session, target, extract: extractResult, transfer: transferResult }, null, 2));
+    } else {
+      console.log(handoffText);
+    }
+    return 0;
+  } catch (err) {
+    console.error(`[yondermesh] transfer 失败: ${String(err)}`);
+    return 1;
+  }
 }
 
 /** status 命令 */
@@ -406,6 +1120,7 @@ function cmdStatus(flags: Record<string, string | boolean>): number {
       watchedPaths,
       stats,
       recentScans: lastScanRuns,
+      agents: detectAllAgents(dbPath),
     }, null, 2));
   } else {
     console.log(`\nyondermesh 状态\n`);
@@ -428,6 +1143,16 @@ function cmdStatus(flags: Record<string, string | boolean>): number {
     } else {
       console.log(`\n  数据统计: (数据库未初始化)`);
     }
+
+    // Detected Agents 段：仅显示已安装的 agent
+    const detections = detectAllAgents(dbPath);
+    const installed = detections.filter((d) => d.installed);
+    if (installed.length > 0) {
+      console.log(`\n  Detected Agents (${installed.length}):`);
+      for (const d of installed) {
+        console.log(`    ${d.agent.padEnd(14)} ${d.collectionLevel}级  ${d.sessionCount} sessions`);
+      }
+    }
     console.log();
   }
   return 0;
@@ -442,8 +1167,10 @@ function cmdActive(flags: Record<string, string | boolean>): number {
   const withinMin = typeof flags.within === 'string' ? parseInt(flags.within, 10) : 30;
   const withinMs = withinMin * 60_000;
 
-  const summary = store.getActiveSessionsSummary(withinMs);
+  const summary = store.getActiveSessionsSummary(withinMs, detectAliveProcesses);
+  const awaitingReview = store.getSessionsAwaitingReview(withinMs);
   store.close();
+  const reviewIds = new Set(awaitingReview.map((s) => s.sessionId));
 
   if (flags.json) {
     console.log(JSON.stringify(summary, null, 2));
@@ -452,20 +1179,64 @@ function cmdActive(flags: Record<string, string | boolean>): number {
 
   console.log();
   console.log(`  活跃 session: ${summary.totalActive} (live ${summary.liveCount})`);
+  if (summary.idleCount || summary.staleCount) {
+    const parts: string[] = [];
+    if (summary.idleCount) parts.push(`idle ${summary.idleCount}`);
+    if (summary.staleCount) parts.push(`stale ${summary.staleCount}`);
+    if (summary.stoppedCount) parts.push(`stopped ${summary.stoppedCount}`);
+    console.log(`  ${parts.join('  ')}`);
+  }
   console.log(`  subagent:    ${summary.subagentActive}`);
+  if (reviewIds.size > 0) {
+    console.log(`  等待审阅:    ${reviewIds.size}`);
+  }
   console.log();
 
   if (summary.sessions && summary.sessions.length > 0) {
     for (const s of summary.sessions) {
-      const status = s.isLive ? 'LIVE' : 'idle';
+      const status =
+        s.activityStatus === 'live' ? 'LIVE' :
+        s.activityStatus === 'idle' ? 'idle' :
+        s.activityStatus === 'stopped' ? 'STOP' : 'stale';
       const cwd = s.cwd ? s.cwd.replace(process.env.HOME ?? '', '~') : '-';
-      const agoSec = Math.round((Date.now() - s.lastSeenAt) / 1000);
-      console.log(`  [${status.padEnd(4)}] ${s.source.padEnd(8)} ${String(agoSec).padStart(5)}s ago  msgs=${s.messageCount}  ${cwd}`);
+      const agoSec = Math.round((Date.now() - s.fileModifiedAt) / 1000);
+      const review = reviewIds.has(s.sessionId) ? ' [REVIEW]' : '';
+      console.log(`  [${status.padEnd(5)}] ${s.source.padEnd(8)} ${String(agoSec).padStart(5)}s ago  msgs=${s.messageCount}${review}  ${cwd}`);
     }
   } else {
     console.log('  (最近没有活跃 session)');
   }
   console.log();
+  return 0;
+}
+
+function cmdWaiting(flags: Record<string, string | boolean>): number {
+  const store = openStore(flags.db as string | undefined);
+  const withinMin = typeof flags.within === 'string' ? parseInt(flags.within, 10) : 30;
+  const withinMs = withinMin * 60_000;
+
+  const sessions = store.getSessionsAwaitingReview(withinMs);
+  store.close();
+
+  if (flags.json) {
+    console.log(JSON.stringify({ count: sessions.length, sessions }, null, 2));
+    return 0;
+  }
+
+  if (sessions.length === 0) {
+    console.log('\n  没有等待审阅的 session\n');
+    return 0;
+  }
+
+  console.log(`\n  等待审阅: ${sessions.length} 个 session\n`);
+  for (const s of sessions) {
+    const agoSec = Math.round((Date.now() - s.fileModifiedAt) / 1000);
+    const cwd = s.cwd ? s.cwd.replace(process.env.HOME ?? '', '~') : '-';
+    const preview = s.lastMessagePreview.replace(/\n/g, ' ').slice(0, 80);
+    console.log(`  ${s.source.padEnd(12)} ${String(agoSec).padStart(5)}s ago  ${cwd}`);
+    console.log(`    "${preview}..."`);
+    console.log();
+  }
   return 0;
 }
 
@@ -486,9 +1257,9 @@ function cmdSessions(flags: Record<string, string | boolean>): number {
  };
 
   const sessions = store.querySessions(query);
-  const stats = store.getSessionStats(query);
-  const activeSummary = store.getActiveSessionsSummary();
-  store.close();
+const stats = store.getSessionStats(query);
+const activeSummary = store.getActiveSessionsSummary(30 * 60_000, detectAliveProcesses);
+store.close();
 
   if (flags.json) {
     console.log(JSON.stringify({ summary: activeSummary, sessions, stats }, null, 2));
@@ -642,6 +1413,21 @@ function cmdService(flags: Record<string, string | boolean>): number {
       try {
         installService();
         console.log(`[yondermesh] LaunchAgent 已安装: ${LAUNCH_AGENT_PLIST()}`);
+        // 尝试安装菜单栏 app（仅 macOS）
+        if (process.platform === 'darwin') {
+          try {
+            const sourceRoot = resolveProjectRoot();
+            const swiftSource = join(sourceRoot, 'src', 'menubar', 'YondermeshMenuBar.swift');
+            if (existsSync(swiftSource)) {
+              installMenuBarApp(swiftSource);
+              console.log('[yondermesh] 菜单栏 app 已安装');
+            } else {
+              console.log('[yondermesh] 未找到 Swift 源码，跳过菜单栏 app');
+            }
+          } catch (err) {
+            console.log(`[yondermesh] 菜单栏 app 安装跳过: ${String(err)}`);
+          }
+        }
         return 0;
       } catch (err) {
         console.error(`[yondermesh] 安装失败: ${String(err)}`);
@@ -651,6 +1437,9 @@ function cmdService(flags: Record<string, string | boolean>): number {
     case 'uninstall': {
       try {
         uninstallService();
+        if (process.platform === 'darwin') {
+          try { uninstallMenuBarApp(); } catch { /* noop */ }
+        }
         console.log('[yondermesh] LaunchAgent 已卸载');
         const removed = unlinkSkills();
         if (removed.removed.length > 0) {
@@ -666,6 +1455,9 @@ function cmdService(flags: Record<string, string | boolean>): number {
       try {
         startService();
         console.log('[yondermesh] daemon service 已启动');
+        if (process.platform === 'darwin') {
+          try { startMenuBarApp(); } catch { /* noop */ }
+        }
         return 0;
       } catch (err) {
         console.error(`[yondermesh] 启动失败: ${String(err)}`);
@@ -675,6 +1467,9 @@ function cmdService(flags: Record<string, string | boolean>): number {
     case 'stop': {
       try {
         stopService();
+        if (process.platform === 'darwin') {
+          try { stopMenuBarApp(); } catch { /* noop */ }
+        }
         console.log('[yondermesh] daemon service 已停止');
         return 0;
       } catch (err) {
@@ -1032,6 +1827,46 @@ async function cmdMcp(flags: Record<string, string | boolean>): Promise<number> 
     return 0;
   }
 
+  // mcp tools：列出 yondermesh 暴露给其他 agent 的 MCP 工具（含新版 yondermesh_* 工具）
+  if (sub === 'tools') {
+    // 新版工具集（含 handler，来自 src/mcp/tools.ts）
+    const newTools = listToolSchemas();
+    // 旧版工具集（仅 schema，来自 McpServer 实例方法 listTools）
+    const config = defaultDaemonConfig();
+    const store = new SessionStore(config.dbPath);
+    const mcp = new McpServer(store);
+    const legacyTools = mcp.listTools().map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+    }));
+    store.close();
+
+    if (flags.json) {
+      console.log(JSON.stringify({
+        new_tools: newTools,
+        legacy_tools: legacyTools,
+        new_count: newTools.length,
+        legacy_count: legacyTools.length,
+        total: newTools.length + legacyTools.length,
+      }, null, 2));
+    } else {
+      console.log(`\nyondermesh MCP 工具（共 ${newTools.length + legacyTools.length} 个）\n`);
+      console.log(`  新版 yondermesh_* 工具（${newTools.length}）:`);
+      for (const t of newTools) {
+        console.log(`    - ${t.name}`);
+        console.log(`        ${t.description.split('\n')[0]}`);
+      }
+      console.log(`\n  旧版查询工具（${legacyTools.length}）:`);
+      for (const t of legacyTools) {
+        console.log(`    - ${t.name}`);
+        console.log(`        ${t.description.split('\n')[0]}`);
+      }
+      console.log(`\n  注：MCP_TOOLS 数组共 ${MCP_TOOLS.length} 个工具（含 handler）\n`);
+    }
+    return 0;
+  }
+
   // mcp call <tool> <json_args>：终端直接调用 MCP 工具
   if (sub === 'call') {
     const toolName = positional[1];
@@ -1180,7 +2015,7 @@ function cmdStateSync(
   const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
 
   const store = openStore(dbPath);
-  const activeSummary = store.getActiveSessionsSummary();
+  const activeSummary = store.getActiveSessionsSummary(30 * 60_000, detectAliveProcesses);
   const stats = store.getSessionStats({});
   const recentSessions = store.querySessions({ limit: 10 });
   store.close();
@@ -1259,226 +2094,317 @@ function cmdStateShow(flags: Record<string, string | boolean>, stateFile: string
   return 0;
 }
 
-// ─── mailbox 命令（文件系统跨 session 通信）─────────────────────────────────
+// ─── mailbox 命令（SQLite 后端，薄壳交互层）─────────────────────────────
+//
+// 所有业务逻辑在 src/mailbox/core.ts 的 MailboxCore 里。CLI 只是参数解析
+// 与输出格式化。daemon 注册 Notifier 后，postMessage 自动触发推送通道。
 
-/** 邮箱消息类型 */
-type MailKind = 'info' | 'warning' | 'question' | 'task_update';
-
-/** 邮箱消息 */
-interface MailMessage {
-  id: string;
-  toSessionId: string;
-  fromSessionId: string | null;
-  body: string;
-  kind: MailKind;
-  postedAt: string;
-  readAt: string | null;
+/** 用 flags 解析 dataDir + dbPath，打开 MailboxCore */
+function openMailbox(flags: Record<string, string | boolean>): MailboxCore {
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  return new MailboxCore(dbPath, dataDir);
 }
 
-/** 合法的 kind 列表 */
-const MAIL_KINDS: MailKind[] = ['info', 'warning', 'question', 'task_update'];
+/** 解析 --since-minutes flag 为 ms 截止时间 */
+function parseSinceMs(flags: Record<string, string | boolean>, defaultMin = 60): number {
+  const v = flags['since-minutes'];
+  if (typeof v !== 'string') return Date.now() - defaultMin * 60_000;
+  const n = parseInt(v, 10);
+  return isNaN(n) ? Date.now() - defaultMin * 60_000 : Date.now() - n * 60_000;
+}
 
-/** mailbox 命令：通过文件系统投递和读取跨 session 消息 */
+/** 把 ISO 时间戳格式化为本地时区 'YYYY-MM-DD HH:MM' */
+function fmtLocalTime(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/** mailbox 命令：跨 session 消息总线入口 */
 function cmdMailbox(flags: Record<string, string | boolean>): number {
-  // 子命令：post / get / list
   const positional = process.argv.slice(process.argv.indexOf('mailbox') + 1);
   const action = positional[0] ?? '';
 
-  const dataDir = resolveDataDir(flags);
-  const mailboxDir = join(dataDir, 'mailbox');
-
   switch (action) {
     case 'post':
-      return cmdMailboxPost(flags, mailboxDir);
+      return cmdMailboxPost(flags);
     case 'get':
-      return cmdMailboxGet(flags, mailboxDir);
+    case 'peek':
+      return cmdMailboxPeek(flags, /* pop */ false);
+    case 'pop':
+      return cmdMailboxPeek(flags, /* pop */ true);
     case 'list':
-      return cmdMailboxList(flags, mailboxDir);
+      return cmdMailboxList(flags);
+    case 'mark-read':
+      return cmdMailboxMarkRead(flags);
+    case 'check':
+      return cmdMailboxCheck(flags);
+    case 'whoami':
+      return cmdMailboxWhoami(flags);
+    case 'unread':
+      return cmdMailboxUnread(flags);
     default:
-      console.error('用法: ymesh mailbox post|get|list [--data-dir <dir>] [--json]');
+      console.error('用法: ymesh mailbox post|get|pop|list|mark-read|check|whoami|unread [--json]');
       return 1;
   }
 }
 
 /** mailbox post：投递消息 */
-function cmdMailboxPost(flags: Record<string, string | boolean>, mailboxDir: string): number {
+function cmdMailboxPost(flags: Record<string, string | boolean>): number {
   const to = typeof flags.to === 'string' ? flags.to : '';
+  const toProject = typeof flags['to-project'] === 'string' ? flags['to-project'] : '';
   const body = typeof flags.body === 'string' ? flags.body : '';
-  if (!to || !body) {
-    console.error('用法: ymesh mailbox post --to <session_id> --body <内容> [--from <session_id>] [--kind info|warning|question|task_update]');
+  if ((!to && !toProject) || !body) {
+    console.error('用法: ymesh mailbox post --to <sid> | --to-project <path> --body <内容>');
+    console.error('      [--from <sid>] [--kind info|warning|question|task_update]');
+    console.error('      [--priority low|normal|high|urgent] [--expires-min N]');
+    console.error('      [--thread <id>] [--reply-to <msg_id>] [--json]');
     return 1;
   }
 
-  const from = typeof flags.from === 'string' ? flags.from : null;
+  const from = typeof flags.from === 'string' ? flags.from : undefined;
   const rawKind = typeof flags.kind === 'string' ? flags.kind : 'info';
   if (!MAIL_KINDS.includes(rawKind as MailKind)) {
     console.error(`[yondermesh] 无效 kind: ${rawKind}（可选: ${MAIL_KINDS.join(', ')}）`);
     return 1;
   }
-  const kind = rawKind as MailKind;
+  const rawPriority = typeof flags.priority === 'string' ? flags.priority : 'normal';
+  if (!MAIL_PRIORITIES.includes(rawPriority as MailPriority)) {
+    console.error(`[yondermesh] 无效 priority: ${rawPriority}（可选: ${MAIL_PRIORITIES.join(', ')}）`);
+    return 1;
+  }
 
-  const msg: MailMessage = {
-    id: randomUUID(),
-    toSessionId: to,
+  const expiresMin = typeof flags['expires-min'] === 'string' ? parseInt(flags['expires-min'], 10) : NaN;
+  const expiresAt = !isNaN(expiresMin) && expiresMin > 0 ? Date.now() + expiresMin * 60_000 : undefined;
+  const replyTo = typeof flags['reply-to'] === 'string' ? parseInt(flags['reply-to'], 10) : undefined;
+
+  const input: PostMessageInput = {
+    toSessionId: to || undefined,
+    toProject: toProject || undefined,
     fromSessionId: from,
     body,
-    kind,
-    postedAt: new Date().toISOString(),
-    readAt: null,
+    kind: rawKind as MailKind,
+    priority: rawPriority as MailPriority,
+    expiresAt,
+    threadId: typeof flags.thread === 'string' ? flags.thread : undefined,
+    replyToId: !isNaN(replyTo as number) ? replyTo : undefined,
   };
 
-  const filePath = join(mailboxDir, `${to}.jsonl`);
+  const mailbox = openMailbox(flags);
   try {
-    mkdirSync(mailboxDir, { recursive: true });
-    appendFileSync(filePath, JSON.stringify(msg) + '\n', 'utf-8');
+    const id = mailbox.postMessage(input);
+    if (flags.json) {
+      console.log(JSON.stringify({ messageId: id, posted: true }, null, 2));
+    } else {
+      const target = to || `project:${toProject}`;
+      console.log(`[yondermesh] 消息已投递到 ${target} (id: ${id})`);
+    }
+    return 0;
   } catch (err) {
     console.error(`[yondermesh] 投递失败: ${String(err)}`);
     return 1;
+  } finally {
+    mailbox.close();
   }
-
-  console.log(`[yondermesh] 消息已投递到 ${to} (id: ${msg.id})`);
-  return 0;
 }
 
-/** mailbox get：读取消息（不自动标记已读） */
-function cmdMailboxGet(flags: Record<string, string | boolean>, mailboxDir: string): number {
+/** mailbox get / peek / pop：读取消息 */
+function cmdMailboxPeek(flags: Record<string, string | boolean>, pop: boolean): number {
   const forSession = typeof flags.for === 'string' ? flags.for : '';
-  if (!forSession) {
-    console.error('用法: ymesh mailbox get --for <session_id> [--unread-only] [--since-minutes 60] [--json]');
+  const forProject = typeof flags['for-project'] === 'string' ? flags['for-project'] : '';
+  if (!forSession && !forProject) {
+    console.error('用法: ymesh mailbox get|pop --for <sid> | --for-project <path>');
+    console.error('      [--unread-only] [--since-minutes 60] [--limit 50] [--json]');
     return 1;
   }
 
-  const filePath = join(mailboxDir, `${forSession}.jsonl`);
-  if (!existsSync(filePath)) {
-    if (flags.json) {
-      console.log(JSON.stringify({ messages: [], count: 0 }, null, 2));
-    } else {
-      console.log(`[yondermesh] 邮箱 ${forSession} 无消息`);
-    }
-    return 0;
-  }
+  const filter: MessageFilter = {
+    forSessionId: forSession || undefined,
+    forProject: forProject || undefined,
+    sinceMs: parseSinceMs(flags),
+    unreadOnly: flags['unread-only'] === true,
+    limit: typeof flags.limit === 'string' ? parseInt(flags.limit, 10) : undefined,
+  };
 
-  const sinceMinutes = (() => {
-    const v = flags['since-minutes'];
-    if (typeof v !== 'string') return 60;
-    const n = parseInt(v, 10);
-    return isNaN(n) ? 60 : n;
-  })();
-  const sinceMs = sinceMinutes > 0 ? Date.now() - sinceMinutes * 60 * 1000 : 0;
-  const unreadOnly = flags['unread-only'] === true;
-
-  let messages: MailMessage[] = [];
+  const mailbox = openMailbox(flags);
   try {
-    const content = readFileSync(filePath, 'utf-8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        messages.push(JSON.parse(trimmed) as MailMessage);
-      } catch {
-        // 跳过损坏行
-      }
+    const messages = pop ? mailbox.popMessages(filter) : mailbox.peekMessages(filter);
+    if (flags.json) {
+      console.log(JSON.stringify({ messages, count: messages.length }, null, 2));
+      return 0;
     }
-  } catch (err) {
-    console.error(`[yondermesh] 读取邮箱失败: ${String(err)}`);
-    return 1;
-  }
-
-  // 按时间过滤
-  messages = messages.filter((m) => {
-    const postedMs = Date.parse(m.postedAt);
-    if (!isNaN(postedMs) && sinceMs > 0 && postedMs < sinceMs) return false;
-    return true;
-  });
-
-  // 按 unread 过滤
-  if (unreadOnly) {
-    messages = messages.filter((m) => m.readAt === null);
-  }
-
-  if (flags.json) {
-    console.log(JSON.stringify({ messages, count: messages.length }, null, 2));
+    if (messages.length === 0) {
+      const target = forSession || `project:${forProject}`;
+      console.log(`[yondermesh] 邮箱 ${target} 无消息（匹配当前过滤条件）`);
+      return 0;
+    }
+    const target = forSession || `project:${forProject}`;
+    console.log(`\n邮箱 ${target}（${messages.length} 条消息）\n`);
+    for (const m of messages) {
+      const time = fmtLocalTime(m.createdAt);
+      const from = m.fromSessionId ? shortIdOf(m.fromSessionId) : '(unknown)';
+      const read = m.readAt ? '[已读]' : '[未读]';
+      const pri = m.priority !== 'normal' ? `[${m.priority}] ` : '';
+      console.log(`  ${time}  ${m.kind.padEnd(12)}  ${read}  ${pri}from: ${from}`);
+      console.log(`    ${m.body.replace(/\n/g, '\n    ')}`);
+    }
+    console.log();
     return 0;
+  } finally {
+    mailbox.close();
   }
-
-  // 文本模式
-  if (messages.length === 0) {
-    console.log(`[yondermesh] 邮箱 ${forSession} 无消息（匹配当前过滤条件）`);
-    return 0;
-  }
-  console.log(`\n邮箱 ${forSession}（${messages.length} 条消息）\n`);
-  for (const m of messages) {
-    const time = m.postedAt ? m.postedAt.slice(0, 19).replace('T', ' ') : '???';
-    const from = m.fromSessionId ? shortIdOf(m.fromSessionId) : '(unknown)';
-    const read = m.readAt ? '[已读]' : '[未读]';
-    console.log(`  ${time}  ${m.kind.padEnd(12)}  ${read}  from: ${from}`);
-    console.log(`    ${m.body.replace(/\n/g, '\n    ')}`);
-  }
-  console.log();
-  return 0;
 }
 
-/** mailbox list：列出所有邮箱文件 */
-function cmdMailboxList(flags: Record<string, string | boolean>, mailboxDir: string): number {
-  if (!existsSync(mailboxDir)) {
-    if (flags.json) {
-      console.log(JSON.stringify({ mailboxes: [], count: 0 }, null, 2));
-    } else {
-      console.log('[yondermesh] 无邮箱目录');
-    }
-    return 0;
-  }
-
-  let files: string[] = [];
+/** mailbox list：列出所有有消息的 session 邮箱 */
+function cmdMailboxList(flags: Record<string, string | boolean>): number {
+  const mailbox = openMailbox(flags);
   try {
-    files = readdirSync(mailboxDir).filter((f) => f.endsWith('.jsonl'));
-  } catch (err) {
-    console.error(`[yondermesh] 读取邮箱目录失败: ${String(err)}`);
+    const mailboxes = mailbox.listMailboxes();
+    if (flags.json) {
+      console.log(JSON.stringify({ mailboxes, count: mailboxes.length }, null, 2));
+      return 0;
+    }
+    if (mailboxes.length === 0) {
+      console.log('[yondermesh] 无邮箱记录');
+      return 0;
+    }
+    console.log(`\n邮箱列表（${mailboxes.length}）:\n`);
+    console.log(`  ${'session_id'.padEnd(40)}  ${'total'.padStart(5)}  ${'unread'.padStart(6)}  last`);
+    for (const mb of mailboxes) {
+      const time = fmtLocalTime(mb.lastPostedAt);
+      console.log(`  ${mb.sessionId.padEnd(40)}  ${String(mb.messageCount).padStart(5)}  ${String(mb.unreadCount).padStart(6)}  ${time}`);
+    }
+    console.log();
+    return 0;
+  } finally {
+    mailbox.close();
+  }
+}
+
+/** mailbox mark-read：标记已读 */
+function cmdMailboxMarkRead(flags: Record<string, string | boolean>): number {
+  const id = typeof flags.id === 'string' ? parseInt(flags.id, 10) : undefined;
+  const forSession = typeof flags.for === 'string' ? flags.for : undefined;
+  const forProject = typeof flags['for-project'] === 'string' ? flags['for-project'] : undefined;
+
+  if (isNaN(id as number) && !forSession && !forProject) {
+    console.error('用法: ymesh mailbox mark-read --id <msg_id> | --for <sid> | --for-project <path>');
     return 1;
   }
 
-  const mailboxes: Array<{ sessionId: string; messageCount: number; lastPostedAt: string | null }> = [];
-  for (const f of files) {
-    const sessionId = f.slice(0, -6); // 去掉 .jsonl
-    const filePath = join(mailboxDir, f);
-    try {
-      const content = readFileSync(filePath, 'utf-8');
-      const lines = content.split('\n').filter((l) => l.trim());
-      let lastPostedAt: string | null = null;
-      for (const line of lines) {
-        try {
-          const msg = JSON.parse(line) as MailMessage;
-          if (msg.postedAt && (lastPostedAt === null || msg.postedAt > lastPostedAt)) {
-            lastPostedAt = msg.postedAt;
-          }
-        } catch {
-          // 跳过损坏行
-        }
-      }
-      mailboxes.push({ sessionId, messageCount: lines.length, lastPostedAt });
-    } catch {
-      // 跳过不可读文件
+  const mailbox = openMailbox(flags);
+  try {
+    const count = mailbox.markRead({
+      id: !isNaN(id as number) ? id : undefined,
+      allForSession: forSession,
+      allForProject: forProject,
+    });
+    if (flags.json) {
+      console.log(JSON.stringify({ markedRead: count }, null, 2));
+    } else {
+      console.log(`[yondermesh] 标记 ${count} 条消息为已读`);
     }
-  }
-
-  if (flags.json) {
-    console.log(JSON.stringify({ mailboxes, count: mailboxes.length }, null, 2));
     return 0;
+  } finally {
+    mailbox.close();
   }
+}
 
-  if (mailboxes.length === 0) {
-    console.log('[yondermesh] 无邮箱文件');
+/** mailbox check：消费 daemon tray 通知 + 返回未读消息 */
+function cmdMailboxCheck(flags: Record<string, string | boolean>): number {
+  const explicitSid = typeof flags.for === 'string' ? flags.for : undefined;
+
+  const mailbox = openMailbox(flags);
+  try {
+    const selfSid = mailbox.resolveSelfSession({ explicit: explicitSid });
+    if (!selfSid) {
+      console.error('[yondermesh] 无法解析 self session id。请用 --for <sid> 显式指定，或设置 YONDERMESH_SELF_SESSION_ID 环境变量。');
+      return 2;
+    }
+
+    // 消费 daemon 写的 tray 文件（push 通知），不存在则空数组
+    const trayNotices = mailbox.consumeTray(selfSid);
+    // 取未读消息（不标记已读，让 agent 决定是否 pop）
+    const messages = mailbox.peekMessages({
+      forSessionId: selfSid,
+      unreadOnly: true,
+      limit: 50,
+    });
+    const unread = mailbox.countUnread(selfSid);
+
+    if (flags.json) {
+      console.log(JSON.stringify({
+        sessionId: selfSid,
+        trayNotices,
+        unread,
+        messages,
+      }, null, 2));
+      return 0;
+    }
+
+    console.log(`\n  self: ${selfSid}`);
+    console.log(`  unread: ${unread.total}（direct ${unread.direct}, broadcast ${unread.broadcast}）`);
+    console.log(`  tray notices: ${trayNotices.length}`);
+    if (messages.length > 0) {
+      console.log(`\n  未读消息:\n`);
+      for (const m of messages) {
+        const time = fmtLocalTime(m.createdAt);
+        const from = m.fromSessionId ? shortIdOf(m.fromSessionId) : '(unknown)';
+        const pri = m.priority !== 'normal' ? `[${m.priority}] ` : '';
+        console.log(`  ${time}  ${m.kind.padEnd(12)}  ${pri}from: ${from}`);
+        console.log(`    ${m.body.replace(/\n/g, '\n    ')}`);
+      }
+    }
+    console.log();
     return 0;
+  } finally {
+    mailbox.close();
+  }
+}
+
+/** mailbox whoami：解析当前调用方的 self session id */
+function cmdMailboxWhoami(flags: Record<string, string | boolean>): number {
+  const explicitSid = typeof flags.for === 'string' ? flags.for : undefined;
+
+  const mailbox = openMailbox(flags);
+  try {
+    const selfSid = mailbox.resolveSelfSession({ explicit: explicitSid });
+    if (flags.json) {
+      console.log(JSON.stringify({ sessionId: selfSid ?? null, resolved: !!selfSid }, null, 2));
+      return 0;
+    }
+    if (!selfSid) {
+      console.log('[yondermesh] 无法解析 self session id');
+      return 2;
+    }
+    console.log(`[yondermesh] self session id: ${selfSid}`);
+    return 0;
+  } finally {
+    mailbox.close();
+  }
+}
+
+/** mailbox unread：统计未读消息数 */
+function cmdMailboxUnread(flags: Record<string, string | boolean>): number {
+  const forSession = typeof flags.for === 'string' ? flags.for : '';
+  const forProject = typeof flags['for-project'] === 'string' ? flags['for-project'] : '';
+  if (!forSession && !forProject) {
+    console.error('用法: ymesh mailbox unread --for <sid> | --for-project <path>');
+    return 1;
   }
 
-  console.log(`\n邮箱列表（${mailboxes.length}）:\n`);
-  console.log(`  ${'session_id'.padEnd(40)}  ${'msgs'.padStart(5)}  last`);
-  for (const mb of mailboxes) {
-    const time = mb.lastPostedAt ? mb.lastPostedAt.slice(0, 19).replace('T', ' ') : '-';
-    console.log(`  ${mb.sessionId.padEnd(40)}  ${String(mb.messageCount).padStart(5)}  ${time}`);
+  const mailbox = openMailbox(flags);
+  try {
+    const unread = mailbox.countUnread(forSession || undefined, forProject || undefined);
+    if (flags.json) {
+      console.log(JSON.stringify(unread, null, 2));
+    } else {
+      const target = forSession || `project:${forProject}`;
+      console.log(`[yondermesh] ${target}: ${unread.total} unread (direct ${unread.direct}, broadcast ${unread.broadcast})`);
+    }
+    return 0;
+  } finally {
+    mailbox.close();
   }
-  console.log();
-  return 0;
 }
 
 // ─── 主入口 ──────────────────────────────────────────────────────────────
@@ -1510,6 +2436,8 @@ async function main(): Promise<number> {
 
     case 'active':
       return cmdActive(flags);
+    case 'waiting':
+      return cmdWaiting(flags);
 
     case 'daemon':
       return await cmdDaemon(flags);
@@ -1546,6 +2474,18 @@ async function main(): Promise<number> {
 
     case 'mailbox':
       return cmdMailbox(flags);
+
+    case 'agents':
+      return cmdAgents(flags);
+
+    case 'launch':
+      return await cmdLaunch(flags);
+
+    case 'inject':
+      return await cmdInject(flags);
+
+    case 'transfer':
+      return await cmdTransfer(flags);
 
     case 'rollback':
       {
