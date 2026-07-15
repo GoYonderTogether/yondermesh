@@ -52,5 +52,20 @@ export type { UpdateResult, HealthCheck } from './updater.js';
 // Skill 分发
 export { linkSkills, unlinkSkills } from './skill-linker.js';
 
+// 菜单栏 app
+export {
+  MENUBAR_AGENT_LABEL,
+  resolveMenuBarAppPath,
+  resolveMenuBarExecutable,
+  resolveMenuBarPlist,
+  generateMenuBarPlist,
+  generateMenuBarInfoPlist,
+  buildMenuBarApp,
+  installMenuBarApp,
+  uninstallMenuBarApp,
+  startMenuBarApp,
+  stopMenuBarApp,
+} from './menubar.js';
+
 // Git 版本计算
 export { resolveVersion, describeVersion, gitShortHash, gitBranch } from './version.js';
