@@ -1,7 +1,9 @@
 name: Deploy Docs to GitHub Pages
 
-# Build and deploy site/ (VitePress) to GitHub Pages whenever docs or source change.
-# Path-filtered: pushes that don't touch site/, scripts/docs/, src/, or this workflow skip.
+# Build and deploy site/ (VitePress) to GitHub Pages.
+# The committed site/reference/*.md files are already synced from source
+# (via `npm run sync` locally before commit), so CI only needs to build.
+# Path-filtered: pushes that don't touch docs-relevant paths skip.
 on:
   push:
     branches: [main]
@@ -11,6 +13,7 @@ on:
       - 'src/**'
       - 'package.json'
       - 'README.md'
+      - 'README.zh-CN.md'
       - '.github/workflows/docs-deploy.yml'
   workflow_dispatch:
 
@@ -19,7 +22,7 @@ permissions:
   pages: write
   id-token: write
 
-# Only one concurrent deployment; never cancel an in-progress deploy (prevents partial publishes).
+# Only one concurrent deployment; never cancel an in-progress deploy.
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -38,9 +41,6 @@ jobs:
           cache: 'npm'
           cache-dependency-path: site/package.json
 
-      - name: Install root deps (for `ymesh help` source extraction)
-        run: npm ci
-
       - name: Install site deps
         run: npm ci --prefix site
         # If no lockfile exists yet, fall back to plain install.
@@ -49,12 +49,6 @@ jobs:
       - name: Install site deps (fallback)
         if: ${{ failure() }}
         run: npm install --prefix site
-
-      - name: Build ymesh (so `ymesh help` works in sync)
-        run: npm run build
-
-      - name: Sync auto-generated docs
-        run: npm run sync --prefix site
 
       - name: Build docs site
         run: npm run build --prefix site

@@ -2,14 +2,24 @@
 
 > Self-hosted Agent Context Bus — let your AI agents see each other, query each other, and hand off tasks across devices and CLIs.
 
-## What is this?
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node: >=20](https://img.shields.io/badge/node-%3E%3D20-green.svg)](https://nodejs.org/)
+[![Docs](https://img.shields.io/badge/docs-online-blue.svg)](https://goyondertogether.github.io/yondermesh/)
 
-You use multiple AI coding agents — Claude Code, Codex, Aider, Gemini CLI, OpenCode — across multiple machines. Each one is an island. Context dies at the session boundary.
+**[English](README.md)** | [简体中文](README.zh-CN.md)
+
+---
+
+## The problem
+
+You use multiple AI coding agents — Claude Code, Codex, Aider, Gemini CLI, Cursor, Windsurf, Trae, Continue — across multiple machines. Each one is an island. Context dies at the session boundary. Agent A on your laptop has no idea what Agent B on your desktop just did.
+
+## The solution
 
 **yondermesh fixes this.** One daemon, one MCP server, zero intrusion.
 
 - **Collect** — auto-harvest sessions from every CLI agent on every device into local SQLite
-- **Sync** — E2E-encrypted cross-device sync via self-hosted relay
+- **Sync** — E2E-encrypted cross-device sync via self-hosted relay (ciphertext only leaves your machine)
 - **Query** — any agent queries any other agent's context via MCP tools
 - **Hand off** — agent A picks up where agent B left off, even on a different machine
 
@@ -19,20 +29,27 @@ You use multiple AI coding agents — Claude Code, Codex, Aider, Gemini CLI, Ope
 # Install
 npm install -g yondermesh
 
-# Initialize (generates ~/.yondermesh/config.yaml)
-ymesh init
-
-# Start daemon (auto-scans all local agent sessions)
+# Start the daemon (auto-provisions ~/.yondermesh/, auto-scans all local agent sessions)
 ymesh daemon
 
-# Connect an agent's session path
-ymesh connect claude-code
-
-# Query recent work across all devices
-ymesh query recent
+# Check what was found
+ymesh status
+ymesh agents
+ymesh sessions --limit 10
+ymesh active   # who is working right now
 ```
 
-Then add the MCP server to your agent config (`.claude/claude_desktop_config.json` or equivalent):
+Connect yondermesh to your agent via MCP:
+
+```bash
+# Register MCP server into Claude Code and Codex
+ymesh mcp register
+
+# Mount skills + MCP into all detected CLIs
+ymesh mount all
+```
+
+Or add manually to your agent config (`.claude/claude_desktop_config.json` or equivalent):
 
 ```json
 {
@@ -45,21 +62,17 @@ Then add the MCP server to your agent config (`.claude/claude_desktop_config.jso
 }
 ```
 
-Now any agent can call `recall_recent_work`, `whats_on_device`, or `handoff_task`.
+Now any MCP-capable agent can call `who_is_working`, `search_sessions`, `get_session_handoff`, and more.
 
-## What it does
+## Key features
 
-1. **Session harvesting** — reads native session formats (Claude Code JSONL, Codex, Aider git log, etc.) incrementally into local SQLite. No CLI modification needed.
-2. **Cross-device sync** — devices pair via E2E-encrypted relay. Code leaves your machine as ciphertext only.
-3. **MCP tool layer** — any CLI that supports MCP gets three tools: `recall_recent_work` (query recent sessions across the mesh), `whats_on_device` (inspect a remote device's project state), `handoff_task` (delegate a task to another agent).
-4. **Daily briefing** — "your 5 agents across 3 devices did 10 tasks today, 80% success rate" — a digest you can share.
-
-## What it doesn't do
-
-- **No UI** — config-file driven, daemon runs headless
-- **No cloud lock-in** — fully self-hostable; cloud relay is optional convenience
-- **No model proxy** — never touches your API keys
-- **No agent modification** — reads native files, exposes MCP, that's it
+- **27+ CLI adapters** — reads native session formats (Claude Code JSONL, Codex, Aider, Gemini, Goose, OpenHands, Cline, Crush, Pi, Qwen, Trae, Continue, …) without modifying the CLI
+- **MCP server** — 12 tools exposed over stdio JSON-RPC; any MCP-capable agent gets cross-device context
+- **Cross-device sync** — E2E-encrypted; the relay sees ciphertext only; self-host or use a shared relay
+- **Mount system** — non-invasively installs MCP servers, skills, and always-on context into each CLI's own config dir
+- **Session handoff** — extract a compacted handoff package (summaries + recent messages + task plan) and pass it to another agent
+- **Daily briefing** — "your N agents across M devices did K tasks today, X% success rate"
+- **No UI, no cloud lock-in, no model proxy, no agent modification**
 
 ## Architecture
 
@@ -92,12 +105,21 @@ Now any agent can call `recall_recent_work`, `whats_on_device`, or `handoff_task
 └───────────────────────────────────────────────────────┘
 ```
 
-## CLI Coverage
+Three planes that never cross-contaminate:
 
-yondermesh 的 mount 系统把扩展（MCP server / skill / always-on 段落）挂载到各 CLI。
-支持的 CLI 及其挂载策略：
+| Plane | Flow |
+|---|---|
+| **Local** | CLI native files → adapter → SessionStore (SQLite) → MCP server (stdio) |
+| **Sync** | SessionStore → relay agent → self-hosted relay (ciphertext only) → peer device |
+| **Mount** | ymesh skills / MCP config → CLI's own config dir (`~/.claude/`, `~/.codex/`, …) |
 
-| CLI | MCP 挂载 | Skill 挂载 | Always-on 注入 |
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full codemap and architectural invariants.
+
+## CLI coverage
+
+yondermesh reads native session formats from each CLI agent. Mount strategies per CLI:
+
+| CLI | MCP mount | Skill mount | Always-on injection |
 |---|---|---|---|
 | codex | mcp-toml (`~/.codex/config.toml`) | skill-symlink (`~/.codex/skills/`) | `~/.codex/AGENTS.md` |
 | claude-code | claude-mcp (`claude mcp add`) | — | `~/.claude/CLAUDE.md` |
@@ -108,24 +130,7 @@ yondermesh 的 mount 系统把扩展（MCP server / skill / always-on 段落）�
 | trae-cn | — | skill-symlink (`~/.trae-cn/skills/`) | — |
 | continue | — | skill-symlink (`~/.continue/skills/`) | — |
 
-### Trae 四变体覆盖机制
-
-Trae 实际上有四个客户端变体需要全覆盖：Trae IDE（国际版）、Trae IDE CN（中文版）、
-Trae Work（国际版）、Trae Work CN（中文版）。ymesh 用 2 个 CliTarget 覆盖全部 4 个变体：
-
-- 物理上只有 2 个用户级目录：`~/.trae`（国际版）和 `~/.trae-cn`（中文版）。
-- 每个目录下 IDE 和 Work 共享用户级 `skills/` 目录（用不同 profile，但用户级 skills 是共享的）。
-- 所以挂 2 个 CliTarget（`trae` + `trae-cn`）即覆盖 4 个变体（IDE + Work × 国际 + 中文）。
-
-Trae 的挂载策略与其它 CLI 不同，需特别注意：
-
-- **不支持 always-on 注入**：Trae 不读取 `project_rules.md` 之类的全局指令文件
-  （它通过 system prompt + skills 目录注入，不读全局指令文件）。ymesh 改用
-  skill-symlink 挂载 `trae-awareness` skill 来替代 always-on awareness 段落，让 Trae
-  在 skill 列表里就能发现 ymesh。
-- **不支持文件挂 MCP**：Trae 的 MCP 通过 IDE UI 配置，不是文件可挂。如需在 Trae 里
-  使用 ymesh MCP 工具，请在 Trae 设置里手动添加 MCP server（command: `ymesh`，
-  args: `["mcp"]`）。
+Full adapter matrix (27+ CLIs, coverage levels A/B/C): [docs/reference/adapters](https://goyondertogether.github.io/yondermesh/reference/adapters)
 
 ## Configuration
 
@@ -144,8 +149,7 @@ devices:
 # Sync relay (self-host or use official cloud)
 sync:
   relay_url: https://relay.your-domain.com
-  # E2E encryption key (auto-generated on first run)
-  key_file: ~/.yondermesh/key.pem
+  key_file: ~/.yondermesh/key.pem  # auto-generated on first run
 
 # MCP server
 mcp:
@@ -158,16 +162,40 @@ briefing:
   output: ~/.yondermesh/briefings
 ```
 
+## Documentation
+
+Full documentation: **https://goyondertogether.github.io/yondermesh/**
+
+- [Quickstart](https://goyondertogether.github.io/yondermesh/guide/quickstart)
+- [Architecture](https://goyondertogether.github.io/yondermesh/guide/architecture)
+- [CLI Reference](https://goyondertogether.github.io/yondermesh/reference/cli)
+- [MCP Tools](https://goyondertogether.github.io/yondermesh/reference/mcp-tools)
+- [Adapter Matrix](https://goyondertogether.github.io/yondermesh/reference/adapters)
+- [Configuration](https://goyondertogether.github.io/yondermesh/reference/config)
+
+## What it doesn't do
+
+- **No UI** — config-file driven, daemon runs headless
+- **No cloud lock-in** — fully self-hostable; cloud relay is optional convenience
+- **No model proxy** — never touches your API keys
+- **No agent modification** — reads native files, exposes MCP, that's it
+
 ## Roadmap
 
 - [x] **M1** — daemon + collector + local SQLite + MCP query tools + cross-device sync + briefing
 - [ ] **M2** — `handoff_task` (agent-to-agent task delegation, cross-device)
 - [ ] **M3** — enterprise: audit trail, RBAC, session replay, compliance reports
 
+## Contributing
+
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+This project follows a **docs-as-code** discipline: every code change must update the corresponding docs in the same commit. The doc-sync skill (`skills/doc-sync/`) automates the audit.
+
+## Security
+
+See [SECURITY.md](SECURITY.md). Threat model summary: local SQLite (no at-rest encryption), sync relay (ciphertext only), MCP stdio (local), mount (writes to CLI config dirs, never patches binaries).
+
 ## License
 
 MIT — by [未至之境 (GoYonderTogether)](https://github.com/GoYonderTogether)
-
-## Contributing
-
-Contributions welcome. This is an open-source project by 未至之境 (Yonder).
