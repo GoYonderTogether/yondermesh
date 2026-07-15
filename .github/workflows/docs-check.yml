@@ -1,0 +1,50 @@
+name: Docs Check
+
+# Run on every PR that touches docs, source, or scripts:
+#   1. Re-sync auto-generated doc pages and verify no drift.
+#   2. Verify all internal markdown links resolve.
+#   3. Verify the site builds.
+#
+# This is the docs-as-code gate: code change = doc change in the same PR.
+
+on:
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'scripts/docs/**'
+      - 'src/**'
+      - 'package.json'
+      - 'README.md'
+      - '.github/workflows/docs-check.yml'
+
+jobs:
+  drift-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: site/package.json
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install site deps (fallback allowed)
+        run: |
+          npm ci --prefix site || npm install --prefix site
+
+      - name: Build ymesh (so `ymesh help` works in sync)
+        run: npm run build
+
+      - name: Check doc drift (auto-generated pages match source)
+        run: node scripts/docs/check-drift.mjs
+
+      - name: Verify internal links
+        run: node scripts/docs/verify-links.mjs
+
+      - name: Build docs site
+        run: npm run build --prefix site

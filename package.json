@@ -42,7 +42,13 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "docs:dev": "npm run dev --prefix site",
+    "docs:build": "npm run build --prefix site",
+    "docs:preview": "npm run preview --prefix site",
+    "docs:sync": "npm run sync --prefix site",
+    "docs:check-drift": "node scripts/docs/check-drift.mjs",
+    "docs:verify-links": "node scripts/docs/verify-links.mjs"
   },
   "engines": {
     "node": ">=20.0.0"

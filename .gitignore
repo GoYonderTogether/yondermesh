@@ -1,9 +1,18 @@
 # 内部文档（不可开源，禁止提交）
 # 含架构设计、实施计划、验收基线等内部信息
-docs/
+# 只忽略顶层 docs/，不影响 scripts/docs/ 等子目录
+/docs/
+
+# 外部参考项目（仅本地学习用，禁止提交）
+examples/
 
 # 依赖
 node_modules/
+
+# VitePress 构建产物
+site/.vitepress/dist/
+site/.vitepress/cache/
+site/node_modules/
 
 # 构建产物
 dist/
@@ -45,3 +54,4 @@ coverage/
 # 临时文件
 tmp/
 temp/
+.aider*
