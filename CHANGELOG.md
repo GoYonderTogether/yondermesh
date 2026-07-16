@@ -25,7 +25,7 @@ cleaned reply, all in one call.
 - **3 trigger modes** — `stopped` (resume a stopped session with `--resume` and
   a message flag), `running` (inject into a live session in-place),
   `new` (launch a fresh session, with optional `model` and `effort`).
-- **28 CLIs wired** — claude, codex, hermes, gemini, goose, aider, amp, factory,
+- **23 CLIs wired** (Claude Code and Codex not yet wired — planned) — hermes, gemini, goose, aider, amp, factory,
   vibe, codebuddy, trae-cli, opencode, qwen, openhands, kimi, openclaw, pi,
   copilot, crush, cline, continue, antigravity, plus the IDE class (trae-ide,
   windsurf, cursor-ide, chatgpt). Each loads its wrapper on demand via
@@ -69,7 +69,7 @@ reference.
 - **Schema split** — `src/store/schema.ts` split into `SCHEMA` (CREATE TABLE only) + `SCHEMA_INDEXES` (CREATE INDEX) so migrations can run in between (fixes index creation on legacy DBs missing new columns).
 - **`detect` module** — `src/detect/agents.ts` provides unified agent detection (installed / coverage / mount strategies / wrapper support) for CLI + MCP.
 - **process-detector** — `src/store/process-detector.ts` infers alive sessions from PID + last-modified timestamps.
-- **Skills** — 4 new skills: `doc-sync` (canonical at `skills/doc-sync/SKILL.md`), `new-cli-onboarding`, `yondermesh-mailbox`, `trae-awareness`, `yondermesh-diagnose`.
+- **Skills** — 5 new skills: `doc-sync` (canonical at `skills/doc-sync/SKILL.md`), `new-cli-onboarding`, `yondermesh-mailbox`, `trae-awareness`, `yondermesh-diagnose`.
 
 ### Changed
 - **`mapGenericWrapper` priority scan** — now scans `Controller > Wrapper > CliWrapper > ApiWrapper` suffixes (previously only `*Controller`), unblocking 7 wrapper-class inject methods that were previously shadowed.
@@ -86,10 +86,10 @@ reference.
 
 ### Added
 - **Daemon + collector + local SQLite** — auto-harvests sessions from every CLI agent into `~/.yondermesh/yondermesh.db`.
-- **MCP server** — stdio JSON-RPC. Tools: `recall_recent_work`, `whats_on_device`, `handoff_task`, `who_is_working`, `list_active_sessions`, `search_sessions`.
+- **MCP server** — stdio JSON-RPC. Tools: `search_sessions`, `list_active_sessions`, `who_is_working`, `get_session_handoff`, `get_session_detail`, `get_overview`.
 - **CLI adapters** — Claude Code, Codex, Aider, Cass, Hermes, Continue, Windsurf, Gemini, Cursor, Copilot, Cline, OpenCode, Kimi, Trae, and more (see `site/reference/adapters.md` for the full matrix).
-- **Cross-device sync** — E2E-encrypted relay; ciphertext only leaves the device.
+- **Cross-device sync** — `planned`. E2E-encrypted relay design exists; not yet implemented.
 - **Mount system** — non-invasive MCP / skill / always-on injection into each CLI's config dir.
 - **Install / release / update** — `ymesh install`, `ymesh update`, `ymesh rollback`, with auto-rollback on failure.
-- **Daily briefing** — digest of agent activity across devices.
+- **Daily briefing** — `planned`. Activity digest design exists; not yet implemented.
 - **CLI** — `ymesh scan`, `sessions`, `active`, `daemon`, `mcp`, `mount`, `extract`, `handoff`, `state`, `mailbox`, `doctor`, etc.

@@ -55,8 +55,8 @@ ymesh doctor
 
 ## 我的 agent 里看不到 MCP 工具
 
-**症状**：agent 看不到 `recall_recent_work`、`whats_on_device`、
-`handoff_task` 等工具。
+**症状**：agent 看不到 `search_sessions`、`list_active_sessions`、
+`get_session_handoff` 等工具。
 
 **处理**：
 

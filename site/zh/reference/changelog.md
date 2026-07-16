@@ -25,7 +25,7 @@ outline: [2, 3]
 ### Added（新增）
 
 - **Daemon + collector + 本地 SQLite** — 自动从每个 CLI agent 采集 session 到 `~/.yondermesh/yondermesh.db`。
-- **MCP server** — stdio JSON-RPC。工具：`recall_recent_work`、`whats_on_device`、`handoff_task`、`who_is_working`、`list_active_sessions`、`search_sessions`。
+- **MCP server** — stdio JSON-RPC。工具：`search_sessions`、`list_active_sessions`、`get_session_handoff`、`who_is_working`、`list_active_sessions`、`search_sessions`。
 - **CLI adapters** — Claude Code、Codex、Aider、Cass、Hermes、Continue、Windsurf、Gemini、Cursor、Copilot、Cline、OpenCode、Kimi、Trae 等（完整矩阵见 `/reference/adapters`）。
 - **跨设备同步** — E2E 加密 relay；只有密文离开设备。
 - **Mount 系统** — 非侵入式 MCP / skill / always-on 注入到每个 CLI 的配置目录。

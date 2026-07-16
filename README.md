@@ -1,12 +1,14 @@
 # yondermesh
 
-> **The collaboration hub of the Agent era.** One daemon, one MCP server, zero intrusion — turn every CLI agent on every device into one working whole.
+> **Self-hosted Agent Context Bus.** One daemon, one MCP server, zero intrusion — turn every CLI agent on every device into one working whole.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node: >=20](https://img.shields.io/badge/node-%3E%3D20-green.svg)](https://nodejs.org/)
 [![Docs](https://img.shields.io/badge/docs-online-blue.svg)](https://goyondertogether.github.io/yondermesh/)
 
 **[English](README.md)** | [简体中文](README.zh-CN.md)
+
+> **Status labels:** `shipped` = implemented and tested · `preview` = code exists but not yet released · `planned` = not implemented (design only).
 
 ---
 
@@ -20,11 +22,11 @@ That fragmentation is the tax you pay every time you switch CLIs or machines. yo
 
 **yondermesh is a self-hosted Agent Context Bus — one daemon, one MCP server, zero intrusion.** It aggregates every CLI agent on every device into a single working whole: a shared working surface with cross-platform memory, cross-device real-time awareness, and the ability to hand work off without losing a beat.
 
-- **Collect** — every session from every CLI on every device flows into one local SQLite. Your agents stop being islands and start acting as one working whole.
-- **Sync** — end-to-end-encrypted cross-device sync via a self-hosted relay. Only ciphertext ever leaves your machine.
-- **Query** — any agent queries any other agent's context via MCP tools. Topology-aware, source-aware, project-aware.
-- **Hand off** — agent A picks up exactly where agent B stopped, even on a different machine. Sessions stop dying at the boundary; they become a continuous workflow.
-- **Send** — synchronously inject a user message into any connected CLI agent and get the reply back. 28 CLIs, 6 channels (cli-spawn / stdin / http-api / ws-rpc / tmux / applescript), 3 modes (stopped / running / new). Even if the target agent has no model configured, you still get an error message instead of silence.
+- **Collect** `shipped` — every session from every CLI on every device flows into one local SQLite. Your agents stop being islands and start acting as one working whole.
+- **Sync** `planned` — end-to-end-encrypted cross-device sync via a self-hosted relay. Not yet implemented; the sync code path is a TODO stub.
+- **Query** `shipped` — any agent queries any other agent's context via MCP tools. Topology-aware, source-aware, project-aware.
+- **Hand off** `shipped` — agent A picks up exactly where agent B stopped, even on a different machine. Sessions stop dying at the boundary; they become a continuous workflow.
+- **Send** `preview` — synchronously inject a user message into any connected CLI agent and get the reply back. 23 CLIs (Claude Code and Codex not yet wired — planned). 6 channels (cli-spawn / stdin / http-api / ws-rpc / tmux / applescript), 3 modes (stopped / running / new). Even if the target agent has no model configured, you still get an error message instead of silence.
 
 ## Quick start
 
@@ -81,13 +83,14 @@ ymesh send --cli opencode --session <id> --mode stopped --message "Now do the sa
 
 ## Key features
 
-- **28 CLI adapters, one working whole** — reads native session formats from Claude Code, Codex, Hermes, Gemini, Goose, Aider, Amp, Factory, Vibe, CodeBuddy, Trae CLI, OpenCode, Qwen, OpenHands, Kimi, OpenClaw, Pi, Copilot, Crush, Cline, Continue, Antigravity, plus the IDE class (Trae IDE, Windsurf, Cursor IDE, ChatGPT). No CLI modification. Full matrix: [adapters reference](https://goyondertogether.github.io/yondermesh/reference/adapters).
+- **27 CLI adapters, one working whole** — reads native session formats from Claude Code, Codex, Hermes, Gemini, Goose, Aider, Amp, Factory, Vibe, CodeBuddy, Trae CLI, OpenCode, Qwen, OpenHands, Kimi, OpenClaw, Pi, Copilot, Crush, Cline, Continue, Antigravity, plus the IDE class (Trae IDE, Windsurf, Cursor IDE, ChatGPT). No CLI modification. Full matrix: [adapters reference](https://goyondertogether.github.io/yondermesh/reference/adapters).
 - **MCP server** — tools exposed over stdio JSON-RPC; any MCP-capable agent gets cross-device context, handoff, and synchronous send.
-- **Cross-device sync** — E2E-encrypted; the relay sees ciphertext only; self-host or use a shared relay.
+- **MCP server** — tools exposed over stdio JSON-RPC; any MCP-capable agent gets cross-device context, handoff, and synchronous send.
 - **Mount system** — non-invasively installs MCP servers, skills, and always-on context into each CLI's own config dir.
-- **Session handoff** — extract a compacted handoff package (summaries + recent messages + task plan) and pass it to another agent.
-- **Synchronous injection (Mailbox v3)** — `ymesh send` / `yondermesh_send` deliver a user message to any connected CLI and return the cleaned reply. 6 trigger channels, 3 modes (stopped / running / new, with optional `model` + `effort` for `new`). Failure is never silent: unknown CLI, missing model, upstream API rate-limit all surface as text in the response.
-- **Daily briefing** — "your N agents across M devices did K tasks today, X% success rate".
+- **Session handoff** `shipped` — extract a compacted handoff package (summaries + recent messages + task plan) and pass it to another agent.
+- **Synchronous injection (Mailbox v3)** `preview` — `ymesh send` / `yondermesh_send` deliver a user message to any connected CLI and return the cleaned reply. 23 CLIs (Claude Code and Codex not yet wired — planned). 6 trigger channels, 3 modes (stopped / running / new, with optional `model` + `effort` for `new`). Failure is never silent: unknown CLI, missing model, upstream API rate-limit all surface as text in the response.
+- **Cross-device sync** `planned` — E2E-encrypted relay design exists; the sync code path is a TODO stub, not yet functional.
+- **Daily briefing** `planned` — activity digest design exists; the briefing generator is a TODO stub, not yet functional.
 - **No UI, no cloud lock-in, no model proxy, no agent modification.**
 
 ## Architecture
@@ -122,20 +125,20 @@ ymesh send --cli opencode --session <id> --mode stopped --message "Now do the sa
 └───────────────────────────────────────────────────────┘
 ```
 
-Four planes that never cross-contaminate:
+Four planes (three shipped, one planned):
 
-| Plane | Flow |
-|---|---|
-| **Local** | CLI native files → adapter → SessionStore (SQLite) → MCP server (stdio) |
-| **Sync** | SessionStore → relay agent → self-hosted relay (ciphertext only) → peer device |
-| **Mount** | ymesh skills / MCP config → CLI's own config dir (`~/.claude/`, `~/.codex/`, …) |
-| **Trigger** | MailboxCore → TriggerAdapter (cli-spawn / stdin / http-api / ws-rpc / tmux / applescript) → target CLI → ReplyAdapter → audit log |
+| Plane | Flow | Status |
+|---|---|---|
+| **Local** | CLI native files → adapter → SessionStore (SQLite) → MCP server (stdio) | `shipped` |
+| **Sync** | SessionStore → relay agent → self-hosted relay (ciphertext only) → peer device | `planned` |
+| **Mount** | ymesh skills / MCP config → CLI's own config dir (`~/.claude/`, `~/.codex/`, …) | `shipped` |
+| **Trigger** | MailboxCore → TriggerAdapter (cli-spawn / stdin / http-api / ws-rpc / tmux / applescript) → target CLI → ReplyAdapter → audit log | `preview` |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full codemap and architectural invariants.
 
 ## CLI coverage
 
-yondermesh reads native session formats from each CLI agent, and — through the trigger layer — can synchronously inject messages into any of the 28 supported CLIs. Mount strategies per CLI:
+yondermesh reads native session formats from each CLI agent, and — through the trigger layer — can synchronously inject messages into 23 of those CLIs. Mount strategies per CLI:
 
 | CLI | MCP mount | Skill mount | Always-on injection |
 |---|---|---|---|
@@ -148,37 +151,24 @@ yondermesh reads native session formats from each CLI agent, and — through the
 | trae-cn | — | skill-symlink (`~/.trae-cn/skills/`) | — |
 | continue | — | skill-symlink (`~/.continue/skills/`) | — |
 
-Full adapter matrix (28 CLIs, coverage levels A/B/C): [docs/reference/adapters](https://goyondertogether.github.io/yondermesh/reference/adapters)
+Full adapter matrix (27 CLIs, coverage levels A/B/C): [docs/reference/adapters](https://goyondertogether.github.io/yondermesh/reference/adapters)
 
 ## Configuration
 
-`~/.yondermesh/config.yaml`:
+> `planned` — The daemon does **not** currently parse `config.yaml`. It uses built-in defaults defined in `src/daemon/config.ts`. The fields below are the ones actually active today.
 
-```yaml
-# Devices and agents to monitor
-devices:
-  - name: macbook
-    agents:
-      - type: claude-code
-        path: ~/.claude/projects
-      - type: codex
-        path: ~/.codex/sessions
+| Setting | Default | Override |
+|---|---|---|
+| Data directory | `~/.yondermesh` | `YONDERMESH_HOME=/path/to/dir` |
+| SQLite DB | `<data-dir>/yondermesh.db` | `--db <path>` CLI flag |
+| Reconcile interval | `60000` ms (1 min) | — |
+| Watch debounce | `1000` ms | — |
+| Auto-mount extensions | `true` | — |
+| Skip cass adapter | `false` | — |
+| Skip Claude live watcher | `false` | — |
+| Skip Codex live watcher | `false` | — |
 
-# Sync relay (self-host or use official cloud)
-sync:
-  relay_url: https://relay.your-domain.com
-  key_file: ~/.yondermesh/key.pem  # auto-generated on first run
-
-# MCP server
-mcp:
-  enabled: true
-  port: 0  # stdio mode by default
-
-# Daily briefing
-briefing:
-  enabled: true
-  output: ~/.yondermesh/briefings
-```
+A `config.yaml` with `devices`, `sync`, `mcp`, and `briefing` sections is the design target, not a working configuration today.
 
 ## Documentation
 
@@ -200,10 +190,13 @@ Full documentation: **https://goyondertogether.github.io/yondermesh/**
 
 ## Roadmap
 
-- [x] **M1** — daemon + collector + local SQLite + MCP query tools + cross-device sync + briefing
-- [x] **M2** — `handoff_task` (agent-to-agent task delegation, cross-device)
-- [x] **Mailbox v3** — synchronous injection (`ymesh send` / `yondermesh_send`); 28 CLIs, 6 trigger channels, 3 modes
+- [x] **M1** — daemon + collector + local SQLite + MCP query tools
+- [x] **M2** — session handoff (`get_session_handoff`, `ymesh handoff`)
+- [x] **Mailbox v3** — synchronous injection (`ymesh send` / `yondermesh_send`); 23 CLIs, 6 trigger channels, 3 modes
 - [ ] **M3** — enterprise: audit trail, RBAC, session replay, compliance reports
+- `planned` **Cross-device sync** — E2E-encrypted relay; sync code path is a TODO stub
+- `planned` **Daily briefing** — activity digest; generator is a TODO stub
+- `planned` **config.yaml parsing** — daemon currently uses built-in defaults only
 
 ## Contributing
 

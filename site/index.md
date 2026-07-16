@@ -21,14 +21,17 @@ features:
     title: Collect
     details: Auto-harvest sessions from every CLI agent (Claude Code, Codex, Aider, Gemini, Cursor, Windsurf, Trae, Continue, …) on every device into local SQLite. No CLI modification needed.
   - icon: 🔁
-    title: Sync
-    details: E2E-encrypted cross-device sync via self-hosted relay. Code leaves your machine as ciphertext only.
+    title: "Sync (planned)"
+    details: E2E-encrypted cross-device sync via self-hosted relay. Not yet implemented — the sync code path is a TODO stub.
   - icon: 🔍
     title: Query
-    details: Any agent queries any other agent's context via MCP tools. recall_recent_work, whats_on_device, handoff_task — all native MCP.
+    details: Any agent queries any other agent's context via MCP tools. search_sessions, list_active_sessions, get_session_handoff — all native MCP.
   - icon: 🤝
     title: Hand off
     details: Agent A picks up where agent B left off, even on a different machine. Compacted summaries + tool trail + plan shipped in one JSON package.
+  - icon: 📨
+    title: "Send (preview)"
+    details: Synchronously inject a message into any connected CLI agent and get the reply back. 23 CLIs, 6 trigger channels, 3 modes. Claude Code and Codex support is planned.
   - icon: 🧠
     title: Memory-aware
     details: Topology-aware (root / subagent / sidechain), source-aware (claude / codex / cass / hermes / continue / windsurf / …), and project-aware (cwd / projectPath).

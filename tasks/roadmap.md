@@ -37,7 +37,7 @@
 
 ## M0 — 真相对齐（仅改文档，零代码风险，最先做）
 
-### [ ] T0.1 能力状态标签体系 + README 降承诺
+### [x] T0.1 能力状态标签体系 + README 降承诺
 - **目标**：README / README.zh-CN 里每个能力带 `shipped | preview | planned` 标签，与代码事实一致。
 - **执行步骤**：
   1. 在 README 顶部加图例：`shipped`=有测试有版本；`preview`=代码在、未发版；`planned`=未实现。
@@ -48,7 +48,7 @@
 - **依赖**：无。
 - **影响文件**：`README.md`、`README.zh-CN.md`。
 
-### [ ] T0.2 清除幽灵工具名 + config.yaml 降级
+### [x] T0.2 清除幽灵工具名 + config.yaml 降级
 - **目标**：所有对外文档不再出现代码里不存在的 MCP 工具名，config.yaml 不再冒充可用配置。
 - **执行步骤**：
   1. 全仓搜 `recall_recent_work` / `whats_on_device` / `handoff_task`，在 CHANGELOG、site/index.md 等处替换为真实工具（`search_sessions` / `list_active_sessions` / `get_session_handoff`）。
@@ -57,7 +57,7 @@
 - **依赖**：无。
 - **影响文件**：`CHANGELOG.md`、`site/index.md`、`site/reference/config.md`、`README.md`（+ zh 镜像）。
 
-### [ ] T0.3 数字与命令口径统一
+### [x] T0.3 数字与命令口径统一
 - **目标**：适配器数、工具数、命令清单三处一致，且不再手写。
 - **执行步骤**：
   1. 统计 `src/*/` 真实适配器目录数（排除 detect/mailbox/sdk/trigger/mount/store/mcp/daemon/install/extract/briefing/sync/bin/limited/index.ts）作为权威数字，README/CHANGELOG/help 统一。
@@ -67,7 +67,7 @@
 - **依赖**：无。
 - **影响文件**：`README.md`（+zh）、`ARCHITECTURE.md`、`CHANGELOG.md`、`src/bin/ymesh.ts`（help 文本，如需）。
 
-### [ ] T0.4 站点首页与能力叙事对齐
+### [x] T0.4 站点首页与能力叙事对齐
 - **目标**：site/index.md 反映五能力（含 Send），Sync 卡标 planned。
 - **执行步骤**：补 Send 卡片；Sync 卡加 planned 徽标；Query 卡工具名换成真实工具；hero slogan 统一为"Self-hosted Agent Context Bus"（定义）+ 叙事一句。
 - **验收条件**：`npm run --prefix site docs:build`（或等价）通过；index.md 五能力齐全无幽灵工具名。

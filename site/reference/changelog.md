@@ -25,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **Daemon + collector + local SQLite** — auto-harvests sessions from every CLI agent into `~/.yondermesh/yondermesh.db`.
-- **MCP server** — stdio JSON-RPC. Tools: `recall_recent_work`, `whats_on_device`, `handoff_task`, `who_is_working`, `list_active_sessions`, `search_sessions`.
+- **MCP server** — stdio JSON-RPC. Tools: `search_sessions`, `list_active_sessions`, `get_session_handoff`, `who_is_working`, `list_active_sessions`, `search_sessions`.
 - **CLI adapters** — Claude Code, Codex, Aider, Cass, Hermes, Continue, Windsurf, Gemini, Cursor, Copilot, Cline, OpenCode, Kimi, Trae, and more (see `/reference/adapters` for the full matrix).
 - **Cross-device sync** — E2E-encrypted relay; ciphertext only leaves the device.
 - **Mount system** — non-invasive MCP / skill / always-on injection into each CLI's config dir.

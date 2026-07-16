@@ -182,13 +182,13 @@ ymesh mcp call who_is_working
 
 The most useful tools to try first:
 
-- `recall_recent_work` — returns recent sessions across the mesh. Ask your
+- `search_sessions` — returns recent sessions across the mesh. Ask your
   agent: "What did my agents work on recently?"
-- `whats_on_device` — inspects a device's project state. Ask: "What's on my
+- `list_active_sessions` — inspects a device's project state. Ask: "What's on my
   laptop right now?"
 - `who_is_working` — lists currently active sessions. Ask: "Who is working
   right now?"
-- `handoff_task` — builds a compacted handoff package for another agent to pick
+- `get_session_handoff` — builds a compacted handoff package for another agent to pick
   up.
 
 ## Talk to any agent, get a reply

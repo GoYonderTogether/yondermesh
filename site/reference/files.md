@@ -58,7 +58,7 @@ src/
 ├── mcp/                    MCP server
 │   ├── server.ts           McpServer class — stdio JSON-RPC, tool list (see /reference/mcp-tools)
 │   ├── register.ts         Register into Claude Code / Codex
-│   ├── codex-handoff.ts    Builds HandoffPackage for handoff_task / ymesh handoff
+│   ├── codex-handoff.ts    Builds HandoffPackage for get_session_handoff / ymesh handoff
 │   ├── tools.ts            Tool helpers
 │   └── index.ts            Barrel
 ├── mount/                  Mount system (non-invasive CLI extension)

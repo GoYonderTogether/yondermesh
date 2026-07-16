@@ -75,11 +75,11 @@ ymesh handoff <session-id>
 ymesh handoff <session-id> --json --tail 50
 ```
 
-或者，在任意支持 MCP 的 agent 内部直接调用 `handoff_task` MCP 工具 —— 它
+或者，在任意支持 MCP 的 agent 内部直接调用 `get_session_handoff` MCP 工具 —— 它
 会返回相同的浓缩 handoff 包（摘要 + 最近的 tool call + plan）作为 JSON，
 可直接注入给接收方 agent。
 
-`ymesh handoff` 的参数见 [CLI 命令](/zh/reference/cli)，`handoff_task` 的
+`ymesh handoff` 的参数见 [CLI 命令](/zh/reference/cli)，`get_session_handoff` 的
 schema 见 [MCP 工具](/zh/reference/mcp-tools)。
 
 ## 问：怎么新增一个 CLI adapter？

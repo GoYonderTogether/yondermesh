@@ -152,7 +152,7 @@ The same physical session can be harvested by two different importers — most c
 Two commands turn sessions into portable artifacts:
 
 - **`ymesh extract`** dumps every user requirement and assistant response for a project to NDJSONL files (one per kind), indexed by line number and session id. Powers corpus export and offline analysis. See `src/extract/`.
-- **`ymesh handoff <id>`** builds a `HandoffPackage` — compacted summaries plus recent messages plus a task plan — for a single session, so agent B can pick up where agent A left off. The same builder backs the `handoff_task` MCP tool. See `src/mcp/codex-handoff.ts`.
+- **`ymesh handoff <id>`** builds a `HandoffPackage` — compacted summaries plus recent messages plus a task plan — for a single session, so agent B can pick up where agent A left off. The same builder backs the `get_session_handoff` MCP tool. See `src/mcp/codex-handoff.ts`.
 
 Both commands accept the shared filter flags (`--source`, `--cwd-prefix`, `--project`, `--from`, `--to`, `--limit`). See the [CLI reference](/reference/cli) for the full flag list.
 
@@ -160,5 +160,5 @@ Both commands accept the shared filter flags (`--source`, `--cwd-prefix`, `--pro
 
 - [Daemon](/guide/daemon) — how sessions get harvested: the scan / watch / reconcile loop.
 - [CLI Commands](/reference/cli) — the complete `ymesh` command surface, auto-generated from `ymesh help`.
-- [MCP Server](/guide/mcp) — the MCP tools (`recall_recent_work`, `whats_on_device`, `handoff_task`, `who_is_working`, …) that expose sessions to agents.
+- [MCP Server](/guide/mcp) — the MCP tools (`search_sessions`, `list_active_sessions`, `get_session_handoff`, `who_is_working`, …) that expose sessions to agents.
 - [Architecture](/guide/architecture) — the three planes and the invariants that govern session storage.

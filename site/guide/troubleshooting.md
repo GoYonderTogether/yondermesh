@@ -58,8 +58,8 @@ are not appearing in the local store.
 
 ## MCP tools are not appearing in my agent
 
-**Symptoms**: The agent does not see `recall_recent_work`, `whats_on_device`,
-`handoff_task`, etc.
+**Symptoms**: The agent does not see `search_sessions`, `list_active_sessions`,
+`get_session_handoff`, etc.
 
 **Fix**:
 

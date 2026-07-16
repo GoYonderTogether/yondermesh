@@ -58,7 +58,7 @@ src/
 ├── mcp/                    MCP server
 │   ├── server.ts           McpServer 类 — stdio JSON-RPC、工具列表（见 /reference/mcp-tools）
 │   ├── register.ts         注册到 Claude Code / Codex
-│   ├── codex-handoff.ts    为 handoff_task / ymesh handoff 构建 HandoffPackage
+│   ├── codex-handoff.ts    为 get_session_handoff / ymesh handoff 构建 HandoffPackage
 │   ├── tools.ts            工具辅助
 │   └── index.ts            Barrel
 ├── mount/                  Mount 系统（非侵入式 CLI 扩展）

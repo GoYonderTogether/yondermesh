@@ -39,7 +39,7 @@ Trigger plane      MailboxCore → TriggerAdapter (cli-spawn / stdin / http-api 
 
 ### CLI entry & command surface (`src/bin/`, `src/`)
 
-- `src/bin/ymesh.ts` — **CLI entry point**. Parses argv, dispatches to `cmd*` functions. No external CLI framework (pure hand-rolled `parseArgs`). Commands: `help`, `version`, `scan`, `status`, `sessions`, `active`, `daemon`, `install`, `service`, `releases`, `update`, `rollback`, `mcp`, `doctor`, `mount`, `extract`, `handoff`, `state`, `mailbox`. Supports `--json` global flag for script consumption. The help text in `cmdHelp()` is the canonical command list — `site/reference/cli.md` is auto-regenerated from it by `scripts/docs/gen-cli-docs.mjs`.
+- `src/bin/ymesh.ts` — **CLI entry point**. Parses argv, dispatches to `cmd*` functions. No external CLI framework (pure hand-rolled `parseArgs`). Commands: `help`, `version`, `scan`, `status`, `sessions`, `query`, `active`, `waiting`, `daemon`, `install`, `service`, `releases`, `update`, `rollback`, `mcp`, `doctor`, `mount`, `extract`, `handoff`, `state`, `mailbox`, `agents`, `launch`, `inject`, `transfer`, `send`. Supports `--json` global flag for script consumption. The help text in `cmdHelp()` is the canonical command list — `site/reference/cli.md` is auto-regenerated from it by `scripts/docs/gen-cli-docs.mjs`.
 - `src/index.ts` — **Public SDK entry**. Re-exports every adapter's importer/wrapper/inject types so external code can build on top of ymesh without reaching into `src/<adapter>/` directly.
 
 ### Session storage (`src/store/`)

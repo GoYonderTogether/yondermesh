@@ -6,7 +6,7 @@ outline: [2, 3]
 
 # Configuration
 
-yondermesh is config-file driven. The daemon, MCP server, sync agent, and briefing generator all read from a single YAML file at `~/.yondermesh/config.yaml`. This page documents every section and field.
+> **`planned`** — The daemon does **not** currently parse `config.yaml`. It uses built-in defaults defined in `src/daemon/config.ts`. The YAML format documented below is the design target, not a working configuration today. Only the fields in the [Currently active settings](#currently-active-settings) table are read by the daemon right now.
 
 ## Location
 
@@ -62,6 +62,8 @@ daemon:
 
 ## devices
 
+> `planned` — not parsed by the daemon today. The daemon auto-discovers CLI sessions on the local machine; it does not read a `devices` list from config.
+
 List of devices and the agent sessions to harvest from each. Each device has a friendly `name` and an `agents` array; each agent entry tells yondermesh which adapter to use and where the native session files live.
 
 ```yaml
@@ -88,6 +90,8 @@ The adapter `type` maps to a canonical source ID inside the store (e.g. `claude-
 
 ## sync
 
+> `planned` — the sync code path (`src/sync/agent.ts`) is a TODO stub. This section documents the design target only.
+
 Cross-device sync configuration. When present, the daemon's sync agent encrypts new sessions with the local key and pushes ciphertext to the relay; peer updates are pulled and decrypted on the other side.
 
 ```yaml
@@ -104,6 +108,8 @@ sync:
 Architectural invariant: ciphertext only leaves the device. See `/guide/sync` for the relay protocol and how to self-host.
 
 ## mcp
+
+> `planned` — the MCP server always runs in stdio mode. It does not read this section from config.
 
 MCP server configuration. yondermesh speaks stdio JSON-RPC by default — agents connect via `command: ymesh, args: ["mcp"]`.
 
@@ -122,6 +128,8 @@ See `/reference/mcp-tools` for the canonical tool list and `/guide/mcp` for regi
 
 ## briefing
 
+> `planned` — the briefing generator (`src/briefing/generator.ts`) is a TODO stub. This section documents the design target only.
+
 Daily digest generator. Produces a human-readable summary of agent activity across all devices over the last 24h.
 
 ```yaml
@@ -135,9 +143,26 @@ briefing:
 | `briefing.enabled` | boolean | `true` | Whether the daemon writes a daily briefing |
 | `briefing.output` | string | `~/.yondermesh/briefings` | Directory where dated briefing files are written |
 
+## Currently active settings
+
+These fields mirror `DaemonConfig` in `src/daemon/config.ts` and are the only settings the daemon actually reads today. They are set via environment variables and CLI flags, not via `config.yaml`.
+
+| Field | Default | How to override |
+|---|---|---|
+| Data directory | `~/.yondermesh` | `YONDERMESH_HOME=/path/to/dir` |
+| SQLite DB | `<data-dir>/yondermesh.db` | `--db <path>` CLI flag |
+| PID file | `<data-dir>/daemon.pid` | `--pid-file <path>` CLI flag |
+| Reconcile interval | `60000` ms (1 min) | (hardcoded in `defaultDaemonConfig()`) |
+| Watch debounce | `1000` ms | (hardcoded in `defaultDaemonConfig()`) |
+| Auto-mount extensions | `true` | (hardcoded in `defaultDaemonConfig()`) |
+| Device ID | `os.hostname()` | (hardcoded in `defaultDaemonConfig()`) |
+| Skip cass adapter | `false` (auto-skips if DB absent) | (internal flag) |
+| Skip Claude live watcher | `false` | (internal flag) |
+| Skip Codex live watcher | `false` | (internal flag) |
+
 ## daemon
 
-Optional tuning knobs for the daemon's scan/watch loop. All fields default to the values shown; omit the section entirely to accept defaults. These fields mirror `DaemonConfig` in `src/daemon/config.ts`.
+Optional tuning knobs for the daemon's scan/watch loop. All fields default to the values shown; omit the section entirely to accept defaults. These fields mirror `DaemonConfig` in `src/daemon/config.ts`. They are **not** read from `config.yaml` today — they are hardcoded defaults that can only be overridden via environment variables and CLI flags.
 
 | Field | Type | Default | Description |
 |---|---|---|---|

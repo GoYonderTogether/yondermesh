@@ -105,12 +105,12 @@ result is cross-platform memory without cloud lock-in.
 Any MCP-capable agent queries any other agent's context through a small set of
 MCP tools:
 
-- `recall_recent_work` — query recent sessions across the entire mesh.
-- `whats_on_device` — inspect a remote device's project state.
+- `search_sessions` — query recent sessions across the entire mesh.
+- `list_active_sessions` — inspect a remote device's project state.
 - `who_is_working` — see which agents are currently active.
 - `list_active_sessions` — enumerate live sessions.
 - `search_sessions` — full-text search over harvested sessions.
-- `handoff_task` — delegate a task to another agent.
+- `get_session_handoff` — delegate a task to another agent.
 
 Because the store is [topology-aware](/guide/sessions) (root / subagent /
 sidechain), source-aware (`claude`, `codex`, `cass`, `hermes`, `continue`,
@@ -127,7 +127,7 @@ summary plus recent tool calls plus task plan — that can be fed into another
 agent's context window. This is the bridge that turns isolated sessions into a
 continuous workflow across devices.
 
-The same mechanism powers the `handoff_task` MCP tool, so an agent can request a
+The same mechanism powers the `get_session_handoff` MCP tool, so an agent can request a
 handoff package programmatically without a human in the loop.
 
 ### Send

@@ -85,12 +85,12 @@ ymesh handoff <session-id>
 ymesh handoff <session-id> --json --tail 50
 ```
 
-Or, from inside any MCP-capable agent, call the `handoff_task` MCP tool — it
+Or, from inside any MCP-capable agent, call the `get_session_handoff` MCP tool — it
 returns the same compacted handoff package (summary + recent tool calls +
 plan) as JSON, ready to inject into the receiving agent.
 
 See [CLI Commands](/reference/cli) for `ymesh handoff` flags and
-[MCP Tools](/reference/mcp-tools) for the `handoff_task` schema.
+[MCP Tools](/reference/mcp-tools) for the `get_session_handoff` schema.
 
 ## Q: How do I add a new CLI adapter?
 

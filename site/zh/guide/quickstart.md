@@ -172,11 +172,11 @@ ymesh mcp call who_is_working
 
 最先值得试的几个工具：
 
-- `recall_recent_work`——返回整个 mesh 中的近期 session。问你的 Agent："我的 Agent 们最近
+- `search_sessions`——返回整个 mesh 中的近期 session。问你的 Agent："我的 Agent 们最近
   在做什么？"
-- `whats_on_device`——检查某台设备的项目状态。问："我的笔记本上现在有什么？"
+- `list_active_sessions`——检查某台设备的项目状态。问："我的笔记本上现在有什么？"
 - `who_is_working`——列出当前活跃的 session。问："现在谁在干活？"
-- `handoff_task`——为另一个 Agent 构建一个浓缩的交接包。
+- `get_session_handoff`——为另一个 Agent 构建一个浓缩的交接包。
 
 ## 向任意 Agent 提问，拿回回复
 
