@@ -8,7 +8,9 @@ outline: [2, 3]
 
 Mount 系统是 yondermesh 在不修改其它 CLI 的前提下扩展它们的方式。**Mount** 把一个 ymesh 扩展安装到 CLI 自己的配置目录（`~/.claude/`、`~/.codex/`、`~/.cursor/` 等）。CLI 通过自己原生的配置读取机制发现扩展 —— ymesh 只往 CLI 的配置目录写文件和符号链接，绝不修补 CLI 二进制或它的 session 写入器。
 
-这是 yondermesh 三平面架构（Local、Sync、Mount）中的 **Mount 平面**。它实现在 `src/mount/`，是把 ymesh 能力注入机器上每个支持的 CLI 的唯一入口。
+这是 yondermesh 四平面架构（Local、Sync、Mount、Trigger）中的 **Mount 平面**。它实现在 `src/mount/`，是把 ymesh 能力注入机器上每个支持的 CLI 的唯一入口。
+
+yondermesh 端到端支持 **28 个 CLI** —— mount 系统触达那些暴露配置文件接口的 CLI，触发层（`src/trigger/`）则触达全部 28 个 CLI 用于同步消息注入。两个平面刻意分开：mount 关注被动存在（MCP 配置、skill、always-on 上下文），trigger 关注主动投递（cli-spawn / stdin / http-api / ws-rpc / tmux / applescript）。
 
 ## Mount 是什么
 
@@ -61,7 +63,7 @@ ymesh mount remove    # 从每个 CLI 卸载所有 ymesh 扩展
 
 ## 支持的 CLI 及其策略
 
-公开的 CLI 覆盖表（来自仓库 README，源数据在 `src/mount/registry.ts`）：
+yondermesh 端到端支持 **28 个 CLI** —— 每一个都可以通过 `ymesh send` / `yondermesh_send`（触发平面）同步注入；暴露配置文件接口的那些还可以被挂载（挂载平面）。下面的公开 CLI 覆盖表（源数据在 `src/mount/registry.ts`）展示的是挂载平面策略；触发平面覆盖更广，位于 wrapper 注册表（`src/mcp/tools.ts` 的 `WRAPPER_LOADERS`）。
 
 | CLI | MCP 挂载 | Skill 挂载 | Always-on 注入 |
 |---|---|---|---|
@@ -74,7 +76,7 @@ ymesh mount remove    # 从每个 CLI 卸载所有 ymesh 扩展
 | trae-cn | — | skill-symlink (`~/.trae-cn/skills/`) | — |
 | continue | — | skill-symlink (`~/.continue/skills/`) | — |
 
-注册表声明了更多 CLI（Factory、Vibe、CodeBuddy、Copilot、Pi / OMP / GSD-Pi、OpenHands、Goose、Crush、Cline、Antigravity、Amp、Qwen、Hermes 以及 IDE 共享变体）。部分 CLI（Aider、OpenClaw、Kimi、ChatGPT 桌面版）未声明任何挂载能力，会被检测但不挂载。完整的自动生成实时矩阵见 [CLI 适配器](/zh/reference/adapters) 页面。
+注册表声明了更多 CLI（Factory、Vibe、CodeBuddy、Copilot、Pi / OMP / GSD-Pi、OpenHands、Goose、Crush、Cline、Antigravity、Amp、Qwen、Hermes 以及 IDE 共享变体）。部分 CLI（Aider、OpenClaw、Kimi、ChatGPT 桌面版）未声明任何挂载能力，会被检测但不挂载。完整的自动生成实时矩阵见 [CLI 适配器](/zh/reference/adapters) 页面。至于触发平面覆盖 —— 也就是 `ymesh send` 能跟 28 个 CLI 里的哪些对话 —— 见 `src/mcp/tools.ts` 的 wrapper loader；触发层独立于挂载层，能触达挂载无法触达的 CLI。
 
 ## 策略实现
 

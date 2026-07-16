@@ -178,10 +178,46 @@ ymesh mcp call who_is_working
 - `who_is_working`——列出当前活跃的 session。问："现在谁在干活？"
 - `handoff_task`——为另一个 Agent 构建一个浓缩的交接包。
 
+## 向任意 Agent 提问，拿回回复
+
+`ymesh send` 是同步注入的入口 —— 它向任意已接入的 CLI agent 发一条 user message，并返回
+清洗后的回复，全部一次调用完成。这是把 yondermesh 从被动可观测性平面变成主动协作平面的
+那一步。
+
+```bash
+# 向一个新 spawn 的 hermes session 提问，拿回答案
+ymesh send --cli hermes --mode new --message "用一句话总结当前分支最新一次 commit。"
+
+# 恢复一个已停止的 opencode session，追问一句
+ymesh send --cli opencode --session <id> --mode stopped --message "再对上一次 commit 做同样的事。"
+
+# 向一个运行中的 session 原地注入
+ymesh send --cli opencode --session <id> --mode running --message "状态检查：你现在在做什么？"
+
+# 机器可读输出，便于脚本消费
+ymesh send --cli hermes --mode new --message "列出本仓库下的所有打开文件。" --json
+```
+
+`--mode` 决定消息怎么到达目标 CLI：
+
+- `new`（默认）—— 创建新 session。可选传 `--model` 和 `--effort` 控制模型和推理深度。
+- `stopped` —— 用 `--resume` 加 message 恢复一个之前停止的 session，并捕获回复。
+- `running` —— 通过 CLI 的 stdin / API / tmux / applescript 通道向运行中 session 原地注入。
+
+回复会经过 `ReplyAdapter` —— 一个纯函数清洗器，去掉 ANSI、丢掉 CLI banner 和日志行、
+折叠空行 —— 所以你拿到的是 Agent 真正的回答，而不是它的启动噪声。完整线程（你的消息 +
+回复）会被审计写入 `yondermesh_mailbox_check` 也读的那张 `agent_messages` 表，方便后续查询。
+
+如果出问题（未知 CLI、未配 model、上游 API 限流、非零退出），`send` 永不 hang、永不抛错 ——
+它会带着 `delivered=false` 和 `response` 里的错误文本返回，让你看清发生了什么。退出码：
+`0` 投递成功，`2` 未投递，`1` 校验或意外错误。
+
+MCP 客户端通过 `yondermesh_send` 工具获得相同能力 —— schema 见 [MCP Server](/zh/guide/mcp)。
+
 ## 下一步
 
-- [架构](/zh/guide/architecture)——了解三个平面（local / sync / mount）、代码地图、以及
-  保持它们干净的不变量。
+- [架构](/zh/guide/architecture)——了解四个平面（local / sync / mount / trigger）、代码
+  地图、以及保持它们干净的不变量。
 - [MCP Server](/zh/guide/mcp)——完整的工具列表、请求/响应结构，以及服务器如何注册到各
   CLI。
 - [CLI 命令](/zh/reference/cli)——完整的命令参考，由 `ymesh help` 自动生成。

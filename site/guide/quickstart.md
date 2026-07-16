@@ -191,10 +191,55 @@ The most useful tools to try first:
 - `handoff_task` — builds a compacted handoff package for another agent to pick
   up.
 
+## Talk to any agent, get a reply
+
+`ymesh send` is the synchronous injection entry point — it sends a user message
+to any connected CLI agent and returns the cleaned reply, all in one call. This
+is what turns yondermesh from a passive observability plane into an active
+coordination plane.
+
+```bash
+# Ask a freshly-spawned hermes session a question, get the answer back
+ymesh send --cli hermes --mode new --message "Summarize the latest commit on this branch in one sentence."
+
+# Resume a stopped opencode session and ask a follow-up
+ymesh send --cli opencode --session <id> --mode stopped --message "Now do the same for the previous commit."
+
+# Inject into a running session in-place
+ymesh send --cli opencode --session <id> --mode running --message "Status check: what are you doing right now?"
+
+# Machine-readable output for scripting
+ymesh send --cli hermes --mode new --message "List the open files in this repo." --json
+```
+
+`--mode` controls how the message reaches the target CLI:
+
+- `new` (default) — launch a fresh session. Optionally pass `--model` and
+  `--effort` to control the model and reasoning depth.
+- `stopped` — resume a previously-stopped session with `--resume` and the
+  message, then capture the reply.
+- `running` — inject into a live session in-place via the CLI's stdin / API /
+  tmux / applescript channel.
+
+The reply goes through `ReplyAdapter` — a pure-function cleaner that strips
+ANSI, drops CLI banners and log lines, and folds blank lines — so what you get
+back is the agent's actual answer, not its startup noise. The full thread (your
+message + the reply) is audit-logged into the same `agent_messages` table that
+`yondermesh_mailbox_check` reads, so you can query it later.
+
+If something goes wrong (unknown CLI, missing model, upstream API rate-limit,
+non-zero exit), `send` never hangs and never throws — it returns with
+`delivered=false` and the error text in the `response` field, so you can see
+exactly what happened. Exit code is `0` on delivery, `2` when not delivered, `1`
+on validation or unexpected errors.
+
+MCP clients get the same capability via the `yondermesh_send` tool — see
+[MCP Server](/guide/mcp) for the schema.
+
 ## Next steps
 
-- [Architecture](/guide/architecture) — understand the three planes (local /
-  sync / mount), the codemap, and the invariants that keep them clean.
+- [Architecture](/guide/architecture) — understand the four planes (local /
+  sync / mount / trigger), the codemap, and the invariants that keep them clean.
 - [MCP Server](/guide/mcp) — the full tool surface, request/response shapes, and
   how the server is registered into each CLI.
 - [CLI Commands](/reference/cli) — the complete command reference, auto-generated

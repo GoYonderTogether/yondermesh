@@ -1,26 +1,28 @@
 ---
 title: 架构
-description: yondermesh 的鸟瞰视图——三个平面、daemon 生命周期、模块布局，以及维系系统的架构不变式。
+description: yondermesh 的鸟瞰视图——四个平面（local / sync / mount / trigger）、daemon 生命周期、模块布局，以及维系系统的架构不变式。
 outline: [2, 3]
 ---
 
 # 架构
 
-yondermesh 是一个自托管的 **Agent Context Bus（代理上下文总线）**：一个 daemon 加一个 MCP server，让你的 AI 编码代理跨设备、跨 CLI 共享同一工作面。Session 从各 CLI 的原生格式中被采集进本地 SQLite；MCP server 向任何支持 MCP 的代理暴露查询与交接工具；跨设备同步仅以密文形式经过自托管 relay。
+yondermesh 是一个自托管的 **Agent Context Bus（代理上下文总线）**：一个 daemon 加一个 MCP server，让你的 AI 编码代理跨设备、跨 CLI 共享同一工作面。Session 从各 CLI 的原生格式中被采集进本地 SQLite；MCP server 向任何支持 MCP 的代理暴露查询与交接工具；跨设备同步仅以密文形式经过自托管 relay；触发层向任意已接入的 CLI 同步注入 user message 并返回清洗后的回复。五项能力 —— 采集 / 同步 / 查询 / 接力 / 同步注入 —— 把每台设备上每个 CLI 的 Agent 聚合成一个整体。
 
 ## 概览
 
-yondermesh 运行在 **三个互不交叉污染的平面** 上。让这三个平面保持分离，是代码库中最重要的设计决策——正是它让系统具备非侵入性。
+yondermesh 运行在 **四个互不交叉污染的平面** 上。让这四个平面保持分离，是代码库中最重要的设计决策——正是它让系统具备非侵入性。
 
 ```text
 Local plane        CLI native files → adapter → SessionStore (SQLite) → MCP server (stdio)
 Sync plane         SessionStore → relay agent → self-hosted relay (ciphertext only) → peer device
 Mount plane        ymesh skills / MCP config → CLI's own config dir (~/.claude/, ~/.codex/, ~/.cursor/, …)
+Trigger plane      MailboxCore → TriggerAdapter (cli-spawn / stdin / http-api / ws-rpc / tmux / applescript) → 目标 CLI → ReplyAdapter → 审计日志
 ```
 
 - **Local plane（本地平面）** 读取各 CLI 写入的内容并将其转化为结构化查询。Adapter 是纯读取者，绝不修改原生文件。
 - **Sync plane（同步平面）** 在你自己的设备之间搬运上下文。离开设备的永远是密文——relay 永远看不到明文。
 - **Mount plane（挂载平面）** 把 ymesh 扩展（MCP server 配置、skill 符号链接、always-on 段落）安装进各 CLI 自己的配置目录。它编辑的是配置文件，绝不触碰二进制。
+- **Trigger plane（触发平面）** 是同步投递与回复的路径。`MailboxCore.send()` 审计写入 user message，交给 `TriggerAdapter`（唯一接触 CLI 进程的层）投递，再把原始回复喂给 `ReplyAdapter`（纯函数文本清洗器）清洗，审计写入回复，最后返回。28 个 CLI，6 种通道，3 种模式。失败永不沉默：未知 CLI、未配 model、非零退出、上游 API 限流，都会以文本形式回到 response 里。
 
 CLI 本身（`ymesh`）是对 daemon 写入的同一个 `SessionStore` 的薄封装。`ymesh scan`、`ymesh sessions`、`ymesh active` 都是直接的 store 查询——只读命令没有独立的 daemon 协议。
 
@@ -100,8 +102,10 @@ start → scan-once → watch (fs events) → periodic reconcile → idle
 | `src/`（各 adapter） | 每个受支持的 CLI 一个目录（`aider`、`claude`、`codex`、`cass`、`gemini`、`windsurf`……）。每个 adapter 遵循 `importer.ts` / `wrapper.ts` / `inject.ts` / `extractor.ts` 文件模式。 |
 | `src/store/` | SQLite 的唯一写入/读取者。`SessionStore` 类、schema、类型、source 别名、去重逻辑。 |
 | `src/daemon/` | `YondermeshDaemon` 生命周期 + `defaultDaemonConfig` / `defaultDataDir`。 |
-| `src/mcp/` | `McpServer`（stdio JSON-RPC）+ 注册到 Claude Code 与 Codex + handoff 包构造器。 |
+| `src/mcp/` | `McpServer`（stdio JSON-RPC）+ 注册到 Claude Code 与 Codex + handoff 包构造器 + `yondermesh_send` 同步注入工具。 |
 | `src/mount/` | Mount 系统：把 ymesh 扩展安装进各 CLI 配置目录，不修改 CLI 本身。 |
+| `src/mailbox/` | `MailboxCore` —— mailbox 业务逻辑的唯一所在。`send()`（v3 同步注入）+ `postMessage` / `peekMessages` / …（v2 legacy 审计面）。同时支撑 `ymesh send` / `ymesh mailbox` CLI 与 `yondermesh_send` / `yondermesh_mailbox_*` MCP 工具。 |
+| `src/trigger/` | `TriggerAdapter`（投递层，唯一 spawn 或对话 CLI 进程的层）+ `ReplyAdapter`（纯函数回复清洗器，无 I/O）。28 个 CLI 上 6 通道 × 3 模式。 |
 | `src/install/` | Release 构建、launcher 符号链接、git updater、skill linker、路径解析。 |
 | `src/extract/` | `ymesh extract`——把 user 需求与 assistant 响应转储为 NDJSONL 文件。 |
 | `src/briefing/` | 每日摘要生成器（输出到 `~/.yondermesh/briefings/`）。 |
@@ -112,6 +116,8 @@ start → scan-once → watch (fs events) → periodic reconcile → idle
 - `src/store/` 是 SQLite 的唯一写入者。Adapter 调用 `SessionStore` 方法，绝不直接写 SQL。
 - `src/bin/ymesh.ts` 是唯一注册命令的地方。新增命令即在 `main()` 中加一个 `case` 加一个 `cmd*` 函数。
 - `src/mount/` 绝不从 `src/<adapter>/` 导入。Mount 策略由 CLI 配置驱动，而非由 adapter 代码驱动。
+- `src/mailbox/` 是 mailbox 业务逻辑的唯一所在。CLI（`cmdMailbox` / `cmdSend`）与 MCP（`yondermesh_send` / `yondermesh_mailbox_*`）都是薄壳 —— 打开 `MailboxCore`，调一个方法（`send` / `postMessage` / …），格式化输出。绝不在壳层重实现 mailbox 逻辑。
+- `src/trigger/` 是唯一为投递而 spawn 或对话目标 CLI 进程的层。`MailboxCore.send()` 把投递委托给 `TriggerAdapter`、把回复清洗委托给 `ReplyAdapter`；消息层绝不直接导入 CLI wrapper。`ReplyAdapter` 是纯函数（无 I/O、无进程调用），可确定性单测。
 - `scripts/docs/` 绝不从 `src/` 导入。它通过 `ymesh help` 调用并把 `src/*/` 当作纯文件读取，使文档生成器与内部重构解耦。
 
 ## 架构不变式

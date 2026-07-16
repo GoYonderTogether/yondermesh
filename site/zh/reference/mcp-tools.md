@@ -436,6 +436,235 @@ JSON 响应条目数组（每项含 `id`、`sessionId`、`content`、`timestamp`
 ymesh mcp call query_agent_responses project_path=/Users/zoran/projects/yondermesh session_id=019f5fe4-... limit=20
 ```
 
+## yondermesh_mailbox_post
+
+> **（legacy v2，同步投递请优先用 `yondermesh_send`）** — v2 是异步模型（写入 SQLite，目标方轮询读取）。要同步发送并拿回复，请改用 [`yondermesh_send`](#yondermesh_send)。
+
+向另一个 session 投递消息或向项目广播。后端为 `MailboxCore`（`src/mailbox/core.ts`），存入共享 SQLite。支持优先级、过期、线程。
+
+### 参数
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `body` | string | 是 | 消息内容 |
+| `to_session_id` | string | 否 | 直投——目标 session ID |
+| `to_project` | string | 否 | 广播——目标项目路径 |
+| `from_session_id` | string | 否 | 发送方 session ID |
+| `kind` | string | 否 | `info` / `warning` / `question` / `task_update`。默认 `info` |
+| `priority` | string | 否 | `normal` / `urgent`。默认 `normal` |
+| `expires_in_seconds` | number | 否 | TTL；超过该秒数后消息自动清理 |
+| `thread_id` | string | 否 | 显式线程 ID；使用 `yondermesh_mailbox_reply` 时自动派生 |
+
+`to_session_id` 与 `to_project` 至少传一个。
+
+### 返回
+
+```json
+{ "messageId": 42, "posted": true }
+```
+
+### 示例
+
+```bash
+ymesh mcp call yondermesh_mailbox_post to_session_id=019f6a21-c... body="紧急：构建挂了" priority=urgent expires_in_seconds=3600
+```
+
+## yondermesh_mailbox_check
+
+> **（legacy v2，同步投递请优先用 `yondermesh_send`）** — 用此工具读取历史/排队消息；要同步投递请用 [`yondermesh_send`](#yondermesh_send)。
+
+Peek 或 pop 当前 session 的未读消息，并消费 daemon 推送的 tray 通知。这是主"收件箱"调用。`mark_read=true`（默认）时消息被原子地弹出并标记已读；`mark_read=false` 时仅 peek，无副作用。
+
+self session 解析三层降级（按序）：`YONDERMESH_SELF_SESSION_ID` 环境变量 → `self_session_id` 参数 → cwd 匹配活跃 session。首个命中的层胜出。
+
+### 参数
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `self_session_id` | string | 否 | 显式 self session ID（覆盖 cwd 查找，但环境变量优先级更高） |
+| `mark_read` | boolean | 否 | `true`（默认）= pop 语义（读 + 标记已读）；`false` = peek（无副作用） |
+
+### 返回
+
+```json
+{
+  "sessionId": "019f6a21-...",
+  "markRead": true,
+  "unread": { "direct": 1, "broadcast": 0, "total": 1 },
+  "trayNotices": [],
+  "messages": [
+    {
+      "id": 42,
+      "toSessionId": "019f6a21-...",
+      "fromSessionId": "019f5fe4-...",
+      "body": "测试通过，可合并",
+      "kind": "task_update",
+      "priority": "normal",
+      "threadId": null,
+      "createdAt": 1719503600000
+    }
+  ],
+  "hint": "📬 你有 1 条未读消息（direct 1, broadcast 0）。处理后可调 yondermesh_mailbox_post 回复。"
+}
+```
+
+无法解析 self 时返回 `isError: true`。
+
+### 示例
+
+```bash
+ymesh mcp call yondermesh_mailbox_check self_session_id=019f6a21-c... mark_read=false
+```
+
+## yondermesh_mailbox_reply
+
+> **（legacy v2，同步投递请优先用 `yondermesh_send`）** — v2 是异步模型（写入 SQLite）。要同步投递请改用 [`yondermesh_send`](#yondermesh_send)。
+
+回复某条消息。自动派生 `thread_id`：若父消息已有线程则继承，否则新建 `thread-<parent_id>`。
+
+### 参数
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `reply_to_id` | number | 是 | 被回复消息的 ID |
+| `body` | string | 是 | 回复内容 |
+| `from_session_id` | string | 否 | 发送方 session ID |
+
+### 返回
+
+```json
+{ "messageId": 43, "posted": true, "threadId": "thread-42" }
+```
+
+`reply_to_id` 不存在时返回 `isError: true`。
+
+### 示例
+
+```bash
+ymesh mcp call yondermesh_mailbox_reply reply_to_id=42 body="收到，处理中" from_session_id=019f5fe4-...
+```
+
+## yondermesh_whoami
+
+解析并报告当前 session 的身份，附带未读消息提示。适合 agent 在任务开始时确认"我是谁"，并感知待处理邮箱消息。使用与 `yondermesh_mailbox_check` 相同的三层 self 解析。
+
+### 参数
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `self_session_id` | string | 否 | 显式 self session ID（覆盖 cwd 查找；环境变量仍优先） |
+
+### 返回
+
+```json
+{
+  "sessionId": "019f6a21-...",
+  "resolved": true,
+  "unread": { "direct": 1, "broadcast": 0, "total": 1 },
+  "hint": "📬 你有 1 条未读消息（direct 1, broadcast 0）。处理后可调 yondermesh_mailbox_post 回复。"
+}
+```
+
+无法解析 self 时：
+
+```json
+{
+  "sessionId": null,
+  "resolved": false,
+  "hint": "无法解析 self session id。可通过 self_session_id 显式传入..."
+}
+```
+
+### 示例
+
+```bash
+ymesh mcp call yondermesh_whoami
+```
+
+## yondermesh_send
+
+同步地把一条 user message 投递到目标 agent CLI session，并在同一次调用里拿到 agent 的回复。这是 v3 同步注入工具 —— 与 legacy 的 `yondermesh_mailbox_*`（v2 异步：写 SQLite，目标方轮询）不同，`yondermesh_send` 立即通过 `TriggerAdapter` 投递消息，并通过 `ReplyAdapter` 捕获清洗后的回复。
+
+后端为 `MailboxCore.send()`（`src/mailbox/core.ts`）。`send()` 内部流程：
+
+1. **审计写入 user 消息** 到 `agent_messages`（kind=`question`）。
+2. **TriggerAdapter.trigger()** 通过对应通道（cli-spawn / stdin / http-api / ws-rpc / tmux / applescript）把消息投递到目标 CLI。
+3. **ReplyAdapter.extractReply()** 清洗原始 `TriggerResult.response` —— 去 ANSI 转义、按 CLI 过滤专属噪声（如 hermes 的 `Warning: Unknown toolsets:` 行、claude 的 `Tip:` 行）、剔除日志/横幅前缀、折叠多余空行。
+4. **审计写入回复** 到 `agent_messages`（kind=`task_update`，通过 `replyToId` + `threadId` 关联）。
+5. 返回 `SendResult`（见下）。
+
+即使目标 agent 未配置 model、认证失败、或上游 API 限流，`send()` 也会在 `response` / `error` 中返回错误信息，而不会 hang 住。
+
+### 参数
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `cli` | string | 是 | 目标 CLI id（如 `hermes`、`claude`、`opencode`、`trae-ide`） |
+| `message` | string | 是 | 要注入目标 agent session 的 user message |
+| `mode` | string | 否 | 投递模式：`stopped`（用消息恢复一个已停止的 session）、`running`（注入运行中的 session）、`new`（创建新 session）。默认 `new` |
+| `session_id` | string | 否 | 目标 session id。`stopped` / `running` 必填；`new` 忽略 |
+| `model` | string | 否 | `new` 模式指定的 model（如 `gpt-4o`、`claude-sonnet-4`） |
+| `effort` | string | 否 | `new` 模式指定的 effort（如 `low` / `medium` / `high`） |
+| `cwd` | string | 否 | 目标 session 工作目录 |
+| `timeout_ms` | number | 否 | 超时毫秒。默认 `60000` |
+| `from_session_id` | string | 否 | 发送方 session id（用于审计） |
+
+### 返回
+
+JSON 对象（`SendResult`）：
+
+```json
+{
+  "cli": "hermes",
+  "mode": "new",
+  "delivered": true,
+  "response": "PONG",
+  "exitCode": 0,
+  "channel": "cli-spawn",
+  "latencyMs": 3214,
+  "newSessionId": "019f6a21-c...",
+  "messageId": 21,
+  "replyMessageId": 22
+}
+```
+
+字段说明：
+
+- `delivered` — 消息是否成功投递到目标 CLI（即使 agent 没有回复也 true）。
+- `response` — 经 `ReplyAdapter` 清洗后的 agent 回复文本（可能为空字符串）。
+- `exitCode` — `cli-spawn` 通道的进程退出码。
+- `channel` — 实际使用的触发通道（`cli-spawn` / `stdin` / `http-api` / `ws-rpc` / `tmux` / `applescript`）。
+- `latencyMs` — `send()` 总耗时（含审计 + 触发 + 回复提取）。
+- `newSessionId` — `mode=new` 且创建了 session 时存在。
+- `error` — 失败原因；`delivered=false` 时一定有值。
+- `messageId` — user 消息的审计行 id（始终存在，即使投递失败）。
+- `replyMessageId` — assistant 回复的审计行 id（仅当捕获到非空回复时存在）。
+
+### 失败语义
+
+- 无效 `mode`，或 `stopped`/`running` 缺 `session_id` → `isError: true` 并附校验信息。
+- 未知 CLI（不在 `WRAPPER_LOADERS` 中） → `delivered: false`、`error` 有值，`messageId` 仍会分配（审计行已写）。
+- `TriggerAdapter.trigger()` 抛错 → 被捕获，返回 `delivered: false` 并把异常文本放入 `error`。
+- 目标 CLI 非零退出（如上游 API 429） → `delivered: true`、`exitCode` 非零，CLI 自己的错误文本会出现在 `response` 中，调用方据此可见发生了什么。
+
+### 示例
+
+```bash
+ymesh mcp call yondermesh_send cli=hermes mode=new message="只回复 PONG 一个词，不要任何其它内容。"
+```
+
+```bash
+ymesh send --cli hermes --message "hello" --mode new --json
+```
+
+等价的 shell 命令见 [`ymesh send`](./cli#send)。
+
+## Channel A：未读消息 piggyback 提示
+
+当当前 session 有未读邮箱消息时，**任何**非 mailbox MCP 工具的响应文本末尾都会被追加一行 `📬 mailbox: N unread`。这让 agent 无需主动轮询即可感知待处理消息——提示作为普通工具调用的副作用浮现。
+
+提示由 `src/mcp/server.ts` 的 `McpServer.callTool()` 注入，在主工具执行后调用 `MailboxCore.countUnread()`，反映调用后状态。要消除提示，调 `yondermesh_mailbox_check` 并设 `mark_read=true` 清空未读计数。
+
 ## 相关页面
 
 - `/guide/mcp` — 如何在各 agent 配置中注册 MCP server

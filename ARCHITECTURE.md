@@ -4,18 +4,33 @@
 > Rule (following matklad's *ARCHITECTURE.md* advice): write only the things that don't change often. **Name files but don't paste line-level links** (use symbol search). Don't try to stay in sync line-by-line with the code; revisit when modules are added or boundaries move. Inline comments carry the detail.
 > All descriptions are grounded in the actual `src/` code.
 
+## 0. Product narrative
+
+You don't use one AI coding agent. You use Claude Code, Codex, Aider, Gemini CLI, Cursor, Windsurf, Trae, Continue, OpenCode, Hermes, and a dozen more — spread across laptop, desktop, and server. Each one is an island. Context dies at the session boundary. Agent A on your laptop has no idea what Agent B on your desktop just did.
+
+**yondermesh is the collaboration hub of the Agent era.** One daemon, one MCP server, zero intrusion — it aggregates every CLI agent on every device into a single working whole with cross-platform memory, cross-device real-time awareness, and continuous handoff. Five capabilities form the loop:
+
+- **Collect** — every session from every CLI on every device flows into one local SQLite. Your agents stop being islands and start acting as one working whole.
+- **Sync** — E2E-encrypted cross-device sync via a self-hosted relay. Only ciphertext ever leaves your machine.
+- **Query** — any agent queries any other agent's context via MCP tools. Topology-aware, source-aware, project-aware.
+- **Hand off** — agent A picks up exactly where agent B stopped, even on a different machine. Sessions stop dying at the boundary; they become a continuous workflow.
+- **Send** — synchronously inject a user message into any connected CLI agent and get the reply back. 28 CLIs, 6 trigger channels, 3 modes (stopped / running / new). Failure is never silent.
+
+The hub is a deliberately small piece of infrastructure: not another CLI, not another model, not another cloud. It makes the agents you already use act as one.
+
 ## I. Overview
 
-**yondermesh** is a self-hosted Agent Context Bus: one daemon + one MCP server that lets your AI coding agents share a single working surface across devices and CLIs. Sessions are harvested from each CLI's native format into local SQLite; an MCP server exposes query and handoff tools to any MCP-capable agent; cross-device sync moves ciphertext only over a self-hosted relay.
+**yondermesh** is a self-hosted Agent Context Bus: one daemon + one MCP server that lets your AI coding agents share a single working surface across devices and CLIs. Sessions are harvested from each CLI's native format into local SQLite; an MCP server exposes query and handoff tools to any MCP-capable agent; cross-device sync moves ciphertext only over a self-hosted relay; the trigger layer synchronously injects user messages into any connected CLI and returns the cleaned reply.
 
-> **Core mental model**: an agent's session is the unit of context. Sessions have topology (`root` / `subagent` / `sidechain`), source (`claude` / `codex` / `cass` / `hermes` / `continue` / `windsurf` / …), and project (`cwd` / `projectPath`). Every MCP tool is a structured query over this session graph. Every adapter is a reader of one CLI's native format. Every mount is a non-invasive extension (MCP / skill / always-on) installed into a CLI's config without modifying the CLI itself.
+> **Core mental model**: an agent's session is the unit of context. Sessions have topology (`root` / `subagent` / `sidechain`), source (`claude` / `codex` / `cass` / `hermes` / `continue` / `windsurf` / …), and project (`cwd` / `projectPath`). Every MCP tool is a structured query over this session graph. Every adapter is a reader of one CLI's native format. Every mount is a non-invasive extension (MCP / skill / always-on) installed into a CLI's config without modifying the CLI itself. Every `send` is a synchronous round-trip through the trigger layer (message → trigger → reply → audit).
 
-Three planes that never cross-contaminate:
+Four planes that never cross-contaminate:
 
 ```
 Local plane        CLI native files → adapter → SessionStore (SQLite) → MCP server (stdio)
 Sync plane         SessionStore → relay agent → self-hosted relay (ciphertext only) → peer device
 Mount plane        ymesh skills / MCP config → CLI's own config dir (~/.claude/, ~/.codex/, ~/.cursor/, …)
+Trigger plane      MailboxCore → TriggerAdapter (cli-spawn / stdin / http-api / ws-rpc / tmux / applescript) → target CLI → ReplyAdapter → audit log
 ```
 
 **Daemon lifecycle**: `start → scan-once → watch (fs events) → periodic reconcile → idle`. Reads native files only; never modifies them. The CLI is a thin wrapper over the same `SessionStore` — `ymesh scan`, `ymesh sessions`, `ymesh active` are direct store queries.
@@ -54,9 +69,48 @@ Adapters present (alphabetical): `aider`, `amp`, `antigravity`, `cass`, `chatgpt
 
 ### MCP server (`src/mcp/`)
 
-- `src/mcp/server.ts` — `McpServer` class. stdio JSON-RPC. Tools: `recall_recent_work`, `whats_on_device`, `handoff_task`, `who_is_working`, `list_active_sessions`, `search_sessions`, … (`site/reference/mcp-tools.md` is the canonical list).
+- `src/mcp/server.ts` — `McpServer` class. stdio JSON-RPC. `listTools()` merges legacy tools (defined inline in `server.ts`) with the `yondermesh_*` registry (`src/mcp/tools.ts`). `callTool()` routes to legacy first, then new tools, then injects the **Channel A** piggyback hint (`📬 mailbox: N unread`) when the calling session has unread mailbox messages.
 - `src/mcp/register.ts` — registers the ymesh MCP server into Claude Code (`claude mcp add`) and Codex (`~/.codex/config.toml`). `registerAll` / `unregisterAll` / `checkRegistration`.
 - `src/mcp/codex-handoff.ts` — builds a `HandoffPackage` (compacted summaries + recent messages + task plan) for a session id. Used by `ymesh handoff` and the `handoff_task` MCP tool.
+- `src/mcp/tools.ts` — registry of `yondermesh_*` tools: `list_agents` / `query_sessions` / `get_session` / `launch_agent` / `inject_session` / `transfer_session` / `mount_status` + the mailbox quartet (`mailbox_check` / `mailbox_post` / `mailbox_reply` / `whoami`, marked legacy v2) + `yondermesh_send` (v3 sync injection). Each handler is self-contained (opens its own `SessionStore` / `MailboxCore`), avoiding cross-call shared state.
+
+### Trigger (`src/trigger/`)
+
+The trigger layer is yondermesh's delivery-and-reply plane: it takes a `TriggerRequest` (a user message + target CLI + mode) and returns a `TriggerResult` (raw response + exit code + channel). It is split into two adapters so the message layer (`MailboxCore`) never touches a CLI process directly.
+
+```
+Message layer (MailboxCore.send)
+        │  TriggerRequest
+        ▼
+TriggerAdapter ──► target CLI (cli-spawn / stdin / http-api / ws-rpc / tmux / applescript)
+        │  TriggerResult (raw response)
+        ▼
+ReplyAdapter ──► cleaned reply text (strips ANSI, CLI noise, log/banner lines)
+        │  ReplyResult
+        ▼
+back to MailboxCore (audit-write + return SendResult)
+```
+
+- `src/trigger/adapter.ts` — `TriggerAdapter` class. `trigger(req)` resolves the target CLI's wrapper (via `src/mcp/tools.ts` `WRAPPER_LOADERS`), picks a channel by `TriggerMode` (`stopped` → resume + inject, `running` → inject into live session, `new` → launch fresh), and returns a `TriggerResult`. This is the only place that actually spawns or talks to a CLI process.
+- `src/trigger/reply-adapter.ts` — `ReplyAdapter` class. `extractReply(result, cli)` is a **pure, side-effect-free** text cleaner: (1) `stripAnsi()` removes CSI/OSC escapes; (2) `applyCliSpecificFilter()` drops per-CLI noise (e.g. hermes `Warning: Unknown toolsets:` lines, claude `Tip:` lines); (3) `applyGenericFilter()` removes log prefixes (`warning|warn|debug|info|error|fatal|trace|verbose:`) and startup banners (`Welcome|Booting|Starting|Loaded|Initializing|Copyright`); (4) `collapseBlankLines()` folds 3+ newlines to 2 and trims. Never throws — returns empty string when `delivered=false` or the cleaned text is empty. `ReplyResult.source` is derived from `TriggerChannel` (http-api/ws-rpc → `api`; tmux/applescript → `tmux-capture`; cli-spawn/stdin → `stdout`).
+- `src/trigger/types.ts` — `TriggerMode`, `TriggerChannel`, `TriggerRequest`, `TriggerResult`, `ReplyResult` (`{ text, source, latencyMs }`), `CliTriggerCapability`.
+- `src/trigger/index.ts` — barrel; re-exports `ReplyAdapter` and `stripAnsi` (as `stripReplyAnsi`).
+
+### Mailbox (`src/mailbox/`)
+
+The mailbox is yondermesh's cross-session message bus. One `MailboxCore` business layer backs both the `ymesh mailbox` / `ymesh send` CLI commands and the `yondermesh_mailbox_*` / `yondermesh_send` MCP tools — CLI and MCP are thin shells, never re-implementing logic.
+
+**v3 sync-injection model (primary).** `MailboxCore.send(target: SendTarget): Promise<SendResult>` is the unified entry point for synchronous message delivery. It orchestrates the 3-layer architecture (message → trigger → reply): audit-writes the user message (`kind=question`) → `TriggerAdapter.trigger()` delivers it to the target CLI → `ReplyAdapter.extractReply()` cleans the raw response → audit-writes the reply (`kind=task_update`, linked via `replyToId` + `threadId=thread-<messageId>`) → returns `SendResult`. Even on failure (unknown CLI, trigger throws, non-zero exit, upstream API rate-limit) the call returns with `delivered`/`error`/`response` populated instead of hanging — the CLI's own error text surfaces in `response` so the caller can see what went wrong. The constructor accepts optional `TriggerAdapter` / `ReplyAdapter` for DI (deterministic unit tests inject a `FakeTriggerAdapter`).
+
+**v2 async model (legacy, retained for audit reads).** The original `postMessage` / `peekMessages` / `popMessages` / `markRead` / `countUnread` / `listMailboxes` / `cleanupExpired` / `consumeTray` / `writeTrayNotice` / `resolveSelfSession` / `registerNotifier` surface is kept (`postMessage` is `@deprecated` in JSDoc but unchanged in behavior). These power the legacy `yondermesh_mailbox_*` MCP tools (marked `(legacy v2, prefer yondermesh_send for sync delivery)` in their descriptions) and serve as the audit-trail reader for both v2 and v3 (v3 `send()` writes its user message and reply through the same `postMessage` path so they appear in `agent_messages` and are queryable by the legacy tools).
+
+- `src/mailbox/core.ts` — `MailboxCore` class. Surface: `send` (v3) + `postMessage` / `peekMessages` / `popMessages` / `markRead` / `countUnread` / `listMailboxes` / `cleanupExpired` / `consumeTray` / `writeTrayNotice` / `resolveSelfSession` / `registerNotifier` (v2). `resolveSelfSession()` is three-layer (env `YONDERMESH_SELF_SESSION_ID` → explicit arg → cwd match against live sessions). `countUnread()` excludes self-broadcasts (`from_session_id != me`). Notifier is `NoopNotifier` by default; daemon swaps it for a tray-file pusher via `registerNotifier()`.
+- `src/mailbox/types.ts` — `MailboxMessage`, `PostMessageInput`, `MessageFilter`, `MarkReadInput`, `UnreadCount`, `TrayNotice`, `MailboxNotifier` / `NoopNotifier`; v3 types `SendMode` / `SendTarget` / `SendResult`. Exports `MAIL_KINDS` / `MAIL_PRIORITIES` for CLI validation.
+- `src/mailbox/index.ts` — barrel.
+
+Schema lives in `src/store/schema.ts` (`agent_messages` table): added `priority` / `expires_at` / `thread_id` / `reply_to_id` columns + 3 indexes (`idx_msg_unread`, `idx_msg_thread`, `idx_msg_expires`); `MIGRATION_COLUMNS` has the backward-compat `ALTER TABLE` entries.
+
+Daemon integration: when daemon is online, it calls `registerNotifier()` to push new messages to `~/.yondermesh/mailbox-tray/<sid>.txt`; `mailbox_check` consumes these tray files. When daemon is offline, mailbox degrades to polling (peek on each MCP call, <1ms).
 
 ### Mount system (`src/mount/`)
 
@@ -114,4 +168,6 @@ The mount system extends ymesh's reach into other CLIs without modifying them. E
 - `src/store/` is the only writer to SQLite. Adapters call `SessionStore` methods; they never write SQL directly.
 - `src/bin/ymesh.ts` is the only place commands are registered. Adding a command = adding a `case` to the `main()` switch + a `cmd*` function.
 - `src/mount/` never imports from `src/<adapter>/`. Mount strategies are CLI-config-driven, not adapter-driven.
+- `src/mailbox/` is the only place mailbox business logic lives. CLI (`src/bin/ymesh.ts` `cmdMailbox` / `cmdSend`) and MCP (`src/mcp/tools.ts` mailbox + `yondermesh_send` handlers) are thin shells — they open a `MailboxCore`, call a method (`send` / `postMessage` / …), format output. Never re-implement mailbox logic in the shell layers.
+- `src/trigger/` is the only place that spawns or talks to a target CLI process for delivery. `MailboxCore.send()` delegates to `TriggerAdapter` for delivery and `ReplyAdapter` for reply cleaning; the message layer never imports a CLI wrapper directly. `ReplyAdapter` is pure (no I/O, no process calls) so it is safe to unit-test deterministically.
 - `scripts/docs/` never imports from `src/`. It shells out to `ymesh help` and reads `src/*/` as plain files. This keeps the docs generator decoupled from internal refactors.

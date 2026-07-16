@@ -67,6 +67,17 @@ All three must pass.
 - **Verify before "done"** — code complete ≠ task done. Run `npm test`, `npm run typecheck`, and exercise the real path (CLI / daemon / MCP). Post the evidence.
 - **Fail loud** — every "done" lists what was skipped, what warned, what wasn't verified.
 
+## Dogfooding principle (fix it while you use it)
+
+> As an agent developing yondermesh, **if you notice something unreasonable while using this project itself** — a confusing query result, a missing CLI option, a detection that's off — **fix it immediately**: modify the code, write a test, and commit. Don't file a TODO and move on.
+
+Rules:
+- Every dogfooding fix must pass `npm test` + `npm run typecheck` + the hygiene gates before committing.
+- Keep changes within the current module boundary; don't refactor unrelated code on the way through.
+- The fix must trace to a concrete observation ("I ran `ymesh active` and 497 sessions showed as LIVE"), not a hypothetical ("this might be wrong someday").
+- Avoid piling features: one observation → one focused fix → one commit. If the fix grows scope, split it.
+- Architectural invariants (§III in `ARCHITECTURE.md`) are non-negotiable. If a fix would violate one, raise it instead.
+
 ## Release discipline
 
 - `package.json` `version` bump → `CHANGELOG.md` entry in the same commit.

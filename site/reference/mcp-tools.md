@@ -436,6 +436,235 @@ JSON array of response entries (each has `id`, `sessionId`, `content`, `timestam
 ymesh mcp call query_agent_responses project_path=/Users/zoran/projects/yondermesh session_id=019f5fe4-... limit=20
 ```
 
+## yondermesh_mailbox_post
+
+> **(legacy v2, prefer `yondermesh_send` for sync delivery)** — v2 is async (write to SQLite, target polls). For synchronous send-and-get-reply, use [`yondermesh_send`](#yondermesh_send) instead.
+
+Post a message to another session or broadcast to a project. Backed by `MailboxCore` (`src/mailbox/core.ts`), stored in the shared SQLite DB. Supports priority, expiry, and threading.
+
+### Arguments
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `body` | string | yes | Message content |
+| `to_session_id` | string | no | Direct message — target session ID |
+| `to_project` | string | no | Broadcast — target project path |
+| `from_session_id` | string | no | Sender session ID |
+| `kind` | string | no | One of `info`, `warning`, `question`, `task_update`. Default `info` |
+| `priority` | string | no | One of `normal`, `urgent`. Default `normal` |
+| `expires_in_seconds` | number | no | TTL; message auto-cleans after this many seconds |
+| `thread_id` | string | no | Explicit thread ID; auto-derived when using `yondermesh_mailbox_reply` |
+
+One of `to_session_id` or `to_project` is required.
+
+### Returns
+
+```json
+{ "messageId": 42, "posted": true }
+```
+
+### Example
+
+```bash
+ymesh mcp call yondermesh_mailbox_post to_session_id=019f6a21-c... body="urgent: build broken" priority=urgent expires_in_seconds=3600
+```
+
+## yondermesh_mailbox_check
+
+> **(legacy v2, prefer `yondermesh_send` for sync delivery)** — use this to read historical/queued messages; for live sync delivery use [`yondermesh_send`](#yondermesh_send).
+
+Peek or pop unread messages for the current session, plus consume any daemon-pushed tray notices. This is the primary "inbox" call. When `mark_read=true` (default), messages are atomically popped and marked read; when `mark_read=false`, messages are peeked without side effects.
+
+Self-session resolution uses three layers (in order): `YONDERMESH_SELF_SESSION_ID` env var → `self_session_id` arg → cwd match against live sessions. The first layer that resolves wins.
+
+### Arguments
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `self_session_id` | string | no | Explicit self session ID (overrides cwd lookup, but env var takes precedence) |
+| `mark_read` | boolean | no | `true` (default) = pop semantics (read + mark read); `false` = peek (no side effects) |
+
+### Returns
+
+```json
+{
+  "sessionId": "019f6a21-...",
+  "markRead": true,
+  "unread": { "direct": 1, "broadcast": 0, "total": 1 },
+  "trayNotices": [],
+  "messages": [
+    {
+      "id": 42,
+      "toSessionId": "019f6a21-...",
+      "fromSessionId": "019f5fe4-...",
+      "body": "Tests pass, ready to merge",
+      "kind": "task_update",
+      "priority": "normal",
+      "threadId": null,
+      "createdAt": 1719503600000
+    }
+  ],
+  "hint": "📬 你有 1 条未读消息（direct 1, broadcast 0）。处理后可调 yondermesh_mailbox_post 回复。"
+}
+```
+
+When self cannot be resolved, returns `isError: true`.
+
+### Example
+
+```bash
+ymesh mcp call yondermesh_mailbox_check self_session_id=019f6a21-c... mark_read=false
+```
+
+## yondermesh_mailbox_reply
+
+> **(legacy v2, prefer `yondermesh_send` for sync delivery)** — v2 is async (write to SQLite). For synchronous delivery use [`yondermesh_send`](#yondermesh_send) instead.
+
+Reply to a specific message. Automatically derives `thread_id`: if the parent already has a thread, the reply inherits it; otherwise a new `thread-<parent_id>` is created.
+
+### Arguments
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `reply_to_id` | number | yes | ID of the message being replied to |
+| `body` | string | yes | Reply body |
+| `from_session_id` | string | no | Sender session ID |
+
+### Returns
+
+```json
+{ "messageId": 43, "posted": true, "threadId": "thread-42" }
+```
+
+Returns `isError: true` if `reply_to_id` does not exist.
+
+### Example
+
+```bash
+ymesh mcp call yondermesh_mailbox_reply reply_to_id=42 body="ack, on it" from_session_id=019f5fe4-...
+```
+
+## yondermesh_whoami
+
+Resolve and report the current session's identity, plus an unread-message hint. Useful for an agent to confirm "who am I" at the start of a task, and to notice pending mailbox messages. Uses the same three-layer self-resolution as `yondermesh_mailbox_check`.
+
+### Arguments
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `self_session_id` | string | no | Explicit self session ID (overrides cwd lookup; env var still wins) |
+
+### Returns
+
+```json
+{
+  "sessionId": "019f6a21-...",
+  "resolved": true,
+  "unread": { "direct": 1, "broadcast": 0, "total": 1 },
+  "hint": "📬 你有 1 条未读消息（direct 1, broadcast 0）。处理后可调 yondermesh_mailbox_post 回复。"
+}
+```
+
+When self cannot be resolved:
+
+```json
+{
+  "sessionId": null,
+  "resolved": false,
+  "hint": "无法解析 self session id。可通过 self_session_id 显式传入..."
+}
+```
+
+### Example
+
+```bash
+ymesh mcp call yondermesh_whoami
+```
+
+## yondermesh_send
+
+Synchronously send a user message to a target agent CLI session and return the agent's reply in the same call. This is the v3 sync-injection tool — unlike the legacy `yondermesh_mailbox_*` (v2 async, where you write to SQLite and the target polls), `yondermesh_send` immediately delivers the message through `TriggerAdapter` and captures the cleaned reply through `ReplyAdapter`.
+
+Backed by `MailboxCore.send()` (`src/mailbox/core.ts`). The flow inside `send()`:
+
+1. **Audit-write the user message** to `agent_messages` (kind=`question`).
+2. **TriggerAdapter.trigger()** delivers the message to the target CLI via the appropriate channel (cli-spawn / stdin / http-api / ws-rpc / tmux / applescript).
+3. **ReplyAdapter.extractReply()** cleans the raw `TriggerResult.response` — strips ANSI escapes, drops CLI-specific noise (e.g. hermes `Warning: Unknown toolsets:` lines, claude `Tip:` lines), removes log/banner prefixes, collapses blank lines.
+4. **Audit-write the reply** to `agent_messages` (kind=`task_update`, linked via `replyToId` + `threadId`).
+5. Returns `SendResult` (see below).
+
+Even if the target agent has no model configured, auth fails, or the upstream API rate-limits, `send()` returns an error message in `response` / `error` instead of hanging.
+
+### Arguments
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `cli` | string | yes | Target CLI id (e.g. `hermes`, `claude`, `opencode`, `trae-ide`) |
+| `message` | string | yes | User message to inject into the target agent session |
+| `mode` | string | no | Delivery mode: `stopped` (resume a stopped session with the message), `running` (inject into a running session), `new` (create a new session). Default `new` |
+| `session_id` | string | no | Target session id. Required for `stopped` / `running`; ignored for `new` |
+| `model` | string | no | Model id for `new` sessions (e.g. `gpt-4o`, `claude-sonnet-4`) |
+| `effort` | string | no | Effort level for `new` sessions (e.g. `low` / `medium` / `high`) |
+| `cwd` | string | no | Working directory for the target session |
+| `timeout_ms` | number | no | Timeout in milliseconds. Default `60000` |
+| `from_session_id` | string | no | Sender session id (for the audit trail) |
+
+### Returns
+
+JSON object (`SendResult`):
+
+```json
+{
+  "cli": "hermes",
+  "mode": "new",
+  "delivered": true,
+  "response": "PONG",
+  "exitCode": 0,
+  "channel": "cli-spawn",
+  "latencyMs": 3214,
+  "newSessionId": "019f6a21-c...",
+  "messageId": 21,
+  "replyMessageId": 22
+}
+```
+
+Fields:
+
+- `delivered` — whether the message was successfully delivered to the target CLI (true even if the agent produced no reply).
+- `response` — `ReplyAdapter`-cleaned agent reply text (may be empty string).
+- `exitCode` — process exit code for `cli-spawn` channel.
+- `channel` — the trigger channel actually used (`cli-spawn` / `stdin` / `http-api` / `ws-rpc` / `tmux` / `applescript`).
+- `latencyMs` — total `send()` wall time (audit + trigger + reply extraction).
+- `newSessionId` — present when `mode=new` and a session was created.
+- `error` — failure reason; always set when `delivered=false`.
+- `messageId` — audit row id of the user message (always present, even on delivery failure).
+- `replyMessageId` — audit row id of the assistant reply (present only when a non-empty reply was captured).
+
+### Failure modes
+
+- Invalid `mode`, or `stopped`/`running` without `session_id` → `isError: true` with a validation message.
+- Unknown CLI (not in `WRAPPER_LOADERS`) → `delivered: false`, `error` set, `messageId` still assigned (audit row written).
+- `TriggerAdapter.trigger()` throws → caught, returns `delivered: false` with the exception text in `error`.
+- Target CLI exits non-zero (e.g. upstream API 429) → `delivered: true`, `exitCode` non-zero, the CLI's own error text appears in `response` so the caller can see what went wrong.
+
+### Example
+
+```bash
+ymesh mcp call yondermesh_send cli=hermes mode=new message="Reply with exactly the word PONG and nothing else."
+```
+
+```bash
+ymesh send --cli hermes --message "hello" --mode new --json
+```
+
+See also the [`ymesh send`](./cli#send) CLI command for the same capability from the shell.
+
+## Channel A: piggyback unread hints
+
+When the current session has unread mailbox messages, **any** non-mailbox MCP tool response gets a `📬 mailbox: N unread` line appended to its text content. This lets an agent learn about pending messages without actively polling — the hint surfaces as a side effect of any normal tool call.
+
+The hint is injected by `McpServer.callTool()` in `src/mcp/server.ts`. It uses `MailboxCore.countUnread()` after the primary tool executes, so it reflects the post-call state. To silence the hint, call `yondermesh_mailbox_check` with `mark_read=true` to clear the unread count.
+
 ## Related
 
 - `/guide/mcp` — how to register the MCP server in each agent's config

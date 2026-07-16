@@ -226,6 +226,30 @@ Trae **不**把 MCP 配置作为文件暴露给 ymesh 写入。请通过 Trae ID
 
 该总线仅本机有效 —— 不会被跨设备同步复制。它适合同机 agent 之间的协调（例如一个 agent 通知另一个 agent 测试挂了）。
 
+legacy 的 `yondermesh_mailbox_*` 工具（`mailbox_check` / `mailbox_post` / `mailbox_reply`）是同一条总线的 v2 表面。它们在描述里已标记 `(legacy v2, prefer yondermesh_send for sync delivery)`，仍可用于审计读取 —— 包括读取 v3 `yondermesh_send` 工具写入的线程。
+
+## 同步注入：`yondermesh_send`
+
+`yondermesh_send` 是 v3 同步注入入口 —— 它把一条 user message 发给任意已接入的 CLI agent，并在同一次调用里拿回回复。这正是补上 v2 mailbox 留下的缺口：在 v3 之前，一个 agent 可以给另一个 agent 留言，但永远没法"问一句、答一句"。现在可以了。
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `cli` | 是 | 目标 CLI id（`hermes`、`opencode`、`kimi`、`pi`、`aider`、`amp`、`antigravity`、`cline`、`codebuddy`、`continue`、`copilot`、`crush`、`cursor-ide`、`factory`、`gemini`、`goose`、`openclaw`、`openhands`、`qwen`、`trae-cli`、`trae-ide`、`vibe`、`windsurf`……）。 |
+| `message` | 是 | 要注入的 user message。 |
+| `mode` | 否 | `stopped` / `running` / `new`（默认 `new`）。 |
+| `session_id` | 否 | `stopped` 与 `running` 模式必填；`new` 模式忽略。 |
+| `model` | 否 | `new` 模式下指定模型。 |
+| `effort` | 否 | `new` 模式下指定投入度：`low` / `medium` / `high`。 |
+| `cwd` | 否 | 目标 session 的工作目录。 |
+| `timeout_ms` | 否 | 投递超时，默认 60000。 |
+| `from_session_id` | 否 | 发送方 session id（用于审计）。 |
+
+返回 `{ cli, mode, delivered, response, exitCode, channel, latencyMs, newSessionId, error, messageId, replyMessageId }`。`delivered` 为 true 表示消息已送达 CLI（即使回复为空）。`response` 是清洗后的回复文本 —— `ReplyAdapter` 会剥离 ANSI、丢弃 CLI banner 与日志行、折叠空行，所以你拿到的是 agent 的真实回答，而不是它的启动噪声。完整线程（你的消息 + 回复）会被审计写入 `agent_messages`（你的消息记为 `kind=question`，回复记为 `kind=task_update`，通过 `replyToId` + `threadId=thread-<messageId>` 关联）。
+
+失败永不沉默。`yondermesh_send` 永不抛异常（参数校验除外），永不挂起。未知 CLI、未配 model、非零退出、上游 API 限流 —— 全部以文本形式回到 `response` 或 `error`，并置 `delivered=false`。CLI 自己的报错文本会原样出现在 `response` 里，调用方能看到到底哪里出了问题。
+
+同一能力在 CLI 侧是 `ymesh send` —— 示例见 [快速开始](/zh/guide/quickstart#向任意-agent-提问拿回回复)。内部架构在 `src/mailbox/core.ts`（`MailboxCore.send`）、`src/trigger/adapter.ts`（`TriggerAdapter`）、`src/trigger/reply-adapter.ts`（`ReplyAdapter`）—— 四平面模型见 [架构](/zh/guide/architecture)。
+
 ## 相关
 
 - [MCP 工具参考](/zh/reference/mcp-tools) —— 规范的自动生成工具列表。

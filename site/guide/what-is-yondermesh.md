@@ -1,6 +1,6 @@
 ---
 title: What is yondermesh?
-description: A self-hosted Agent Context Bus that lets your AI coding agents share context, query each other, and hand off tasks across devices and CLIs.
+description: A self-hosted Agent Context Bus that turns every CLI agent on every device into one working whole — share context, query each other, hand off tasks, and synchronously inject messages across devices and CLIs.
 outline: [2, 3]
 ---
 
@@ -9,14 +9,19 @@ outline: [2, 3]
 yondermesh is a self-hosted **Agent Context Bus**. It runs one daemon per device
 that harvests sessions from every CLI coding agent into a local SQLite store, and
 exposes one MCP (Model Context Protocol) server that any MCP-capable agent can
-query. The result: your agents stop being islands and start sharing a single
-working surface across devices and CLIs.
+query. The result: every CLI agent on every device stops being an island and
+becomes part of one working whole — a shared working surface with cross-platform
+memory, cross-device real-time awareness, and continuous handoff.
+
+This is the collaboration hub of the Agent era. Not another CLI, not another
+model, not another cloud. A deliberately small piece of infrastructure that
+makes the agents you already use act as one.
 
 ## The problem: agents are islands
 
 If you use multiple AI coding agents — Claude Code, Codex, Aider, Gemini CLI,
-Cursor, Windsurf, Trae, Continue, OpenCode — across multiple machines, you
-already know the pain points:
+Cursor, Windsurf, Trae, Continue, OpenCode, Hermes, and a dozen more — across
+multiple machines, you already know the pain points:
 
 - **Context dies at the session boundary.** When a session ends, everything the
   agent learned vanishes. The next session, or a different agent on a different
@@ -29,10 +34,14 @@ already know the pain points:
 - **No cross-device visibility.** You cannot ask "what did my agents do today?"
   without ssh-ing into each machine and reading each CLI's native logs in their
   own format.
+- **No way to talk back.** Even when one agent knows another is running, it
+  cannot ask the other a question and get a reply. The mesh is read-only by
+  default; the loop never closes.
 
 Every CLI writes sessions in its own format — JSONL, session databases, git logs,
 transcript hooks. Every device is isolated. The result is fragmented, lossy, and
-impossible to query as a whole.
+impossible to query as a whole. The tax you pay every time you switch CLIs or
+machines.
 
 ## The solution: one daemon, one MCP server, zero intrusion
 
@@ -48,23 +57,24 @@ yondermesh fixes this with a deliberately small surface:
   modification. yondermesh reads what the CLI already wrote and exposes it
   through MCP. That is the entire surface.
 
-Three planes that never cross-contaminate:
+Four planes that never cross-contaminate:
 
 ```
-Local plane    CLI native files -> adapter -> SessionStore (SQLite) -> MCP server (stdio)
-Sync plane     SessionStore -> relay agent -> self-hosted relay (ciphertext only) -> peer device
-Mount plane    ymesh skills / MCP config -> CLI's own config dir (~/.claude/, ~/.codex/, ...)
+Local plane     CLI native files -> adapter -> SessionStore (SQLite) -> MCP server (stdio)
+Sync plane      SessionStore -> relay agent -> self-hosted relay (ciphertext only) -> peer device
+Mount plane     ymesh skills / MCP config -> CLI's own config dir (~/.claude/, ~/.codex/, ...)
+Trigger plane   MailboxCore -> TriggerAdapter -> target CLI -> ReplyAdapter -> audit log
 ```
 
 ## Core capabilities
 
 ### Collect
 
-Auto-harvest sessions from every CLI agent on every device into local SQLite.
+Every session from every CLI on every device flows into one local SQLite.
 yondermesh ships with adapters that read each CLI's native format directly —
 Claude Code JSONL, Codex session DBs, Aider git log, Continue sessions, and many
 more. No CLI modification is needed; the daemon reads files the CLI already
-writes.
+writes. Your agents stop being islands and start acting as one working whole.
 
 Each adapter has a coverage level:
 
@@ -87,7 +97,8 @@ plaintext leave your machines.
 
 The sync agent reads new sessions from the local `SessionStore`, encrypts them
 with the local key, pushes ciphertext to the relay, and pulls peer updates to
-decrypt locally. The relay is a dumb pipe: it never holds a decryption key.
+decrypt locally. The relay is a dumb pipe: it never holds a decryption key. The
+result is cross-platform memory without cloud lock-in.
 
 ### Query
 
@@ -109,7 +120,8 @@ subagents return roots only by default.
 
 ### Hand off
 
-Agent A picks up where agent B left off, even on a different machine. The
+Agent A picks up exactly where agent B stopped, even on a different machine.
+Sessions stop dying at the boundary; they become a continuous workflow. The
 `ymesh handoff <session-id>` command builds a compacted `HandoffPackage` —
 summary plus recent tool calls plus task plan — that can be fed into another
 agent's context window. This is the bridge that turns isolated sessions into a
@@ -117,6 +129,39 @@ continuous workflow across devices.
 
 The same mechanism powers the `handoff_task` MCP tool, so an agent can request a
 handoff package programmatically without a human in the loop.
+
+### Send
+
+Synchronously inject a user message into any connected CLI agent and get the
+reply back. This is the newest capability, and it closes the loop that earlier
+versions left open: until `send`, the mesh was read-only — agents could see each
+other but could not talk back. Now they can.
+
+`ymesh send` (CLI) and `yondermesh_send` (MCP tool) are the unified entry points.
+They pick the right channel for the target CLI, deliver the message, clean the
+reply, and write the full thread to the audit log — all in one call.
+
+- **28 CLIs supported** — claude, codex, hermes, gemini, goose, aider, amp,
+  factory, vibe, codebuddy, trae-cli, opencode, qwen, openhands, kimi, openclaw,
+  pi, copilot, crush, cline, continue, antigravity, plus the IDE class (trae-ide,
+  windsurf, cursor-ide, chatgpt).
+- **6 trigger channels** — `cli-spawn` (spawn a fresh process), `stdin` (write to
+  a running session's stdin), `http-api` (POST to the CLI's HTTP API),
+  `ws-rpc` (WebSocket / JSON-RPC), `tmux` (send-keys into a tmux pane), and
+  `applescript` (macOS keystroke injection for IDE-class CLIs).
+- **3 trigger modes** — `stopped` (resume a stopped session with `--resume` and a
+  message flag), `running` (inject into a live session in-place), and `new`
+  (launch a fresh session, with optional `model` and `effort`).
+- **Failure is never silent.** Even when the target agent has no model
+  configured, the upstream API rate-limits the call, or the CLI exits non-zero,
+  `send()` returns with `delivered` / `error` / `response` populated instead of
+  hanging. The CLI's own error text surfaces in `response` so the caller can see
+  what went wrong.
+
+This is what turns yondermesh from a passive observability plane into an active
+coordination plane. An agent on machine A can now ask an agent on machine B a
+question and get an answer — synchronously, in one round-trip, with the full
+thread preserved in the audit log.
 
 ## What it doesn't do
 
@@ -156,8 +201,8 @@ details.
   under five minutes.
 - [Installation](/guide/installation) — npm install, build from source, release
   management, and the macOS LaunchAgent service.
-- [Architecture](/guide/architecture) — the three planes (local / sync / mount),
-  the codemap, and the invariants that keep them clean.
+- [Architecture](/guide/architecture) — the four planes (local / sync / mount /
+  trigger), the codemap, and the invariants that keep them clean.
 - [CLI Commands](/reference/cli) — the full command reference, auto-generated
   from `ymesh help`.
 - [CLI Adapters](/reference/adapters) — the support matrix for every CLI agent

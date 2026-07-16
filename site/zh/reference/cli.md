@@ -28,7 +28,7 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh daemon` | 启动后台 daemon（实时监听 + 定时 reconcile） |
 | `ymesh 选项:` | --db &lt;path&gt; --data-dir &lt;dir&gt; --pid-file &lt;path&gt; |
 | `ymesh install` | 本地构建 release 并安装 |
-| `ymesh service` | &lt;action&gt;    管理 LaunchAgent (install|uninstall|start|stop|status) |
+| `ymesh service` | &lt;action&gt;    LaunchAgent + menubar app (install|uninstall|start|stop|status) |
 | `ymesh releases` | 列出已安装的 release 版本 |
 | `ymesh update` | [--local]    从 Git 源码更新（构建失败自动回退）；--local 跳过 clone，从本地源码打包 |
 | `ymesh rollback` | 手动回退到上一个 release 版本 |
@@ -38,15 +38,17 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh mcp` | unregister      从 Claude Code 和 Codex 注销 |
 | `ymesh mcp` | status          查看 MCP 注册状态 |
 | `ymesh active` | 快速查看当前正在运行的 session（谁在干活） |
+| `ymesh waiting` | 查看等待你审阅的 session（agent 已完成回复） |
 | `ymesh doctor` | 运行系统诊断（检查安装、数据库、daemon、日志健康状态） |
 | `ymesh mount` | [status|all|remove]  管理跨 CLI 挂载（MCP/Skill/Plugin 到所有已安装的 CLI agent） |
 | `ymesh extract` | 提取项目全部 user 需求与 assistant 响应到 NDJSONL 文件（按行号/ID 索引） |
 | `ymesh handoff` | &lt;id&gt;        提取 session 浓缩 handoff 包（compacted 摘要 + tool call + plan），用于任务接管 |
 | `ymesh state` | &lt;action&gt;      管理运行时状态文件 (sync|show) |
-| `ymesh mailbox` | &lt;action&gt;    文件系统跨 session 通信 (post|get|list) |
+| `ymesh mailbox` | &lt;action&gt;    跨 session 消息总线 (post|get|pop|list|mark-read|check|whoami|unread) |
 | `ymesh launch` | 启动新 agent session（--cli &lt;agent&gt; --prompt "text" [--model &lt;m&gt;]） |
 | `ymesh inject` | 向运行中 session 注入消息（--cli &lt;agent&gt; --session &lt;id&gt; --message "text"） |
 | `ymesh transfer` | 跨 agent 转交 session（--cli &lt;src&gt; --session &lt;id&gt; --target &lt;dst&gt; [--output &lt;path&gt;]） |
+| `ymesh send` | 同步注入 v3：发送消息到目标 agent 并同步拿回复（--cli &lt;agent&gt; [--session &lt;id&gt;] [--mode stopped|running|new] --message "text" [--model &lt;m&gt;] [--effort &lt;e&gt;] [--cwd &lt;path&gt;] [--timeout &lt;ms&gt;] [--json]） |
 
 ## 通用选项
 

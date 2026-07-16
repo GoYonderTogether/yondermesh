@@ -226,6 +226,30 @@ This is the same package that `ymesh handoff <id>` produces on the CLI, so MCP a
 
 This bus is local-only — it is not replicated by cross-device sync. Use it for same-machine coordination between agents (for example, one agent telling another that a test suite has gone red).
 
+The legacy `yondermesh_mailbox_*` tools (`mailbox_check` / `mailbox_post` / `mailbox_reply`) are the v2 surface of the same bus. They are marked `(legacy v2, prefer yondermesh_send for sync delivery)` in their descriptions and remain available for audit reads — including reads of threads written by the v3 `yondermesh_send` tool.
+
+## Synchronous injection: `yondermesh_send`
+
+`yondermesh_send` is the v3 sync-injection entry point — it sends a user message to any connected CLI agent and gets the reply back in the same call. This is what closes the loop the v2 mailbox left open: until v3, an agent could leave a message for another agent but could never ask a question and get an answer. Now it can.
+
+| Argument | Required | Description |
+|---|---|---|
+| `cli` | yes | Target CLI id (`hermes`, `opencode`, `kimi`, `pi`, `aider`, `amp`, `antigravity`, `cline`, `codebuddy`, `continue`, `copilot`, `crush`, `cursor-ide`, `factory`, `gemini`, `goose`, `openclaw`, `openhands`, `qwen`, `trae-cli`, `trae-ide`, `vibe`, `windsurf`, …). |
+| `message` | yes | The user message to inject. |
+| `mode` | no | `stopped` / `running` / `new` (default `new`). |
+| `session_id` | no | Required for `stopped` and `running`; ignored for `new`. |
+| `model` | no | For `new` mode — pick the model. |
+| `effort` | no | For `new` mode — `low` / `medium` / `high`. |
+| `cwd` | no | Working directory for the target session. |
+| `timeout_ms` | no | Delivery timeout, default 60000. |
+| `from_session_id` | no | Sender session id (for audit). |
+
+Returns `{ cli, mode, delivered, response, exitCode, channel, latencyMs, newSessionId, error, messageId, replyMessageId }`. `delivered` is true when the message reached the CLI (even if the reply is empty). `response` is the cleaned reply text — `ReplyAdapter` strips ANSI, drops CLI banners and log lines, and folds blank lines, so what you get back is the agent's actual answer, not its startup noise. The full thread (your message + the reply) is audit-logged into `agent_messages` (your message as `kind=question`, the reply as `kind=task_update`, linked via `replyToId` + `threadId=thread-<messageId>`).
+
+Failure is never silent. `yondermesh_send` never throws (except for argument validation) and never hangs. Unknown CLI, missing model, non-zero exit, upstream API rate-limit — all surface as text in `response` or `error`, with `delivered=false`. The CLI's own error text appears in `response` so the caller can see exactly what went wrong.
+
+The same capability is on the CLI as `ymesh send` — see [Quickstart](/guide/quickstart#talk-to-any-agent-get-a-reply) for examples. The internal architecture is in `src/mailbox/core.ts` (`MailboxCore.send`), `src/trigger/adapter.ts` (`TriggerAdapter`), and `src/trigger/reply-adapter.ts` (`ReplyAdapter`) — see [Architecture](/guide/architecture) for the four-plane model.
+
 ## Related
 
 - [MCP Tools reference](/reference/mcp-tools) — canonical, auto-generated tool list.

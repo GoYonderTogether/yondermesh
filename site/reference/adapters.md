@@ -43,7 +43,9 @@ yondermesh reads native session formats from each supported CLI agent. Coverage 
 | `trae-ide` | C | [`src/trae-ide/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/trae-ide) | — |
 | `windsurf` | C | [`src/windsurf/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/windsurf) | — |
 | `detect` | ? | [`src/detect/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/detect) | — |
+| `mailbox` | ? | [`src/mailbox/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/mailbox) | — |
 | `sdk` | ? | [`src/sdk/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/sdk) | ─── 公共类型（再导出供单点 import） ─────────────────────────────────── |
+| `trigger` | ? | [`src/trigger/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/trigger) | — |
 
 ## Adding a New Adapter
 
