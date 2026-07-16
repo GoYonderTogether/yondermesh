@@ -3,8 +3,15 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { mcpJsonStrategy, mcpTomlStrategy, skillSymlinkStrategy } from '../src/mount/strategies.js';
+import {
+  mcpJsonStrategy,
+  mcpTomlStrategy,
+  skillSymlinkStrategy,
+  alwaysOnStrategy,
+  isOpenSpaceResidual,
+} from '../src/mount/strategies.js';
 import { CLI_REGISTRY, detectInstalledClis } from '../src/mount/registry.js';
+import { CONTEXT_BLOCK_START, CONTEXT_BLOCK_END } from '../src/mount/types.js';
 import type { Extension } from '../src/mount/types.js';
 
 // ── helpers ──
@@ -12,7 +19,9 @@ import type { Extension } from '../src/mount/types.js';
 let tmpHome: string;
 
 function mkdtemp(): string {
-  return fs.mkdtempSync(path.join(tmpdir(), 'ymesh-mount-'));
+  // 使用中性前缀，避免 tmpHome 路径本身包含 'ymesh' 污染
+  // skillSymlinkStrategy.isMounted 的 readlink target 校验。
+  return fs.mkdtempSync(path.join(tmpdir(), 'mount-'));
 }
 
 function writeJson(filePath: string, data: unknown): void {
@@ -34,8 +43,10 @@ const skillExt: Extension = {
 
 beforeEach(() => {
   tmpHome = mkdtemp();
-  // Create fake skill source
-  const skillSrc = path.join(tmpHome, 'fake-skill-source');
+  // Create fake skill source under a ymesh-release-like path so that
+  // skillSymlinkStrategy.isMounted's readlink target validation
+  // (yondermesh/ymesh/release) passes for positive cases.
+  const skillSrc = path.join(tmpHome, 'yondermesh', 'releases', 'current', 'skills', 'yondermesh-diagnose');
   fs.mkdirSync(skillSrc, { recursive: true });
   fs.writeFileSync(path.join(skillSrc, 'SKILL.md'), '---\nname: test\n---\n# test');
   skillExt.skillPath = skillSrc;
@@ -235,6 +246,25 @@ describe('skill-symlink strategy', () => {
     expect(skillSymlinkStrategy.isMounted('yondermesh-diagnose', skillsDir)).toBe(true);
   });
 
+  it('isMounted: returns false for symlink pointing to a non-ymesh target', () => {
+    // 模拟其他工具（如 lark-* marketplace）在 skills/ 下创建同名 symlink，
+    // 但 target 不指向 ymesh release 目录。isMounted 必须返回 false。
+    const skillsDir = path.join(tmpHome, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+    const foreignTarget = path.join(tmpHome, 'lark-marketplace', 'diagnose-skill');
+    fs.mkdirSync(foreignTarget, { recursive: true });
+    fs.symlinkSync(foreignTarget, path.join(skillsDir, 'yondermesh-diagnose'), 'dir');
+
+    expect(skillSymlinkStrategy.isMounted('yondermesh-diagnose', skillsDir)).toBe(false);
+  });
+
+  it('isMounted: returns false for a plain directory (not a symlink)', () => {
+    const skillsDir = path.join(tmpHome, 'skills');
+    fs.mkdirSync(path.join(skillsDir, 'yondermesh-diagnose'), { recursive: true });
+
+    expect(skillSymlinkStrategy.isMounted('yondermesh-diagnose', skillsDir)).toBe(false);
+  });
+
   it('unmount: removes symlink, preserves others', () => {
     const skillsDir = path.join(tmpHome, 'skills');
     skillSymlinkStrategy.mount(skillExt, skillsDir);
@@ -305,6 +335,14 @@ describe('always-on strategy (AGENTS.md / CLAUDE.md injection)', () => {
     expect(alwaysOnStrategy.isMounted('test', file)).toBe(true);
   });
 
+  it('isMounted: returns false for a partial/residual marker (START without END)', () => {
+    const file = path.join(tmpHome, 'AGENTS.md');
+    // 残缺标记：仅有 START，无 END，不应判定为已挂载
+    fs.writeFileSync(file, `# Header\n\n${CONTEXT_BLOCK_START}\nsome leftover\n`);
+
+    expect(alwaysOnStrategy.isMounted('test', file)).toBe(false);
+  });
+
   it('unmount: removes block, preserves surrounding content', () => {
     const file = path.join(tmpHome, 'AGENTS.md');
     fs.writeFileSync(file, '# Header\n\nSome instructions.\n');
@@ -371,6 +409,94 @@ describe('CLI registry', () => {
       }
     }
   });
+
+  it('detectInstalledClis: skips OpenSpace residual directories', () => {
+    // 把 .codex 伪装成 OpenSpace 残留目录：仅 skills/ 且 skills/ 下全是
+    // 指向 ~/.agents/skills/ 的 symlink。detectInstalledClis 应跳过它。
+    const dir = path.join(tmpHome, '.codex');
+    const skillsDir = path.join(dir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+    const agentsSkills = path.join(tmpHome, '.agents', 'skills');
+    fs.mkdirSync(path.join(agentsSkills, 'skill-a'), { recursive: true });
+    fs.mkdirSync(path.join(agentsSkills, 'skill-b'), { recursive: true });
+    fs.symlinkSync(path.join(agentsSkills, 'skill-a'), path.join(skillsDir, 'skill-a'), 'dir');
+    fs.symlinkSync(path.join(agentsSkills, 'skill-b'), path.join(skillsDir, 'skill-b'), 'dir');
+
+    const clis = detectInstalledClis(tmpHome);
+    const ids = clis.map((c) => c.id);
+    expect(ids).not.toContain('codex');
+  });
+
+  it('detectInstalledClis: still detects a real CLI alongside residual dirs', () => {
+    // .codex 是残留目录，.cursor 是真实安装（含配置文件）。
+    const residualDir = path.join(tmpHome, '.codex');
+    const residualSkills = path.join(residualDir, 'skills');
+    fs.mkdirSync(residualSkills, { recursive: true });
+    const agentsSkills = path.join(tmpHome, '.agents', 'skills');
+    fs.mkdirSync(path.join(agentsSkills, 'a'), { recursive: true });
+    fs.symlinkSync(path.join(agentsSkills, 'a'), path.join(residualSkills, 'a'), 'dir');
+
+    fs.mkdirSync(path.join(tmpHome, '.cursor'), { recursive: true });
+
+    const clis = detectInstalledClis(tmpHome);
+    const ids = clis.map((c) => c.id);
+    expect(ids).not.toContain('codex');
+    expect(ids).toContain('cursor');
+  });
 });
-import { alwaysOnStrategy } from '../src/mount/strategies.js';
-import { CONTEXT_BLOCK_START, CONTEXT_BLOCK_END } from '../src/mount/types.js';
+
+// ── OpenSpace residual detection ──
+
+describe('isOpenSpaceResidual', () => {
+  it('identifies an OpenSpace residual directory (skills/ with symlinks to ~/.agents/skills/)', () => {
+    const dir = path.join(tmpHome, '.junie');
+    const skillsDir = path.join(dir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+    const agentsSkills = path.join(tmpHome, '.agents', 'skills');
+    fs.mkdirSync(path.join(agentsSkills, 'skill-a'), { recursive: true });
+    fs.mkdirSync(path.join(agentsSkills, 'skill-b'), { recursive: true });
+    fs.symlinkSync(path.join(agentsSkills, 'skill-a'), path.join(skillsDir, 'skill-a'), 'dir');
+    fs.symlinkSync(path.join(agentsSkills, 'skill-b'), path.join(skillsDir, 'skill-b'), 'dir');
+
+    expect(isOpenSpaceResidual(dir)).toBe(true);
+  });
+
+  it('returns false for a real CLI directory (has more than just skills/)', () => {
+    const dir = path.join(tmpHome, '.codex');
+    fs.mkdirSync(path.join(dir, 'skills'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'config.toml'), 'model = "x"');
+
+    expect(isOpenSpaceResidual(dir)).toBe(false);
+  });
+
+  it('returns false when skills/ contains a plain directory (not a symlink)', () => {
+    const dir = path.join(tmpHome, '.roo');
+    const skillsDir = path.join(dir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+    fs.mkdirSync(path.join(skillsDir, 'real-skill'), { recursive: true });
+
+    expect(isOpenSpaceResidual(dir)).toBe(false);
+  });
+
+  it('returns false when skills/ symlinks point elsewhere (not ~/.agents/skills/)', () => {
+    const dir = path.join(tmpHome, '.qoder');
+    const skillsDir = path.join(dir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+    const otherTarget = path.join(tmpHome, 'somewhere', 'skill');
+    fs.mkdirSync(otherTarget, { recursive: true });
+    fs.symlinkSync(otherTarget, path.join(skillsDir, 'skill'), 'dir');
+
+    expect(isOpenSpaceResidual(dir)).toBe(false);
+  });
+
+  it('returns false when the only entry is not named "skills"', () => {
+    const dir = path.join(tmpHome, '.mux');
+    fs.mkdirSync(path.join(dir, 'plugins'), { recursive: true });
+
+    expect(isOpenSpaceResidual(dir)).toBe(false);
+  });
+
+  it('returns false for a non-existent directory', () => {
+    expect(isOpenSpaceResidual(path.join(tmpHome, 'does-not-exist'))).toBe(false);
+  });
+});

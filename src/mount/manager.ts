@@ -18,6 +18,7 @@ import { detectInstalledClis } from './registry.js';
 import {
   mcpJsonStrategy,
   mcpTomlStrategy,
+  mcpTomlArrayStrategy,
   skillSymlinkStrategy,
   claudeMcpStrategy,
   alwaysOnStrategy,
@@ -36,6 +37,13 @@ function generateContextBlock(): string {
     '- **CLI**: run `ymesh help` for commands (scan, status, sessions, doctor, mount)',
     '- **Skill**: `$yondermesh-diagnose` for system health checks',
     '- **Session query**: `ymesh sessions --json --limit 10` to see recent work',
+    '- **Mailbox**: cross-session messaging via `ymesh mailbox check` (CLI) or `yondermesh_mailbox_check` (MCP). Other agents can send you messages; call `mailbox check` at task start to see if you have unread.',
+    '',
+    'Mailbox usage:',
+    '- Check your inbox: `ymesh mailbox check` or MCP `yondermesh_mailbox_check`',
+    '- Post to another agent: `ymesh mailbox post --to <sid> --body "<msg>"` or MCP `yondermesh_mailbox_post`',
+    '- Reply to a message: `ymesh mailbox post --reply-to <id> --body "<msg>"` or MCP `yondermesh_mailbox_reply`',
+    '- Find your own session id: `ymesh mailbox whoami` or MCP `yondermesh_whoami`',
     '',
     'Use these to recall prior work context, check what other agents did, or diagnose issues.',
   ].join('\n');
@@ -160,6 +168,9 @@ function mountExtension(cli: CliTarget, ext: Extension, home: string): MountResu
       case 'mcp-toml':
         result = mcpTomlStrategy.mount(ext, paths.configPath);
         break;
+      case 'mcp-toml-array':
+        result = mcpTomlArrayStrategy.mount(ext, paths.configPath);
+        break;
       case 'skill-symlink':
         result = skillSymlinkStrategy.mount(ext, paths.skillsDir);
         break;
@@ -193,6 +204,9 @@ function checkMount(cli: CliTarget, ext: Extension, home: string): MountStatus {
       case 'mcp-toml':
         mounted = mcpTomlStrategy.isMounted(ext.name, paths.configPath);
         break;
+      case 'mcp-toml-array':
+        mounted = mcpTomlArrayStrategy.isMounted(ext.name, paths.configPath);
+        break;
       case 'skill-symlink':
         mounted = skillSymlinkStrategy.isMounted(ext.name, paths.skillsDir);
         break;
@@ -222,6 +236,9 @@ function unmountExtension(cli: CliTarget, ext: Extension, home: string): MountRe
         break;
       case 'mcp-toml':
         result = mcpTomlStrategy.unmount(ext.name, paths.configPath);
+        break;
+      case 'mcp-toml-array':
+        result = mcpTomlArrayStrategy.unmount(ext.name, paths.configPath);
         break;
       case 'skill-symlink':
         result = skillSymlinkStrategy.unmount(ext.name, paths.skillsDir);

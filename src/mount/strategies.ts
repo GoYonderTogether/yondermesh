@@ -89,6 +89,53 @@ export const mcpTomlStrategy = {
   },
 };
 
+// ── mcp-toml-array 策略 (Vibe) ──
+
+/**
+ * 向 TOML 配置文件写入 [[mcp_servers]] array-of-tables 段。
+ *
+ * Vibe 的 config.toml 使用 array-of-tables 而非 Codex 的 [mcp_servers.*] 子表。
+ * TOML 陷阱：顶层 scalar 必须放在所有 [[...]] 段之前，否则会被附加到最近的 table。
+ * 本策略只追加 [[mcp_servers]] 段到文件末尾（不新增顶层 scalar），故天然安全；
+ * 移除时按 name 字段匹配整个 [[mcp_servers]] 块删除。
+ */
+export const mcpTomlArrayStrategy = {
+  mount(ext: Extension, configPath: string): MountResult {
+    try {
+      let content = readTextSafe(configPath);
+      // 先移除已有的同名 [[mcp_servers]] 块
+      content = tomlRemoveArrayEntry(content, ext.name);
+      // 追加新段到末尾（顶层 scalar 不受影响）
+      const section = tomlFormatArrayEntry(ext.name, ext.mcp!);
+      content = content.trimEnd() + '\n' + section + '\n';
+      const dir = path.dirname(configPath);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(configPath, content, 'utf-8');
+      return { strategy: 'mcp-toml-array', target: '', extension: ext.name, success: true, message: `written to ${configPath}` };
+    } catch (e) {
+      return { strategy: 'mcp-toml-array', target: '', extension: ext.name, success: false, message: String(e) };
+    }
+  },
+
+  unmount(extName: string, configPath: string): MountResult {
+    try {
+      let content = readTextSafe(configPath);
+      content = tomlRemoveArrayEntry(content, extName);
+      content = content.trimEnd();
+      if (content) content += '\n';
+      fs.writeFileSync(configPath, content, 'utf-8');
+      return { strategy: 'mcp-toml-array', target: '', extension: extName, success: true, message: `removed from ${configPath}` };
+    } catch (e) {
+      return { strategy: 'mcp-toml-array', target: '', extension: extName, success: false, message: String(e) };
+    }
+  },
+
+  isMounted(extName: string, configPath: string): boolean {
+    const content = readTextSafe(configPath);
+    return tomlHasArrayEntry(content, extName);
+  },
+};
+
 // ── skill-symlink 策略 ──
 
 /**
@@ -128,7 +175,12 @@ export const skillSymlinkStrategy = {
   isMounted(extName: string, skillsDir: string): boolean {
     try {
       const linkPath = path.join(skillsDir, extName);
-      return fs.existsSync(linkPath) && fs.lstatSync(linkPath).isSymbolicLink();
+      if (!fs.existsSync(linkPath)) return false;
+      if (!fs.lstatSync(linkPath).isSymbolicLink()) return false;
+      // 校验 symlink 指向 ymesh release skills 目录，避免其他工具（如 lark-*
+      // marketplace）创建的同名 symlink 被误判为 ymesh 挂载。
+      const target = fs.readlinkSync(linkPath);
+      return target.includes('yondermesh') || target.includes('ymesh') || target.includes('release');
     } catch {
       return false;
     }
@@ -221,7 +273,10 @@ export const alwaysOnStrategy = {
 
   isMounted(_extName: string, instructionFile: string): boolean {
     const content = readTextSafe(instructionFile);
-    return content.includes(CONTEXT_BLOCK_START);
+    // 校验包含完整的 ymesh 标记块（START + END），避免残留/残缺标记误判。
+    // CONTEXT_BLOCK_START 即 `<!-- YONDERMESH_AWARENESS_START -->`，含
+    // `<!-- YONDERMESH_AWARENESS` 与 `YONDERMESH_START` 标记。
+    return content.includes(CONTEXT_BLOCK_START) && content.includes(CONTEXT_BLOCK_END);
   },
 };
 
@@ -239,6 +294,40 @@ function removeBlock(content: string): string {
   after = after.replace(/^\s*\n/, '');
   if (before && after) return before + '\n\n' + after;
   return before + after;
+}
+
+// ── OpenSpace 残留目录检测 ──
+
+/**
+ * 检测目录是否为 OpenSpace（HKUDS）批量创建的残留目录。
+ *
+ * OpenSpace 会创建空的 `~/.xxx/skills/` 目录，skills/ 下仅含若干指向
+ * `~/.agents/skills/` 的 symlink。这些并非真实安装的 agent，detect 时应跳过。
+ *
+ * 特征：
+ *   1. 目录下仅一个名为 `skills` 的子目录
+ *   2. `skills/` 非空，且每个条目都是 symlink
+ *   3. 所有 symlink 的 target 都包含 `.agents/skills`
+ */
+export function isOpenSpaceResidual(dir: string): boolean {
+  if (!fs.existsSync(dir)) return false;
+  const entries = fs.readdirSync(dir);
+  if (entries.length !== 1 || entries[0] !== 'skills') return false;
+  const skillsDir = path.join(dir, 'skills');
+  if (!fs.existsSync(skillsDir)) return false;
+  const skillEntries = fs.readdirSync(skillsDir);
+  if (skillEntries.length === 0) return false;
+  // 检查是否全是 symlink 且指向 ~/.agents/skills/
+  for (const entry of skillEntries) {
+    const entryPath = path.join(skillsDir, entry);
+    try {
+      const target = fs.readlinkSync(entryPath);
+      if (!target.includes('.agents/skills')) return false;
+    } catch {
+      return false; // 不是 symlink（普通目录或文件）
+    }
+  }
+  return true;
 }
 
 // ── 私有辅助 ──
@@ -291,6 +380,109 @@ function tomlFormatSection(name: string, mcp: { command: string; args: string[];
   out += `args = [${mcp.args.map((a) => `"${a}"`).join(', ')}]\n`;
   if (mcp.env && Object.keys(mcp.env).length > 0) {
     out += `\n[mcp_servers.${name}.env]\n`;
+    for (const [k, v] of Object.entries(mcp.env)) {
+      out += `${k} = "${v}"\n`;
+    }
+  }
+  return out;
+}
+
+// ── mcp-toml-array 辅助 (Vibe [[mcp_servers]]) ──
+
+/**
+ * 从 TOML 内容中移除 name 匹配的 [[mcp_servers]] 块。
+ * 一个 [[mcp_servers]] 块从 `[[mcp_servers]]` 头到下一个 `[[...]]`/`[...]` 头（或文件尾）。
+ * 仅删除其 `name = "<extName>"` 的块。
+ */
+function tomlRemoveArrayEntry(content: string, extName: string): string {
+  const lines = content.split('\n');
+  const out: string[] = [];
+  let inMcpBlock = false;
+  let blockMatches = false;
+  let blockLines: string[] = [];
+
+  const flushBlock = (): void => {
+    if (blockMatches) {
+      // 丢弃该块
+    } else {
+      out.push(...blockLines);
+    }
+    blockLines = [];
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('[[')) {
+      // 进入新 array-of-tables 块前，冲刷上一个 mcp 块
+      if (inMcpBlock) {
+        flushBlock();
+        inMcpBlock = false;
+      }
+      if (trimmed === '[[mcp_servers]]') {
+        inMcpBlock = true;
+        blockMatches = false;
+        blockLines = [line];
+        continue;
+      }
+      out.push(line);
+    } else if (trimmed.startsWith('[')) {
+      // 进入普通 table 块前，冲刷上一个 mcp 块
+      if (inMcpBlock) {
+        flushBlock();
+        inMcpBlock = false;
+      }
+      out.push(line);
+    } else if (inMcpBlock) {
+      blockLines.push(line);
+      // 检测 name = "extName"
+      const m = trimmed.match(/^name\s*=\s*"([^"]*)"/);
+      if (m && m[1] === extName) {
+        blockMatches = true;
+      }
+    } else {
+      out.push(line);
+    }
+  }
+  // 文件尾冲刷
+  if (inMcpBlock) {
+    flushBlock();
+  }
+  return out.join('\n');
+}
+
+/** 检测 TOML 内容是否包含 name 匹配的 [[mcp_servers]] 块 */
+function tomlHasArrayEntry(content: string, extName: string): boolean {
+  const lines = content.split('\n');
+  let inMcpBlock = false;
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('[[')) {
+      inMcpBlock = trimmed === '[[mcp_servers]]';
+      continue;
+    }
+    if (trimmed.startsWith('[')) {
+      inMcpBlock = false;
+      continue;
+    }
+    if (inMcpBlock) {
+      const m = trimmed.match(/^name\s*=\s*"([^"]*)"/);
+      if (m && m[1] === extName) return true;
+    }
+  }
+  return false;
+}
+
+/** 生成 [[mcp_servers]] array-of-tables 段 */
+function tomlFormatArrayEntry(name: string, mcp: { command: string; args: string[]; env?: Record<string, string> }): string {
+  let out = '[[mcp_servers]]\n';
+  out += `name = "${name}"\n`;
+  out += `transport = "stdio"\n`;
+  out += `command = "${mcp.command}"\n`;
+  out += `args = [${mcp.args.map((a) => `"${a}"`).join(', ')}]\n`;
+  out += `startup_timeout_sec = 30.0\n`;
+  out += `tool_timeout_sec = 60.0\n`;
+  if (mcp.env && Object.keys(mcp.env).length > 0) {
+    out += '\n[mcp_servers.env]\n';
     for (const [k, v] of Object.entries(mcp.env)) {
       out += `${k} = "${v}"\n`;
     }

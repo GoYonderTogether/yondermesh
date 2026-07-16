@@ -5,6 +5,7 @@ export {
   mcpTomlStrategy,
   skillSymlinkStrategy,
   claudeMcpStrategy,
+  isOpenSpaceResidual,
 } from './strategies.js';
 export type {
   Extension,
