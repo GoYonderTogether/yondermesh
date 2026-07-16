@@ -165,11 +165,20 @@ export class ClaudeCodeImporter {
   }
 
   /** 把 scan_run 标记为 failed 并写 error；记录写入失败时不掩盖原始错误 */
-  private finishRunFailed(runId: number, err: unknown): void {
+ private finishRunFailed(runId: number, err: unknown): void {
+   try {
+     this.store.finishScanRun(runId, { status: 'failed', error: errorMessage(err) });
+   } catch {
+     /* scan_run 记录写入失败不应掩盖导致扫描失败的原始错误 */
+   }
+ }
+
+  /** 获取文件 mtime（ms），失败回退到 Date.now() */
+  private getFileMtime(filePath: string): number {
     try {
-      this.store.finishScanRun(runId, { status: 'failed', error: errorMessage(err) });
+      return fs.statSync(filePath).mtimeMs;
     } catch {
-      /* scan_run 记录写入失败不应掩盖导致扫描失败的原始错误 */
+      return Date.now();
     }
   }
 
@@ -225,11 +234,12 @@ export class ClaudeCodeImporter {
        topology: 'root',
        sourceKind: 'A',
        messages: parsed.messages,
-       model: parsed.model,
-       cliVersion: parsed.cliVersion,
-       threadSource: parsed.sidechain ? 'sidechain' : 'user',
-     });
-     rootIdByNative.set(parsed.nativeId, result.sessionId);
+      model: parsed.model,
+      cliVersion: parsed.cliVersion,
+      threadSource: parsed.sidechain ? 'sidechain' : 'user',
+      fileModifiedAt: this.getFileMtime(item.absPath),
+    });
+    rootIdByNative.set(parsed.nativeId, result.sessionId);
       this.tally(result, { inserted: () => inserted++, updated: () => updated++, unchanged: () => unchanged++ });
     }
 
@@ -252,11 +262,12 @@ export class ClaudeCodeImporter {
        topology: 'subagent',
        sourceKind: 'A',
        messages: parsed.messages,
-       model: parsed.model,
-       cliVersion: parsed.cliVersion,
-       threadSource: parsed.sidechain ? 'sidechain' : 'user',
-     });
-     this.tally(result, {
+      model: parsed.model,
+      cliVersion: parsed.cliVersion,
+      threadSource: parsed.sidechain ? 'sidechain' : 'user',
+      fileModifiedAt: this.getFileMtime(item.absPath),
+    });
+    this.tally(result, {
         inserted: () => inserted++,
         updated: () => updated++,
         unchanged: () => unchanged++,
