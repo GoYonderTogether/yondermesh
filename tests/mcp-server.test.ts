@@ -132,9 +132,9 @@ describe('LOOP-011 验收门 1: listTools', () => {
     mcp = new McpServer(new SessionStore(':memory:'));
   });
 
-  it('返回工具列表（legacy + yondermesh_* 命名空间，共 25 个）', () => {
+ it('返回工具列表（精简集 + legacy + yondermesh_，共 32 个）', () => {
     const tools = mcp.listTools();
-   expect(tools).toHaveLength(25);
+  expect(tools).toHaveLength(32);
   });
 
   it('工具名称正确', () => {
@@ -363,7 +363,7 @@ describe('LOOP-011 验收门 9: stdio 协议', () => {
       id: 2,
       method: 'tools/list',
     });
-   expect(resp.result.tools).toHaveLength(25);
+  expect(resp.result.tools).toHaveLength(32);
   });
 
   it('handleMessage 处理 tools/call 请求', async () => {

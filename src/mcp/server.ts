@@ -109,6 +109,27 @@ export function parseRelativeTime(input?: string): number | null {
 
 const SERVER_INFO = { name: 'yondermesh', version: '0.1.0' } as const;
 
+/** yondermesh_* 工具 → 精简集替代名(whoami 不在表内,保留原样) */
+const YONDERMESH_DEPRECATED_TARGET: Record<string, string> = {
+  yondermesh_query_sessions: 'search_sessions',
+  yondermesh_get_session: 'get_session',
+  yondermesh_launch_agent: 'send',
+  yondermesh_inject_session: 'send',
+  yondermesh_transfer_session: 'send',
+  yondermesh_mount_status: 'agents',
+  yondermesh_mailbox_check: 'mailbox',
+  yondermesh_mailbox_post: 'mailbox',
+  yondermesh_mailbox_reply: 'mailbox',
+  yondermesh_send: 'send',
+  yondermesh_list_agents: 'agents',
+};
+
+/** 给 description 加 [deprecated, use X] 前缀 */
+function makeDeprecated(description: string, target: string): string {
+  if (!target) return description;
+  return `[deprecated, use ${target}] ${description}`;
+}
+
 export class McpServer {
   readonly store: SessionStore;
   private readonly options: McpServerOptions;
@@ -234,29 +255,138 @@ export class McpServer {
 
   // -- 工具定义 -----------------------------------------------------------
 
-  listTools(): McpToolDef[] {
-    // 旧版工具（本文件内定义的 handler）
-    const legacy: McpToolDef[] = [
-      {
-        name: 'search_sessions',
-        description:
-          '搜索本机所有 AI agent 的会话记录。可按时间范围、项目路径、agent 类型、会话类型过滤。用于在开始新任务前查找是否有相关历史会话，回顾某个项目的全部工作记录。',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            project_path: { type: 'string', description: '项目路径精确匹配' },
-            project_prefix: { type: 'string', description: '项目路径前缀' },
-            agent: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'kimi', 'cursor', 'copilot', 'gemini'], description: '按 agent 类型过滤' },
-            topology: { type: 'string', enum: ['root', 'subagent'], description: 'root=用户发起的真实会话，subagent=被其他 agent 调起的子会话' },
-            since: { type: 'string', description: '起始时间，ISO 8601 或相对时间如 7d / 24h / 30m' },
-            limit: { type: 'number', description: '返回条数，默认 20', default: 20 },
-          },
-        },
-      },
-      {
-        name: 'get_session_detail',
-        description:
-          '获取指定会话的消息记录。支持 live 模式直接读源文件获取实时内容（正在运行的会话也能读到最新消息）。用于了解某次会话的具体内容和决策过程，或查看另一个 agent 当前在做什么。新增 include_compacted / include_tool_calls / handoff_mode 参数用于任务接管场景（仅 live 模式生效，DB 模式忽略）。',
+ listTools(): McpToolDef[] {
+   // T1.3 精简集(推荐入口,排在最前)
+   const refined: McpToolDef[] = [
+     {
+       name: 'search_sessions',
+       description:
+         '搜索本机所有 AI agent 的会话记录。可按时间范围、项目路径、agent 类型、会话类型过滤,并支持 query 关键字全文检索(匹配会话消息正文)。用于在开始新任务前查找是否有相关历史会话,回顾某个项目的全部工作记录。',
+       inputSchema: {
+         type: 'object',
+         properties: {
+           query: { type: 'string', description: '关键字全文检索,大小写不敏感,匹配会话消息正文' },
+           search: { type: 'string', description: '同 query(别名)' },
+           source: { type: 'string', description: '按 agent 类型过滤(claude/codex/hermes 等),等价于旧参数 agent' },
+           project_path: { type: 'string', description: '项目路径精确匹配' },
+           project_prefix: { type: 'string', description: '项目路径前缀' },
+           agent: { type: 'string', enum: ['claude', 'codex', 'opencode', 'hermes', 'kimi', 'cursor', 'copilot', 'gemini'], description: '按 agent 类型过滤(旧别名,等价 source)' },
+           topology: { type: 'string', enum: ['root', 'subagent'], description: 'root=用户发起的真实会话，subagent=被其他 agent 调起的子会话' },
+           since: { type: 'string', description: '起始时间，ISO 8601 或相对时间如 7d / 24h / 30m' },
+           limit: { type: 'number', description: '返回条数，默认 20', default: 20 },
+         },
+       },
+     },
+     {
+       name: 'get_session',
+       description:
+         '获取指定会话的完整内容(消息记录)。支持 live 模式直读源文件获取实时内容、handoff_mode 任务接管模式,以及 include_relations 附带父子/关联会话拓扑。合并旧版 get_session_detail + get_session_relations + yondermesh_get_session。',
+       inputSchema: {
+         type: 'object',
+         properties: {
+           session_id: { type: 'string', description: '会话 ID' },
+           live: { type: 'boolean', description: '直读源文件获取实时内容(运行中会话也能读到最新)' },
+           limit: { type: 'number', description: '只返回最后 N 条消息' },
+           include_compacted: { type: 'boolean', description: 'live 模式附 codex 压缩摘要', default: false },
+           include_tool_calls: { type: 'boolean', description: 'live 模式保留 function_call', default: false },
+           handoff_mode: { type: 'boolean', description: '等价于 live + compacted + tool_calls + 尾部 30 条', default: false },
+           include_relations: { type: 'boolean', description: '附带父/子/关联会话拓扑', default: false },
+         },
+         required: ['session_id'],
+       },
+     },
+     {
+       name: 'list_active',
+       description:
+         '列出当前活跃或等待用户审阅的 AI agent 会话。合并旧版 list_active_sessions + who_is_working + who_is_waiting,附 live/idle/stopped 计数与各 session 运行时摘要。直查数据库,反映最近扫描周期内的状态。',
+       inputSchema: {
+         type: 'object',
+         properties: {
+           within_minutes: { type: 'number', description: '查多少分钟内有活动的 session,默认 30', default: 30 },
+           include_waiting: { type: 'boolean', description: '附带等待用户审阅的 session,默认 true', default: true },
+         },
+       },
+     },
+     {
+       name: 'overview',
+       description: '获取本机全部 AI agent 会话的统计概览(总数/root/subagent/消息数等)。合并旧版 get_overview。',
+       inputSchema: {
+         type: 'object',
+         properties: {
+           since: { type: 'string', description: '只统计此时间之后的数据' },
+           project_prefix: { type: 'string', description: '只统计匹配的项目' },
+         },
+       },
+     },
+     {
+       name: 'handoff',
+       description: '为任务接力生成浓缩 handoff 包。直读源文件,返回 codex 压缩后的 compacted 摘要、尾部近况、task_plan、session 元数据与活跃状态。合并旧版 get_session_handoff。',
+       inputSchema: {
+         type: 'object',
+         properties: {
+           session_id: { type: 'string', description: '会话 ID(必填)' },
+           tail_messages: { type: 'number', description: '尾部含 tool call 的消息条数,默认 30', default: 30 },
+         },
+         required: ['session_id'],
+       },
+     },
+     {
+       name: 'send',
+       description: '同步向目标 agent CLI 会话注入一条用户消息并拿到回复。三种模式: new(新建会话)/running(注入运行中会话)/stopped(恢复已停止会话)。合并旧版 yondermesh_send + launch_agent + inject_session + transfer_session。',
+       inputSchema: {
+         type: 'object',
+         properties: {
+           cli: { type: 'string', description: '目标 CLI id(如 hermes/claude/opencode)' },
+           message: { type: 'string', description: '用户消息' },
+           mode: { type: 'string', enum: ['new', 'running', 'stopped'], description: '投递模式,默认 new', default: 'new' },
+           session_id: { type: 'string', description: 'stopped/running 模式必填的目标 session id' },
+           model: { type: 'string', description: '模型 id(可选)' },
+           effort: { type: 'string', description: '推理强度(可选)' },
+           cwd: { type: 'string', description: '工作目录(可选)' },
+           timeout_ms: { type: 'number', description: '超时毫秒,默认 60000' },
+           from_session_id: { type: 'string', description: '发送方 session id(审计用)' },
+         },
+         required: ['cli', 'message'],
+       },
+     },
+     {
+       name: 'mailbox',
+       description: '异步留言读写。通过 action 选择操作: post(发消息/广播)/check(读未读)/reply(回复)/get(查收)。合并旧版 post_message + get_messages + yondermesh_mailbox_*。',
+       inputSchema: {
+         type: 'object',
+         properties: {
+           action: { type: 'string', enum: ['post', 'check', 'reply', 'get'], description: '操作,默认 check', default: 'check' },
+           to_session_id: { type: 'string', description: 'post: 目标 session' },
+           to_project: { type: 'string', description: 'post: 目标项目(广播)' },
+           from_session_id: { type: 'string', description: 'post/reply: 发送方' },
+           body: { type: 'string', description: 'post/reply: 正文' },
+           kind: { type: 'string', enum: ['info', 'warning', 'question', 'task_update'], description: '消息类型', default: 'info' },
+           priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'], description: '优先级', default: 'normal' },
+           reply_to_id: { type: 'number', description: 'reply: 被回复消息 ID' },
+           self_session_id: { type: 'string', description: 'check/get: 显式自身 session' },
+           mark_read: { type: 'boolean', description: 'check: 标记已读,默认 true', default: true },
+         },
+       },
+     },
+     {
+       name: 'agents',
+       description: '列出本机 agent CLI 及其安装状态、采集等级、挂载能力,可选附带挂载详情。合并旧版 yondermesh_list_agents + yondermesh_mount_status。',
+       inputSchema: {
+         type: 'object',
+         properties: {
+           installed_only: { type: 'boolean', description: '只返回已安装的,默认 true', default: true },
+           include_mounts: { type: 'boolean', description: '附带各 CLI 挂载详情,默认 false', default: false },
+         },
+       },
+     },
+   ];
+
+  // 旧版工具（本文件内定义的 handler）
+  const legacy: McpToolDef[] = [
+     {
+       name: 'get_session_detail',
+       description:
+         '[deprecated, use get_session] 获取指定会话的消息记录。支持 live 模式直接读源文件获取实时内容（正在运行的会话也能读到最新消息）。用于了解某次会话的具体内容和决策过程，或查看另一个 agent 当前在做什么。新增 include_compacted / include_tool_calls / handoff_mode 参数用于任务接管场景（仅 live 模式生效，DB 模式忽略）。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -273,7 +403,7 @@ export class McpServer {
       {
         name: 'get_session_handoff',
         description:
-          '专为任务接管设计：提取指定 session 的浓缩 handoff 包。直读源文件，返回 codex 压缩后的 compacted 摘要、最后一条真实 user 消息、尾部近况（保留 function_call/function_call_output/custom_tool_call，带截断）、task_plan（update_plan 等）、session 元数据与活跃状态。用于在另一个 agent 中断或需要接力时，快速获得完整上下文而不丢失 tool 调用细节。',
+         '[deprecated, use handoff] 专为任务接管设计：提取指定 session 的浓缩 handoff 包。直读源文件，返回 codex 压缩后的 compacted 摘要、最后一条真实 user 消息、尾部近况（保留 function_call/function_call_output/custom_tool_call，带截断）、task_plan（update_plan 等）、session 元数据与活跃状态。用于在另一个 agent 中断或需要接力时，快速获得完整上下文而不丢失 tool 调用细节。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -286,7 +416,7 @@ export class McpServer {
       {
         name: 'get_session_relations',
         description:
-          '查询会话的关系拓扑。返回该会话的父会话、子会话和关联会话。',
+         '[deprecated, use get_session] 查询会话的关系拓扑。返回该会话的父会话、子会话和关联会话。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -298,7 +428,7 @@ export class McpServer {
       {
         name: 'get_overview',
         description:
-          '获取本机全部 AI agent 会话的统计概览。',
+          '[deprecated, use overview] 获取本机全部 AI agent 会话的统计概览。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -310,7 +440,7 @@ export class McpServer {
       {
         name: 'list_active_sessions',
         description:
-          '列出当前正在运行或最近活跃的 AI agent 会话，附带运行时摘要（总数 / live / subagent / by source）。直查数据库，反映最近扫描周期内的状态。',
+          '[deprecated, use list_active] 列出当前正在运行或最近活跃的 AI agent 会话，附带运行时摘要（总数 / live / subagent / by source）。直查数据库，反映最近扫描周期内的状态。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -321,7 +451,7 @@ export class McpServer {
       {
         name: 'who_is_working',
         description:
-          '快速查询本机当前有哪些 AI agent 正在工作。返回人类可读的摘要，包含正在运行的 session 数量、subagent 数量、每个活跃 session 的简短描述（id / source / 项目目录 / 最近活动时间）。用于任何 agent 在开始任务前快速感知机器上当前的活动状态。',
+          '[deprecated, use list_active] 快速查询本机当前有哪些 AI agent 正在工作。返回人类可读的摘要，包含正在运行的 session 数量、subagent 数量、每个活跃 session 的简短描述（id / source / 项目目录 / 最近活动时间）。用于任何 agent 在开始任务前快速感知机器上当前的活动状态。',
         inputSchema: {
           type: 'object',
           properties: {},
@@ -330,7 +460,7 @@ export class McpServer {
       {
         name: 'who_is_waiting',
         description:
-          '查找等待用户审阅回复的 session。返回最后一条消息是 assistant 且近期有活动的 session 列表，每条含消息预览。返回结果附带下一步指引，提示调用方查看这些 session 的内容细节并主动向用户提议操作。',
+          '[deprecated, use list_active] 查找等待用户审阅回复的 session。返回最后一条消息是 assistant 且近期有活动的 session 列表，每条含消息预览。返回结果附带下一步指引，提示调用方查看这些 session 的内容细节并主动向用户提议操作。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -341,7 +471,7 @@ export class McpServer {
       {
         name: 'post_message',
         description:
-          '向另一个 agent session 或项目广播发送消息。用于跨 session 通信，例如通知另一个 agent 任务完成、提出建议、或提出问题。消息通过本地 SQLite 共享，目标 agent 可通过 get_messages 读取。',
+          '[deprecated, use mailbox] 向另一个 agent session 或项目广播发送消息。用于跨 session 通信，例如通知另一个 agent 任务完成、提出建议、或提出问题。消息通过本地 SQLite 共享，目标 agent 可通过 get_messages 读取。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -357,7 +487,7 @@ export class McpServer {
       {
         name: 'get_messages',
         description:
-          '读取发给当前 session 或项目的消息。读取后自动标记为已读。用于接收其他 agent 通过 post_message 发来的跨 session 通信。',
+          '[deprecated, use mailbox] 读取发给当前 session 或项目的消息。读取后自动标记为已读。用于接收其他 agent 通过 post_message 发来的跨 session 通信。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -421,50 +551,165 @@ export class McpServer {
       },
     ];
 
-    // 新版 yondermesh_* 工具（来自 MCP_TOOLS）
-    const newTools: McpToolDef[] = MCP_TOOLS.map(({ name, description, inputSchema }) => ({
-      name,
-      description,
-      inputSchema: inputSchema as Record<string, unknown>,
-    }));
+   // 新版 yondermesh_* 工具（来自 MCP_TOOLS）
+   // yondermesh_* 工具:除 whoami 外标 deprecated(指向精简集对应工具)
+   const newTools: McpToolDef[] = MCP_TOOLS.map(({ name, description, inputSchema }) => {
+     const isKept = name === 'yondermesh_whoami';
+     return {
+       name,
+       description: isKept ? description : makeDeprecated(description, YONDERMESH_DEPRECATED_TARGET[name] ?? ''),
+       inputSchema: inputSchema as Record<string, unknown>,
+     };
+   });
 
-    return [...legacy, ...newTools];
+   return [...refined, ...legacy, ...newTools];
   }
 
   // -- 工具执行 -----------------------------------------------------------
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
-    // 先尝试旧版工具路由
-    let result: McpToolResult;
-    const legacyResult = await this.tryLegacyTool(name, args);
-    if (legacyResult) {
-      result = legacyResult;
-    } else {
-      // 新版 yondermesh_* 工具
-      const newTool = findNewTool(name);
-      if (!newTool) {
-        return { content: `未知工具: ${name}`, isError: true };
-      }
-      const response = await newTool.handler(args);
-      result = {
-        content: response.content.map((c) => c.text).join('\n'),
-        isError: response.isError,
-      };
-    }
+ async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
+   // 先尝试旧版工具路由
+   let result: McpToolResult;
+   // 精简集工具优先路由(T1.3 精简正交集)
+   const refinedResult = await this.tryRefinedTool(name, args);
+   if (refinedResult) {
+     result = refinedResult;
+   } else {
+   const legacyResult = await this.tryLegacyTool(name, args);
+   if (legacyResult) {
+     result = legacyResult;
+   } else {
+     // 新版 yondermesh_* 工具
+     const newTool = findNewTool(name);
+     if (!newTool) {
+       return { content: `未知工具: ${name}`, isError: true };
+     }
+     const response = await newTool.handler(args);
+     result = {
+       content: response.content.map((c) => c.text).join('\n'),
+       isError: response.isError,
+     };
+   }
+   }
 
-    // Channel A: 非 mailbox 工具调用后注入 unread hint
-    if (!name.startsWith('yondermesh_mailbox_') && !name.startsWith('yondermesh_whoami') && !result.isError) {
+   // Channel A: 非 mailbox 工具调用后注入 unread hint
+   if (
+     !name.startsWith('yondermesh_mailbox_') &&
+     !name.startsWith('yondermesh_whoami') &&
+     name !== 'mailbox' &&
+     name !== 'send' &&
+     !result.isError
+   ) {
       const hint = this.buildUnreadHint(args);
       if (hint) {
         result = { content: result.content + '\n' + hint };
       }
     }
 
-    return result;
+   return result;
+ }
+
+  // -- T1.3 精简集工具 ---------------------------------------------------
+
+  /** 精简集工具路由,未匹配返回 null(旧工具路由随后兜底) */
+  private async tryRefinedTool(name: string, args: Record<string, unknown>): Promise<McpToolResult | null> {
+    switch (name) {
+      case 'get_session':
+        return this.refinedGetSession(args);
+      case 'list_active':
+        return this.refinedListActive(args);
+      case 'overview':
+        return this.getOverview(args);
+      case 'handoff':
+        return this.getSessionHandoff(args);
+      case 'send':
+        return this.forwardTo('yondermesh_send', args);
+      case 'mailbox':
+        return this.refinedMailbox(args);
+      case 'agents':
+        return this.refinedAgents(args);
+      default:
+        return null;
+    }
   }
 
-  /** 尝试旧版工具路由，未匹配返回 null */
-  private async tryLegacyTool(name: string, args: Record<string, unknown>): Promise<McpToolResult | null> {
+  /** 转发到 MCP_TOOLS 里的某个 yondermesh_* 工具 */
+  private async forwardTo(toolName: string, args: Record<string, unknown>): Promise<McpToolResult> {
+    const tool = findNewTool(toolName);
+    if (!tool) {
+      return { content: `内部错误: 工具 ${toolName} 未注册`, isError: true };
+    }
+    const resp = await tool.handler(args);
+    return {
+      content: resp.content.map((c) => c.text).join('\n'),
+      isError: resp.isError,
+    };
+  }
+
+  /** get_session: 合并 detail + relations */
+  private refinedGetSession(args: Record<string, unknown>): McpToolResult {
+    const detail = this.getSessionDetail(args);
+    if (detail.isError) return detail;
+    if (args.include_relations === true) {
+      const rels = this.getSessionRelations({ session_id: args.session_id });
+      const merged = JSON.parse(detail.content) as Record<string, unknown>;
+      merged.relations = JSON.parse(rels.content);
+      return { content: JSON.stringify(merged) };
+    }
+    return detail;
+  }
+
+  /** list_active: 合并 active sessions + waiting review */
+  private refinedListActive(args: Record<string, unknown>): McpToolResult {
+    const withinMin = typeof args.within_minutes === 'number' ? args.within_minutes : 30;
+    const withinMs = withinMin * 60_000;
+    const summary = this.store.getActiveSessionsSummary(withinMs, detectAliveProcesses);
+    const hints = buildActiveSessionHints(
+      summary,
+      this.store.getSessionsAwaitingReview(withinMs),
+    );
+    const result: Record<string, unknown> = { ...summary, _hints: hints };
+    if (args.include_waiting !== false) {
+      const awaiting = this.store.getSessionsAwaitingReview(withinMs);
+      result.waiting = awaiting.length;
+      result.waiting_sessions = awaiting;
+    }
+    return { content: JSON.stringify(result) };
+  }
+
+  /** mailbox: action 参数分发到旧 mailbox/post_message 工具 */
+  private async refinedMailbox(args: Record<string, unknown>): Promise<McpToolResult> {
+    const action = typeof args.action === 'string' ? args.action : 'check';
+    switch (action) {
+      case 'post':
+      case 'reply':
+        // reply 需要 reply_to_id,走 mailbox_reply;否则走 mailbox_post
+        if (typeof args.reply_to_id === 'number') {
+          return this.forwardTo('yondermesh_mailbox_reply', args);
+        }
+        return this.forwardTo('yondermesh_mailbox_post', args);
+      case 'check':
+      case 'get':
+        return this.forwardTo('yondermesh_mailbox_check', args);
+      default:
+        return { content: `无效 action: ${action}（合法: post | check | reply | get）`, isError: true };
+    }
+  }
+
+  /** agents: 合并 list_agents + mount_status */
+  private async refinedAgents(args: Record<string, unknown>): Promise<McpToolResult> {
+    const agentsResp = await this.forwardTo('yondermesh_list_agents', args);
+    if (args.include_mounts === true) {
+      const mountsResp = await this.forwardTo('yondermesh_mount_status', {});
+      const data = JSON.parse(agentsResp.content) as Record<string, unknown>;
+      data.mounts = JSON.parse(mountsResp.content);
+      return { content: JSON.stringify(data) };
+    }
+    return agentsResp;
+  }
+
+ /** 尝试旧版工具路由，未匹配返回 null */
+ private async tryLegacyTool(name: string, args: Record<string, unknown>): Promise<McpToolResult | null> {
     switch (name) {
       case 'search_sessions':
         return this.searchSessions(args);
@@ -522,8 +767,10 @@ export class McpServer {
 
     if (typeof args.project_path === 'string') query.projectPath = args.project_path;
     if (typeof args.project_prefix === 'string') query.projectPrefix = args.project_prefix;
-    if (typeof args.agent === 'string') query.source = args.agent;
-    if (typeof args.topology === 'string')
+   if (typeof args.agent === 'string') query.source = args.agent;
+    // 精简集别名:source 与旧 agent 参数等价,优先 agent(保持向后兼容)
+    if (typeof args.source === 'string' && args.source) query.source = args.source;
+   if (typeof args.topology === 'string')
       query.topology = args.topology as SessionTopology;
 
     const since = parseRelativeTime(
@@ -534,11 +781,25 @@ export class McpServer {
     const rawLimit = typeof args.limit === 'number' ? args.limit : 20;
     query.limit = Math.min(Math.max(1, rawLimit), 200);
 
-    const sessions = this.store.querySessions(query);
-    return { content: JSON.stringify(sessions.map(formatSessionSummary)) };
-  }
+  const sessions = this.store.querySessions(query);
 
-  private getSessionDetail(args: Record<string, unknown>): McpToolResult {
+   // 精简集全文检索:query/search 关键字对 session 消息正文做 substring 匹配。
+   // store 层无原生 FTS,这里在已过滤的候选上二次过滤;无关键字时行为不变。
+   const searchKw =
+     typeof args.query === 'string' ? args.query :
+     typeof args.search === 'string' ? args.search : '';
+   const matched = searchKw
+     ? sessions.filter((s) => {
+         const lower = searchKw.toLowerCase();
+         const msgs = this.store.getMessages(s.id);
+         return msgs.some((m) => m.content.toLowerCase().includes(lower));
+       })
+     : sessions;
+
+   return { content: JSON.stringify(matched.map(formatSessionSummary)) };
+ }
+
+ private getSessionDetail(args: Record<string, unknown>): McpToolResult {
     const sessionId = args.session_id;
     if (typeof sessionId !== 'string' || !sessionId) {
       return { content: '缺少必填参数 session_id', isError: true };

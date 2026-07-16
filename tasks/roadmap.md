@@ -107,7 +107,7 @@
 - **依赖**：T1.1。
 - **影响文件**：`src/bin/ymesh.ts`、`src/mcp/tools.ts`、`src/trigger/adapter.ts`。
 
-### [ ] T1.3 MCP 工具收敛（25 → 精简正交集）
+### [x] T1.3 MCP 工具收敛（25 → 精简正交集）
 - **目标**：消除新旧两套（13 legacy + 12 `yondermesh_*`）重复，给出单一、正交、LLM 友好的工具集 + 明确废弃表。
 - **背景（当前 25 个，重叠严重）**：
   - 查询重叠：`search_sessions` ≈ `yondermesh_query_sessions`；`get_session_detail` ≈ `yondermesh_get_session`；`get_overview` / `get_session_relations` / `list_active_sessions` / `who_is_working` / `who_is_waiting`。
