@@ -5,7 +5,7 @@
  */
 
 /** 扩展类型 */
-export type ExtensionType = 'mcp-server' | 'skill' | 'plugin';
+export type ExtensionType = 'mcp-server' | 'skill' | 'plugin' | 'cli-inject';
 
 /** 挂载策略类型 */
 export type MountStrategyType =
@@ -15,6 +15,7 @@ export type MountStrategyType =
   | 'skill-symlink' // skill 目录 symlink (Codex/Cursor/Trae/Continue/Windsurf/Factory/Vibe/CodeBuddy)
   | 'claude-mcp'    // claude mcp add/remove CLI (Claude Code)
   | 'always-on'     // 注入全局指令文件段落 (AGENTS.md/CLAUDE.md/GEMINI.md/.cursorrules)
+  | 'cli-inject'    // CLI 链式注入（openclaw/kimi/aider 等无标准 mount 点的 CLI）
   | 'unsupported';  // CLI 不支持该扩展类型（用于 status 显示与统计过滤）
 
 /** MCP Server 定义 */

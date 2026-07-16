@@ -439,6 +439,7 @@ function isDaemonRunning(pidFile: string): boolean {
 /** 检测全部 agent，返回结果数组 */
 interface AgentDetection {
   agent: string;
+  id: string;
   installed: boolean;
   configDir: string | null;
   cliBinary: string | null;
@@ -488,6 +489,7 @@ function detectAllAgents(dbPath: string): AgentDetection[] {
 
     return {
       agent: entry.name,
+      id: entry.name,
       installed,
       configDir,
       cliBinary,

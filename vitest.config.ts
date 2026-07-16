@@ -11,5 +11,12 @@ export default defineConfig({
         external: [/^node:/],
       },
     },
+    // 独立脚本（用 `npx tsx` 直接跑，非 vitest 单元测试）与外部示例项目排除
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/examples/**',
+      'tests/trigger-e2e.test.ts',
+    ],
   },
 });

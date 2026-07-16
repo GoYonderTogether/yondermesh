@@ -303,7 +303,13 @@ export const CLI_REGISTRY: CliTarget[] = [
     detect: (home) => existsSync(join(home, '.openclaw')),
     // OpenClaw 无 MCP / Skills / Always-on 挂载点（D4❌ D10❌），
     // 仅通过 CLI 链式注入实现等效效果（见 src/openclaw/inject.ts）。
-    capabilities: [],
+    capabilities: [
+      {
+        strategy: 'cli-inject',
+        extensionTypes: ['cli-inject'],
+        resolve: (home) => ({ configDir: join(home, '.openclaw') }),
+      },
+    ],
   },
   {
     id: 'kimi',
@@ -312,7 +318,13 @@ export const CLI_REGISTRY: CliTarget[] = [
     detect: (home) => existsSync(join(home, '.kimi')),
     // Kimi 无 MCP / Skills / Always-on 挂载点，
     // 通过 Wire 协议 + CLI 链式注入实现等效效果（见 src/kimi/inject.ts）。
-    capabilities: [],
+    capabilities: [
+      {
+        strategy: 'cli-inject',
+        extensionTypes: ['cli-inject'],
+        resolve: (home) => ({ configDir: join(home, '.kimi') }),
+      },
+    ],
   },
   {
     id: 'qwen',
@@ -596,7 +608,13 @@ export const CLI_REGISTRY: CliTarget[] = [
     detect: (home) => existsSync(join(home, '.aider')),
     // Aider 无 MCP / Skills / Always-on 挂载点（D3/D4/D5/D6/D8 全部 ❌），
     // 仅支持只读文件 --read + .aider.conf.yml（见 src/aider/inject.ts）。
-    capabilities: [],
+    capabilities: [
+      {
+        strategy: 'cli-inject',
+        extensionTypes: ['cli-inject'],
+        resolve: (home) => ({ configDir: join(home, '.aider') }),
+      },
+    ],
   },
   {
     id: 'trae-cli',
@@ -618,10 +636,17 @@ export const CLI_REGISTRY: CliTarget[] = [
     id: 'chatgpt',
     displayName: 'ChatGPT Desktop',
     homeDir: '.chatgpt',
-    // ChatGPT 桌面版无 CLI 配置目录，detect 检查 macOS .app bundle。
-    // capabilities 为空 → ymesh agents 显示但标记为 ❌（不可挂载）。
-    detect: () => existsSync('/Applications/ChatGPT.app'),
-    capabilities: [],
+    // ChatGPT 桌面版无 CLI 配置目录，detect 检查 ~/.chatgpt 是否存在
+    // （macOS .app bundle 会在用户首次配置后创建本地配置目录）。
+    detect: (home) => existsSync(join(home, '.chatgpt')),
+    // 无标准 MCP / Skills / Always-on 挂载点，仅支持 CLI 链式注入。
+    capabilities: [
+      {
+        strategy: 'cli-inject',
+        extensionTypes: ['cli-inject'],
+        resolve: (home) => ({ configDir: join(home, '.chatgpt') }),
+      },
+    ],
   },
 ];
 

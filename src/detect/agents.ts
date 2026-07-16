@@ -30,6 +30,8 @@ import { normalizeSource } from '../store/source-aliases.js';
 export interface AgentDetection {
   /** canonical source 名称（如 'hermes', 'opencode'） */
   canonical: string;
+  /** agent id（与 canonical 同值，用于 MCP 工具/CLI 的 id 字段） */
+  id: string;
   /** 显示名称（如 'Hermes Agent', 'OpenCode'） */
   displayName: string;
   /** 是否已安装 */
@@ -44,6 +46,8 @@ export interface AgentDetection {
   sessionDir?: string;
   /** 采集覆盖等级 */
   collectionLevel: 'A' | 'B' | 'C' | 'none';
+  /** 覆盖等级（collectionLevel 的字符串别名，用于 MCP 工具输出） */
+  coverage: string;
   /** scan 状态 */
   scanStatus: 'active' | 'scan' | 'coded' | 'missing';
   /** 是否支持 MCP 挂载 */
@@ -52,8 +56,12 @@ export interface AgentDetection {
   mountSkills: boolean;
   /** 是否支持 Always-on 注入 */
   mountAlwaysOn: boolean;
+  /** 支持的挂载策略列表（由 mountMcp/mountSkills/mountAlwaysOn 派生） */
+  mountStrategies: string[];
   /** 是否有 wrapper（launch/inject/interrupt） */
   hasWrapper: boolean;
+  /** 是否有 wrapper（hasWrapper 的别名，用于 MCP 工具输出） */
+  wrapperSupported: boolean;
   /** 是否有 hooks 系统 */
   hasHooks: boolean;
   /** 是否支持 GLM-5.2 */
@@ -513,17 +521,26 @@ export function detectAgents(options?: DetectOptions): AgentDetection[] {
   const results: AgentDetection[] = [];
 
   for (const meta of AGENT_REGISTRY) {
+    const mountStrategies: string[] = [];
+    if (meta.mountMcp) mountStrategies.push('mcp');
+    if (meta.mountSkills) mountStrategies.push('skill');
+    if (meta.mountAlwaysOn) mountStrategies.push('always-on');
+
     const detection: AgentDetection = {
       canonical: meta.canonical,
+      id: meta.canonical,
       displayName: meta.displayName,
       installed: false,
       installType: meta.installType,
       collectionLevel: meta.collectionLevel,
+      coverage: meta.collectionLevel,
       scanStatus: meta.scanStatus,
       mountMcp: meta.mountMcp,
       mountSkills: meta.mountSkills,
       mountAlwaysOn: meta.mountAlwaysOn,
+      mountStrategies,
       hasWrapper: meta.hasWrapper,
+      wrapperSupported: meta.hasWrapper,
       hasHooks: meta.hasHooks,
       glm52Supported: meta.glm52Supported,
     };
@@ -616,7 +633,13 @@ export function detectAgents(options?: DetectOptions): AgentDetection[] {
  *   GLM      — 是否支持 GLM-5.2
  *   SESS     — 已采集 session 数（未查询时显示 —）
  */
-export function formatAgentsTable(detections: AgentDetection[]): string {
+export function formatAgentsTable(
+  detections: AgentDetection[],
+  opts?: { installedOnly?: boolean },
+): string {
+  const filtered = opts?.installedOnly
+    ? detections.filter((d) => d.installed)
+    : detections;
   const icon = (v: boolean): string => (v ? '✅' : '—');
   const lines: string[] = [];
 
@@ -628,7 +651,7 @@ export function formatAgentsTable(detections: AgentDetection[]): string {
     '─────────────────────────────────────────────────────────────────────────────────'
   );
 
-  for (const d of detections) {
+  for (const d of filtered) {
     const agent = d.canonical.padEnd(22);
     const status = `${d.installed ? '✅' : '❌'} ${d.scanStatus}`.padEnd(11);
     const level = d.collectionLevel.padEnd(5);
@@ -644,9 +667,9 @@ export function formatAgentsTable(detections: AgentDetection[]): string {
   }
 
   // 汇总
-  const installed = detections.filter((d) => d.installed).length;
+  const installed = filtered.filter((d) => d.installed).length;
   lines.push('');
-  lines.push(`已安装: ${installed}/${detections.length}`);
+  lines.push(`已安装: ${installed}/${filtered.length}`);
 
   return lines.join('\n');
 }
@@ -654,6 +677,12 @@ export function formatAgentsTable(detections: AgentDetection[]): string {
 /**
  * JSON 格式化输出检测结果。
  */
-export function formatAgentsJson(detections: AgentDetection[]): string {
-  return JSON.stringify(detections, null, 2);
+export function formatAgentsJson(
+  detections: AgentDetection[],
+  opts?: { installedOnly?: boolean },
+): string {
+  const filtered = opts?.installedOnly
+    ? detections.filter((d) => d.installed)
+    : detections;
+  return JSON.stringify(filtered, null, 2);
 }
