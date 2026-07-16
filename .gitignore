@@ -3,6 +3,18 @@
 # 只忽略顶层 docs/，不影响 scripts/docs/ 等子目录
 /docs/
 
+# 内部规范文档（SDD / spec，仅本地用，禁止提交）
+/specs/
+
+# 运行时状态（daemon 当前会话快照等，禁止提交）
+.ymesh-runtime/
+
+# 内部输出产物（PPT / 提取消息等，禁止提交）
+/outputs/
+
+# 一次性内部脚本（如 BP 提取脚本，禁止提交）
+scripts/extract_bp_sessions.py
+
 # 外部参考项目（仅本地学习用，禁止提交）
 examples/
 
