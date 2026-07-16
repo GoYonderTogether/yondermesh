@@ -53,10 +53,10 @@ export function generatePlist(): string {
   <true/>
 
   <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-  </dict>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
 
   <key>StandardOutPath</key>
   <string>${resolveDataDir()}/daemon.log</string>
@@ -113,6 +113,13 @@ export function uninstallService(): void {
  * 启动 service（已安装时）
  */
 export function startService(): void {
+  const plistPath = resolveLaunchAgentPlist();
+  // 先尝试 load（如果已 loaded，launchctl load 会报错但无害）
+  try {
+    execSync(`launchctl load "${plistPath}"`, { stdio: 'pipe' });
+  } catch {
+    /* 已 loaded */
+  }
   execSync(`launchctl start ${LAUNCH_AGENT_LABEL}`, { stdio: 'pipe' });
 }
 
@@ -120,7 +127,14 @@ export function startService(): void {
  * 停止 service
  */
 export function stopService(): void {
-  execSync(`launchctl stop ${LAUNCH_AGENT_LABEL}`, { stdio: 'pipe' });
+  const plistPath = resolveLaunchAgentPlist();
+  // unload 会停止 daemon 并阻止 KeepAlive 重启
+  // plist 仍在，下次 login 或 startService 时会重新 load
+  try {
+    execSync(`launchctl unload "${plistPath}"`, { stdio: 'pipe' });
+  } catch {
+    /* 未加载 */
+  }
 }
 
 /**

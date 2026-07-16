@@ -164,3 +164,30 @@ describe('LOOP-008: Release 构建（使用真实源码）', () => {
     }
   });
 });
+
+// ─── daemon 自动重启 + stop/start 语义 ─────────────────────────────
+
+describe('daemon KeepAlive 策略 + stop/start 语义', () => {
+  it('plist KeepAlive=true（daemon 退出后自动重启，不区分 exit code）', () => {
+    const plist = generatePlist();
+    // 不应该是 SuccessfulExit dict，应该是 <true/>
+    expect(plist).toContain('<key>KeepAlive</key>');
+    expect(plist).not.toContain('SuccessfulExit');
+    // 紧跟 KeepAlive 的应该是 <true/>
+    const kaMatch = plist.match(/<key>KeepAlive<\/key>\s*<(\w+)\/??>/);
+    expect(kaMatch).toBeTruthy();
+    expect(kaMatch![1]).toBe('true');
+  });
+
+  it('plist 包含 ThrottleInterval（防止崩溃循环）', () => {
+    const plist = generatePlist();
+    expect(plist).toContain('ThrottleInterval');
+  });
+
+  it('plist RunAtLoad=true（安装后自动启动）', () => {
+    const plist = generatePlist();
+    const raMatch = plist.match(/<key>RunAtLoad<\/key>\s*<(\w+)\/??>/);
+    expect(raMatch).toBeTruthy();
+    expect(raMatch![1]).toBe('true');
+  });
+});

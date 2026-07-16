@@ -17,6 +17,7 @@ import { resolveCurrentSymlink } from './paths.js';
 /** 支持的 CLI skill 目录（相对 home） */
 const SKILL_TARGETS: { cli: string; dir: string }[] = [
   { cli: 'codex', dir: '.codex/skills' },
+  { cli: 'gemini', dir: '.gemini/skills' },
 ];
 
 /** yondermesh 自带的 skill 列表 */
