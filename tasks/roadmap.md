@@ -90,7 +90,7 @@
 
 核心不变式：**接口层和能力层永不出现 `import ... from '../<cli>/...'`**；所有 CLI 具体能力经 `src/adapters/registry.ts` 的统一注册表获取（当前散落在 `tools.ts` 的 `WRAPPER_LOADERS`、`registry.ts` 的 `CLI_REGISTRY`、`cmdScan` 的 27 段 try/catch）。
 
-### [ ] T1.1 建立统一适配器注册表
+### [x] T1.1 建立统一适配器注册表
 - **目标**：一个 `src/adapters/registry.ts` 汇总每个 CLI 的 importer / wrapper / inject / mount 能力与元信息，取代三处分散登记。
 - **执行步骤**：
   1. 定义 `AdapterDescriptor { id, displayName, coverage, importer?, wrapperLoader?, injectLoader?, mountCapabilities, channels[] }`。
