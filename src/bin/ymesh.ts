@@ -16,33 +16,6 @@ import { execSync } from 'node:child_process';
 import { SessionStore } from '../store/index.js';
 import { detectAliveProcesses } from '../store/process-detector.js';
 import type { ActiveSummary, SessionStats, SessionRecord } from '../store/index.js';
-import { CassImporter } from '../cass/index.js';
-import { ClaudeCodeImporter } from '../claude/index.js';
-import { CodexImporter } from '../codex/index.js';
-import { HermesImporter } from '../hermes/index.js';
-import { WindsurfExtractor } from '../windsurf/index.js';
-import { ContinueImporter } from '../continue/index.js';
-import { OpenCodeImporter } from '../opencode/index.js';
-import { CopilotImporter } from '../copilot/index.js';
-import { OpenClawImporter } from '../openclaw/index.js';
-import { KimiImporter } from '../kimi/index.js';
-import { QwenCodeImporter } from '../qwen/index.js';
-import { GeminiImporter } from '../gemini/index.js';
-import { PiImporter } from '../pi/index.js';
-import { FactoryDroidImporter } from '../factory/index.js';
-import { VibeImporter } from '../vibe/index.js';
-import { CodeBuddyImporter } from '../codebuddy/index.js';
-import { ClineImporter } from '../cline/index.js';
-import { CrushImporter } from '../crush/index.js';
-import { OpenHandsImporter } from '../openhands/index.js';
-import { GooseImporter } from '../goose/index.js';
-import { AntigravityImporter } from '../antigravity/index.js';
-import { AiderImporter } from '../aider/index.js';
-import { TraeCliImporter } from '../trae-cli/index.js';
-import { CursorIdeExtractor } from '../cursor-ide/index.js';
-import { TraeIdeExtractor } from '../trae-ide/index.js';
-import { AmpImporter } from '../amp/index.js';
-import { ChatGptExtractor } from '../chatgpt/index.js';
 import { YondermeshDaemon, defaultDaemonConfig, defaultDataDir } from '../daemon/index.js';
 import type { DaemonConfig } from '../daemon/index.js';
 
@@ -96,6 +69,7 @@ import type {
   SendTarget,
 } from '../mailbox/index.js';
 import { MAIL_KINDS, MAIL_PRIORITIES } from '../mailbox/index.js';
+import { loadWrapper as regLoadWrapper, listImporters } from '../adapters/registry.js';
 
 // 读取 package.json 的版本号
 const projectRoot = dirname(dirname(dirname(new URL(import.meta.url).pathname)));
@@ -497,339 +471,79 @@ function detectAllAgents(dbPath: string): AgentDetection[] {
       scanStatus,
       mountSupport,
       wrapperSupport,
-      sessionCount,
-    };
-  });
+     sessionCount,
+   };
+ });
 }
 
+/**
+ * cmdScan 采集器元信息：registry id → { label, scannedField, method }
+ * label 与原硬编码 importStats 的 adapter 字段一致（'claude' 非 'claude-code'，'trae_cli' 非 'trae-cli'）。
+ * scannedField 为各 importer/extractor 返回值中表示"扫描数"的字段名。
+ */
+const IMPORTER_META: Record<string, { label: string; scannedField: string; method: 'import' | 'extract' }> = {
+  cass:          { label: 'cass',       scannedField: 'scanned',      method: 'import' },
+  'claude-code': { label: 'claude',     scannedField: 'scanned',      method: 'import' },
+  codex:         { label: 'codex',      scannedField: 'scanned',      method: 'import' },
+  hermes:        { label: 'hermes',     scannedField: 'scanned',      method: 'import' },
+  windsurf:      { label: 'windsurf',   scannedField: 'scanned',      method: 'extract' },
+  continue:      { label: 'continue',   scannedField: 'scanned',      method: 'import' },
+  opencode:      { label: 'opencode',   scannedField: 'scanned',      method: 'import' },
+  copilot:       { label: 'copilot',    scannedField: 'scanned',      method: 'import' },
+  openclaw:      { label: 'openclaw',   scannedField: 'scanned',      method: 'import' },
+  kimi:          { label: 'kimi',       scannedField: 'scanned',      method: 'import' },
+  qwen:          { label: 'qwen',       scannedField: 'scanned',      method: 'import' },
+  gemini:        { label: 'gemini',     scannedField: 'scanned',      method: 'import' },
+  pi:            { label: 'pi',         scannedField: 'scanned',      method: 'import' },
+  factory:       { label: 'factory',    scannedField: 'scanned',      method: 'import' },
+  vibe:          { label: 'vibe',       scannedField: 'scanned',      method: 'import' },
+  codebuddy:     { label: 'codebuddy',  scannedField: 'scanned',      method: 'import' },
+  cline:         { label: 'cline',      scannedField: 'scanned',      method: 'import' },
+  crush:         { label: 'crush',      scannedField: 'scanned',      method: 'import' },
+  openhands:     { label: 'openhands',  scannedField: 'scanned',      method: 'import' },
+  goose:         { label: 'goose',      scannedField: 'scanned',      method: 'import' },
+  antigravity:   { label: 'antigravity',scannedField: 'scanned',      method: 'import' },
+  aider:         { label: 'aider',      scannedField: 'filesScanned', method: 'import' },
+  'trae-cli':    { label: 'trae_cli',   scannedField: 'filesScanned', method: 'import' },
+  'cursor-ide':  { label: 'cursor-ide', scannedField: 'scanned',      method: 'extract' },
+  'trae-ide':    { label: 'trae-ide',   scannedField: 'scanned',      method: 'extract' },
+  amp:           { label: 'amp',        scannedField: 'threadsSeen',  method: 'import' },
+  chatgpt:       { label: 'chatgpt',    scannedField: 'scanned',      method: 'extract' },
+};
+
 /** scan 命令 */
-function cmdScan(flags: Record<string, string | boolean>): number {
+async function cmdScan(flags: Record<string, string | boolean>): Promise<number> {
   const deviceId = (flags.device as string) ?? hostname();
   const store = openStore(flags.db as string | undefined);
 
   const importStats: Array<{ adapter: string; scanned: number; inserted: number; updated: number }> = [];
 
-  // cass
-  try {
-    const importer = new CassImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'cass', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'cass', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[cass] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // claude
-  try {
-    const importer = new ClaudeCodeImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'claude', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'claude', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[claude] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // codex
-  try {
-    const importer = new CodexImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'codex', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'codex', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[codex] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // hermes
-  try {
-    const importer = new HermesImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'hermes', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'hermes', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[hermes] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // windsurf（B 级兼容 importer —— Cascade .pb 加密，hook transcript 采集）
-  try {
-    const extractor = new WindsurfExtractor(store, { deviceId });
-    const stats = extractor.extract();
-    importStats.push({ adapter: 'windsurf', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'windsurf', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[windsurf] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // continue（A 级原生 adapter —— @continuedev/cli，binary: cn）
-  try {
-    const importer = new ContinueImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'continue', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'continue', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[continue] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // opencode（A 级原生 adapter）
-  try {
-    const importer = new OpenCodeImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'opencode', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'opencode', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[opencode] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // copilot（A 级原生 adapter）
-  try {
-    const importer = new CopilotImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'copilot', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'copilot', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[copilot] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // openclaw（A 级原生 adapter）
-  try {
-    const importer = new OpenClawImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'openclaw', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'openclaw', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[openclaw] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // kimi（A 级原生 adapter）
-  try {
-    const importer = new KimiImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'kimi', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'kimi', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[kimi] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // qwen（A 级原生 adapter）
-  try {
-    const importer = new QwenCodeImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'qwen', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'qwen', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[qwen] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // gemini（A 级原生 adapter）
-  try {
-    const importer = new GeminiImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'gemini', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'gemini', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[gemini] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // pi（A 级原生 adapter —— Pi / oh-my-pi / gsd-pi 三 flavor 共享 importer）
-  try {
-    const importer = new PiImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'pi', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'pi', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[pi] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // factory（A 级原生 adapter —— Factory Droid）
-  try {
-    const importer = new FactoryDroidImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'factory', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'factory', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[factory] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // vibe（A 级原生 adapter —— Mistral AI）
-  try {
-    const importer = new VibeImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'vibe', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'vibe', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[vibe] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // codebuddy（A 级原生 adapter —— Tencent WorkBuddy/CodeBuddy）
-  try {
-    const importer = new CodeBuddyImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'codebuddy', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'codebuddy', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[codebuddy] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // cline（A 级原生 adapter）
-  try {
-    const importer = new ClineImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'cline', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'cline', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[cline] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // crush（A 级原生 adapter —— Charm）
-  try {
-    const importer = new CrushImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'crush', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'crush', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[crush] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // openhands（A 级原生 adapter）
-  try {
-    const importer = new OpenHandsImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'openhands', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'openhands', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[openhands] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // goose（A 级原生 adapter —— Block）
-  try {
-    const importer = new GooseImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'goose', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'goose', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[goose] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // antigravity（A 级原生 adapter —— Google IDE）
-  try {
-    const importer = new AntigravityImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'antigravity', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'antigravity', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[antigravity] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // aider（B 级兼容 adapter —— per-project markdown）
-  try {
-    const importer = new AiderImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'aider', scanned: stats.filesScanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'aider', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[aider] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // trae-cli（B 级兼容 adapter —— trae-agent trajectory JSON）
-  try {
-    const importer = new TraeCliImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'trae_cli', scanned: stats.filesScanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'trae_cli', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[trae_cli] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // cursor-ide（B 级兼容 importer —— state.vscdb 提取）
-  try {
-    const extractor = new CursorIdeExtractor(store, { deviceId });
-    const stats = extractor.extract();
-    importStats.push({ adapter: 'cursor-ide', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'cursor-ide', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[cursor-ide] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // trae-ide（B 级兼容 importer —— JSONL 摘要提取）
-  try {
-    const extractor = new TraeIdeExtractor(store, { deviceId });
-    const stats = extractor.extract();
-    importStats.push({ adapter: 'trae-ide', scanned: stats.scanned, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'trae-ide', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[trae-ide] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // amp（B/C 级 adapter —— SaaS，amp threads export）
-  try {
-    const importer = new AmpImporter(store, { deviceId });
-    const stats = importer.import();
-    importStats.push({ adapter: 'amp', scanned: stats.threadsSeen, inserted: stats.inserted, updated: stats.updated });
-  } catch (err) {
-    importStats.push({ adapter: 'amp', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[amp] 跳过: ${String(err).split('\n')[0]}`);
-    }
-  }
-
-  // chatgpt（C 级 discovery only —— 仅注册 source alias，不采集 session）
-  try {
-    const extractor = new ChatGptExtractor(store, { deviceId });
-    extractor.extract();
-    importStats.push({ adapter: 'chatgpt', scanned: 0, inserted: 0, updated: 0 });
-  } catch (err) {
-    importStats.push({ adapter: 'chatgpt', scanned: 0, inserted: 0, updated: 0 });
-    if (!flags.json) {
-      console.error(`[chatgpt] 跳过: ${String(err).split('\n')[0]}`);
+  // 经 registry 动态加载采集器（listImporters 按注册表顺序返回，与原硬编码顺序一致）
+  for (const adapter of listImporters()) {
+    const meta = IMPORTER_META[adapter.id];
+    if (!meta) continue;
+    try {
+      const mod = await adapter.importerLoader!() as Record<string, unknown>;
+      // 扫描导出找 *Importer / *Extractor 类
+      let Cls: (new (store: unknown, opts: unknown) => { import?: () => unknown; extract?: () => unknown }) | null = null;
+      for (const key of Object.keys(mod)) {
+        if ((key.endsWith('Importer') || key.endsWith('Extractor')) && typeof mod[key] === 'function') {
+          Cls = mod[key] as new (store: unknown, opts: unknown) => { import?: () => unknown; extract?: () => unknown };
+          break;
+        }
+      }
+      if (!Cls) throw new Error(`未找到 importer/extractor 类`);
+      const instance = new Cls(store, { deviceId });
+      const stats = (meta.method === 'extract' ? instance.extract?.() : instance.import?.()) as Record<string, unknown> | undefined;
+      const scanned = (stats && typeof stats[meta.scannedField] === 'number') ? stats[meta.scannedField] as number : 0;
+      const inserted = (stats && typeof stats.inserted === 'number') ? stats.inserted as number : 0;
+      const updated = (stats && typeof stats.updated === 'number') ? stats.updated as number : 0;
+     importStats.push({ adapter: meta.label, scanned, inserted, updated });
+    } catch (err) {
+      importStats.push({ adapter: meta.label, scanned: 0, inserted: 0, updated: 0 });
+      if (!flags.json) {
+        console.error(`[${meta.label}] 跳过: ${String(err).split('\n')[0]}`);
+      }
     }
   }
 
@@ -891,34 +605,11 @@ function cmdAgents(flags: Record<string, string | boolean>): number {
 
 /** 动态加载 agent wrapper 模块 */
 async function loadWrapper(cli: string): Promise<any> {
-  const wrapperMap: Record<string, () => Promise<any>> = {
-    hermes: () => import('../hermes/index.js'),
-    continue: () => import('../continue/index.js'),
-    opencode: () => import('../opencode/index.js'),
-    copilot: () => import('../copilot/index.js'),
-    openclaw: () => import('../openclaw/index.js'),
-    kimi: () => import('../kimi/index.js'),
-    qwen: () => import('../qwen/index.js'),
-    gemini: () => import('../gemini/index.js'),
-    pi: () => import('../pi/index.js'),
-    factory: () => import('../factory/index.js'),
-    vibe: () => import('../vibe/index.js'),
-    codebuddy: () => import('../codebuddy/index.js'),
-    cline: () => import('../cline/index.js'),
-    crush: () => import('../crush/index.js'),
-    openhands: () => import('../openhands/index.js'),
-    goose: () => import('../goose/index.js'),
-    antigravity: () => import('../antigravity/index.js'),
-    aider: () => import('../aider/index.js'),
-    trae_cli: () => import('../trae-cli/index.js'),
-    windsurf: () => import('../windsurf/index.js'),
-    'cursor-ide': () => import('../cursor-ide/index.js'),
-    'trae-ide': () => import('../trae-ide/index.js'),
-    amp: () => import('../amp/index.js'),
-  };
-  const loader = wrapperMap[cli];
-  if (!loader) throw new Error(`Unknown CLI: ${cli}`);
-  return await loader();
+  // 'trae_cli'（下划线）是 CLI 参数的别名，registry 用 'trae-cli'
+  const regId = cli === 'trae_cli' ? 'trae-cli' : cli;
+  const mod = await regLoadWrapper(regId);
+  if (!mod) throw new Error(`Unknown CLI: ${cli}`);
+  return mod;
 }
 
 /** 实例化类式 wrapper（若该 agent 使用类式 wrapper） */

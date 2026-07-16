@@ -11,6 +11,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 
 import type { TriggerRequest, TriggerResult, TriggerChannel, CliTriggerCapability, TriggerMode } from './types.js';
+import { loadWrapper as regLoadWrapper, getAdapter } from '../adapters/registry.js';
 
 // ---------------------------------------------------------------------------
 // CLI 分类
@@ -139,36 +140,9 @@ function isIdeInstalled(cli: string): boolean {
 /** 动态加载 wrapper 模块并调用 inject */
 async function callWrapperInject(cli: string, sessionId: string, message: string): Promise<{ response: string; exitCode: number } | null> {
   try {
-    // 用变量路径绕过 TypeScript 静态解析
-    const moduleMap: Record<string, () => Promise<unknown>> = {
-      'hermes': () => import('../hermes/index.js'),
-      'gemini': () => import('../gemini/index.js'),
-      'goose': () => import('../goose/index.js'),
-      'codex': () => import('../codex/index.js'),
-      'claude': () => import('../claude/index.js'),
-      'claude-code': () => import('../claude/index.js'),
-      'aider': () => import('../aider/index.js'),
-      'amp': () => import('../amp/index.js'),
-      'factory': () => import('../factory/index.js'),
-      'vibe': () => import('../vibe/index.js'),
-      'codebuddy': () => import('../codebuddy/index.js'),
-      'trae-cli': () => import('../trae-cli/index.js'),
-      'opencode': () => import('../opencode/index.js'),
-      'qwen': () => import('../qwen/index.js'),
-      'openhands': () => import('../openhands/index.js'),
-      'kimi': () => import('../kimi/index.js'),
-      'openclaw': () => import('../openclaw/index.js'),
-      'pi': () => import('../pi/index.js'),
-      'copilot': () => import('../copilot/index.js'),
-      'crush': () => import('../crush/index.js'),
-      'cline': () => import('../cline/index.js'),
-      'continue': () => import('../continue/index.js'),
-      'antigravity': () => import('../antigravity/index.js'),
-    };
-    const loader = moduleMap[cli];
-    if (!loader) return null;
-
-    const mod = await loader() as Record<string, unknown>;
+    // 经注册表加载 wrapper 模块（registry 内部已 try/catch，未注册返回 null）
+    const mod = await regLoadWrapper(cli) as Record<string, unknown> | null;
+    if (!mod) return null;
 
     // 尝试找 inject 函数（函数式导出）
     if (typeof mod.inject === 'function') {
@@ -199,25 +173,12 @@ async function callWrapperInject(cli: string, sessionId: string, message: string
 /** 动态加载 wrapper 并调 launch（new 模式） */
 async function callWrapperLaunch(cli: string, prompt: string, opts: { model?: string; cwd?: string }): Promise<{ response: string; exitCode: number; sessionId?: string } | null> {
   try {
-    const moduleMap: Record<string, () => Promise<unknown>> = {
-      'hermes': () => import('../hermes/index.js'),
-      'gemini': () => import('../gemini/index.js'),
-      'goose': () => import('../goose/index.js'),
-      'aider': () => import('../aider/index.js'),
-      'amp': () => import('../amp/index.js'),
-      'factory': () => import('../factory/index.js'),
-      'vibe': () => import('../vibe/index.js'),
-      'codebuddy': () => import('../codebuddy/index.js'),
-      'trae-cli': () => import('../trae-cli/index.js'),
-      'crush': () => import('../crush/index.js'),
-      'cline': () => import('../cline/index.js'),
-      'continue': () => import('../continue/index.js'),
-      'antigravity': () => import('../antigravity/index.js'),
-    };
-    const loader = moduleMap[cli];
-    if (!loader) return null;
+    // 只对 cli-spawn 类 CLI 尝试 wrapper launch（与原 moduleMap 的 13 个 CLI 一致）
+    const adapter = getAdapter(cli);
+    if (!adapter?.wrapperLoader || !adapter.channels.includes('cli-spawn')) return null;
 
-    const mod = await loader() as Record<string, unknown>;
+    const mod = await regLoadWrapper(cli) as Record<string, unknown> | null;
+    if (!mod) return null;
 
     if (typeof mod.launch === 'function') {
       const raw = await (mod.launch as (p: string, o: Record<string, unknown>) => unknown)(prompt, opts);
@@ -904,7 +865,7 @@ async function wsRpcNewSessionOpenclaw(req: TriggerRequest, start: number, timeo
 
 /** Pi new session：通过 PiController.launch + stream 订阅 + waitForIdle 获取回复 */
 async function wsRpcNewSessionPi(req: TriggerRequest, start: number, timeoutMs: number): Promise<TriggerResult> {
-  const mod = await import('../pi/index.js') as {
+  const mod = await regLoadWrapper('pi') as {
     PiController: new () => {
       launch: (p: string, cli: string, opts: { cwd?: string }) => Promise<{
         sessionId: string;
@@ -949,7 +910,7 @@ async function wsRpcNewSessionPi(req: TriggerRequest, start: number, timeoutMs: 
 
 /** Copilot new session：通过 CopilotWrapper.launch spawn + 累积 stdout JSONL 流 */
 async function wsRpcNewSessionCopilot(req: TriggerRequest, start: number, timeoutMs: number): Promise<TriggerResult> {
-  const mod = await import('../copilot/index.js') as {
+  const mod = await regLoadWrapper('copilot') as {
     CopilotWrapper: new () => {
       launch: (p: string, opts: { cwd?: string; model?: string }) => Promise<{
         child: { stdout: { on: (ev: string, cb: (chunk: Buffer) => void) => void }; on: (ev: string, cb: (...args: unknown[]) => void) => void; kill: (sig?: string) => void };

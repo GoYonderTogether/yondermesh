@@ -100,7 +100,7 @@
 - **依赖**：无。
 - **影响文件**：新增 `src/adapters/registry.ts`、`tests/adapters-registry.test.ts`。
 
-### [ ] T1.2 接口层/能力层去除对 src/<cli> 的直接依赖
+### [x] T1.2 接口层/能力层去除对 src/<cli> 的直接依赖
 - **目标**：`cmdScan` / `tools.ts` / `trigger/adapter.ts` 改为经 T1.1 注册表取 CLI 能力。
 - **执行步骤**：cmdScan 遍历 `listImporters()`；tools.ts 的 `WRAPPER_LOADERS` 改用 `loadWrapper(id)`；trigger 的 wrapper 解析走注册表。
 - **验收条件**：`grep -rn "from '\.\./[a-z-]*/wrapper" src/mcp src/trigger src/bin` 零命中（除注册表本身）；全测试通过；`ymesh scan` 采集的 source 数不回退。

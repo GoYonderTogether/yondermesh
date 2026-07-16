@@ -27,6 +27,7 @@ import {
 import { verifyAll } from '../mount/manager.js';
 import { MailboxCore } from '../mailbox/index.js';
 import type { PostMessageInput, SendMode, SendTarget } from '../mailbox/index.js';
+import { loadWrapper as regLoadWrapper } from '../adapters/registry.js';
 
 // detectAgents 可能尚未创建（src/detect/agents.ts），用动态 import 兜底；
 // 若加载失败则回退到 mount/registry 的 detectInstalledClis。
@@ -169,33 +170,45 @@ function normalizeInjectResult(raw: unknown): { response: string; exitCode: numb
             ? 1
             : 0
         : 0;
-  return { response, exitCode };
+ return { response, exitCode };
+}
+
+/**
+ * 从注册表加载 wrapper 原始模块，再经 mapper 转成 WrapperModule。
+ * registry.loadWrapper 内部已 try/catch（失败返回 null），
+ * mod 为 null 时返回空 {} 与原 mapper 对缺失导出的行为一致。
+ */
+function wrapLoader(id: string, mapper: (mod: Record<string, unknown>) => WrapperModule): () => Promise<WrapperModule> {
+  return async () => {
+    const mod = await regLoadWrapper(id);
+    return mod ? mapper(mod as Record<string, unknown>) : {};
+  };
 }
 
 const WRAPPER_LOADERS: Record<string, () => Promise<WrapperModule>> = {
-  hermes: () => import('../hermes/index.js').then(mapHermesWrapper),
-  opencode: () => import('../opencode/index.js').then(mapOpenCodeWrapper),
-  kimi: () => import('../kimi/index.js').then(mapKimiWrapper),
-  pi: () => import('../pi/index.js').then(mapPiWrapper),
-  aider: () => import('../aider/index.js').then(mapAiderWrapper),
-  amp: () => import('../amp/index.js').then(mapAmpWrapper),
-  antigravity: () => import('../antigravity/index.js').then(mapGenericWrapper),
-  cline: () => import('../cline/index.js').then(mapGenericWrapper),
-  codebuddy: () => import('../codebuddy/index.js').then(mapGenericWrapper),
-  continue: () => import('../continue/index.js').then(mapGenericWrapper),
-  copilot: () => import('../copilot/index.js').then(mapGenericWrapper),
-  crush: () => import('../crush/index.js').then(mapGenericWrapper),
-  'cursor-ide': () => import('../cursor-ide/index.js').then(mapGenericWrapper),
-  factory: () => import('../factory/index.js').then(mapGenericWrapper),
-  gemini: () => import('../gemini/index.js').then(mapGenericWrapper),
-  goose: () => import('../goose/index.js').then(mapGenericWrapper),
-  openclaw: () => import('../openclaw/index.js').then(mapGenericWrapper),
-  openhands: () => import('../openhands/index.js').then(mapGenericWrapper),
-  qwen: () => import('../qwen/index.js').then(mapGenericWrapper),
-  'trae-cli': () => import('../trae-cli/index.js').then(mapGenericWrapper),
-  'trae-ide': () => import('../trae-ide/index.js').then(mapGenericWrapper),
-  vibe: () => import('../vibe/index.js').then(mapGenericWrapper),
-  windsurf: () => import('../windsurf/index.js').then(mapGenericWrapper),
+  hermes: wrapLoader('hermes', mapHermesWrapper),
+  opencode: wrapLoader('opencode', mapOpenCodeWrapper),
+  kimi: wrapLoader('kimi', mapKimiWrapper),
+  pi: wrapLoader('pi', mapPiWrapper),
+  aider: wrapLoader('aider', mapAiderWrapper),
+  amp: wrapLoader('amp', mapAmpWrapper),
+  antigravity: wrapLoader('antigravity', mapGenericWrapper),
+  cline: wrapLoader('cline', mapGenericWrapper),
+  codebuddy: wrapLoader('codebuddy', mapGenericWrapper),
+  continue: wrapLoader('continue', mapGenericWrapper),
+  copilot: wrapLoader('copilot', mapGenericWrapper),
+  crush: wrapLoader('crush', mapGenericWrapper),
+  'cursor-ide': wrapLoader('cursor-ide', mapGenericWrapper),
+  factory: wrapLoader('factory', mapGenericWrapper),
+  gemini: wrapLoader('gemini', mapGenericWrapper),
+  goose: wrapLoader('goose', mapGenericWrapper),
+  openclaw: wrapLoader('openclaw', mapGenericWrapper),
+  openhands: wrapLoader('openhands', mapGenericWrapper),
+  qwen: wrapLoader('qwen', mapGenericWrapper),
+  'trae-cli': wrapLoader('trae-cli', mapGenericWrapper),
+  'trae-ide': wrapLoader('trae-ide', mapGenericWrapper),
+  vibe: wrapLoader('vibe', mapGenericWrapper),
+  windsurf: wrapLoader('windsurf', mapGenericWrapper),
 };
 
 /** Hermes wrapper：HermesController 类，封装为函数式 API */
