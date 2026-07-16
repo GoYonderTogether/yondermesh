@@ -42,6 +42,7 @@ yondermesh 直接读取各 CLI agent 的原生 session 格式。覆盖等级：
 | `cursor-ide` | C | [`src/cursor-ide/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/cursor-ide) | — |
 | `trae-ide` | C | [`src/trae-ide/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/trae-ide) | — |
 | `windsurf` | C | [`src/windsurf/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/windsurf) | — |
+| `adapters` | ? | [`src/adapters/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/adapters) | — |
 | `detect` | ? | [`src/detect/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/detect) | — |
 | `mailbox` | ? | [`src/mailbox/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/mailbox) | — |
 | `sdk` | ? | [`src/sdk/`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/sdk) | ─── 公共类型（再导出供单点 import） ─────────────────────────────────── |
