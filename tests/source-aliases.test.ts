@@ -66,6 +66,22 @@ describe('Source 别名归一化', () => {
       expect(expanded).toContain(raw.toLowerCase());
     }
   });
+
+  it('normalizeSource: continue 变体归一化为 continue', () => {
+    expect(normalizeSource('continue')).toBe('continue');
+    expect(normalizeSource('cn')).toBe('continue');
+    expect(normalizeSource('continue_cli')).toBe('continue');
+    expect(normalizeSource('continue-cli')).toBe('continue');
+    expect(normalizeSource('CONTINUE')).toBe('continue');
+  });
+
+  it('expandSource: continue 展开包含 cn 和 continue_cli', () => {
+    const aliases = expandSource('continue');
+    expect(aliases).toContain('continue');
+    expect(aliases).toContain('cn');
+    expect(aliases).toContain('continue_cli');
+    expect(aliases).toContain('continue-cli');
+  });
 });
 
 

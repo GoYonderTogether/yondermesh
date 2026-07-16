@@ -3,11 +3,14 @@
  */
 
 export { SessionStore, LIVE_THRESHOLD_MS } from './session-store.js';
+export { STALE_THRESHOLD_MS } from './session-store.js';
 export { SCHEMA } from './schema.js';
 export { normalizeSource, expandSource, extractCanonicalId, sessionMatchKey } from './source-aliases.js';
 export type {
   ActiveSessionSummary,
   ActiveSummary,
+  ActivityStatus,
+  AwaitingReviewSession,
   Coverage,
   IngestResult,
   MessageRole,

@@ -14,11 +14,14 @@
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
-import { SCHEMA } from './schema.js';
-import { MIGRATION_COLUMNS } from './schema.js';
+import { SCHEMA, SCHEMA_INDEXES } from './schema.js';
+import { MIGRATION_COLUMNS, MIGRATION_BACKFILLS } from './schema.js';
+import type { ProcessAliveChecker } from './process-detector.js';
 import type {
   ActiveSessionSummary,
   ActiveSummary,
+  ActivityStatus,
+  AwaitingReviewSession,
   Coverage,
   IngestResult,
   Presence,
@@ -46,6 +49,9 @@ type Row = Record<string, unknown>;
 /** LIVE 阈值：最近 2 分钟内有 lastSeenAt 视为正在写入，与 MCP server 保持一致 */
 export const LIVE_THRESHOLD_MS = 120_000;
 
+/** STALE 阈值：超过此时间未修改文件视为已停止 */
+export const STALE_THRESHOLD_MS = 30 * 60_000; // 30 分钟
+
 import { expandSource, normalizeSource, sessionMatchKey } from './source-aliases.js';
 
 // node:sqlite 是实验性内置，vitest/vite 静态解析会误判为裸包 sqlite。
@@ -67,8 +73,11 @@ export class SessionStore {
 
   /** 应用 schema（幂等，可重复调用） */
   ensureSchema(): void {
+    // 顺序很重要：先建表，再跑列迁移（ALTER TABLE ADD COLUMN），
+    // 最后建索引——部分索引引用了迁移新增的列（如 idx_msg_thread → thread_id）。
     this.db.exec(SCHEMA);
     this.runMigrations();
+    this.db.exec(SCHEMA_INDEXES);
   }
 
   /** 幂等列迁移：检测列是否存在，缺失才 ALTER TABLE ADD COLUMN */
@@ -78,6 +87,13 @@ export class SessionStore {
       const exists = cols.some((c) => c.name === column);
       if (!exists) {
         this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+      }
+    }
+    // 数据回填（幂等）
+    for (const { check, sql } of MIGRATION_BACKFILLS) {
+      const row = this.db.prepare(check).get() as Row | undefined;
+      if (row && !row.has) {
+        this.db.exec(sql);
       }
     }
   }
@@ -166,31 +182,33 @@ export class SessionStore {
 
       // 首次创建：session + revision 1 + 消息
      if (!existing) {
-       const startedAt = input.startedAt ?? now;
-       this.db
-         .prepare(
-           `INSERT INTO sessions
-              (id, device_id, source_instance_id, native_session_id, source, cwd, project_path,
-               topology, presence, retention, sync_state, content_hash, current_revision_id,
-               message_count, started_at, last_seen_at, ended_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present', 'live', 'local', ?, NULL, ?, ?, ?, NULL, ?, ?)`,
-         )
-         .run(
-           sessionId,
-           input.deviceId,
-           input.sourceInstanceId,
-           input.nativeSessionId,
-           input.source,
-           input.cwd ?? null,
-           input.projectPath ?? null,
-           input.topology ?? 'root',
-           hash,
-           messageCount,
-           startedAt,
-           now,
-           now,
-           now,
-         );
+      const startedAt = input.startedAt ?? now;
+      const fileModifiedAt = input.fileModifiedAt ?? now;
+      this.db
+        .prepare(
+          `INSERT INTO sessions
+             (id, device_id, source_instance_id, native_session_id, source, cwd, project_path,
+              topology, presence, retention, sync_state, content_hash, current_revision_id,
+              message_count, started_at, last_seen_at, ended_at, created_at, updated_at, file_modified_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present', 'live', 'local', ?, NULL, ?, ?, ?, NULL, ?, ?, ?)`,
+        )
+        .run(
+          sessionId,
+          input.deviceId,
+          input.sourceInstanceId,
+          input.nativeSessionId,
+          input.source,
+          input.cwd ?? null,
+          input.projectPath ?? null,
+          input.topology ?? 'root',
+          hash,
+          messageCount,
+          startedAt,
+          now,
+          now,
+          now,
+          fileModifiedAt,
+        );
        // 写入元数据列（如果有值）
        this.updateMetadata(sessionId, input);
 
@@ -233,13 +251,14 @@ export class SessionStore {
          .get(sessionId) as Row).n as number) + 1;
      const revisionId = this.insertRevision(sessionId, nextNumber, hash, messageCount, input.sourceKind);
      this.insertMessages(sessionId, revisionId, input.messages);
+     const fileModifiedAtUpdate = input.fileModifiedAt ?? now;
      this.db
        .prepare(
          `UPDATE sessions
-          SET current_revision_id = ?, content_hash = ?, message_count = ?, last_seen_at = ?, updated_at = ?
+          SET current_revision_id = ?, content_hash = ?, message_count = ?, last_seen_at = ?, updated_at = ?, file_modified_at = ?
           WHERE id = ?`,
        )
-       .run(revisionId, hash, messageCount, now, now, sessionId);
+       .run(revisionId, hash, messageCount, now, now, fileModifiedAtUpdate, sessionId);
      this.updateMetadata(sessionId, input);
 
       this.db.exec('COMMIT');
@@ -456,43 +475,93 @@ export class SessionStore {
    *   - 在 store 层完成聚合（liveCount / subagentActive / rootActive / bySource）
    *   - isLive 判定：now - lastSeenAt < LIVE_THRESHOLD_MS（与 MCP server 一致）
    */
-  getActiveSessionsSummary(withinMs: number = 30 * 60 * 1000): ActiveSummary {
+  getActiveSessionsSummary(
+    withinMs: number = 30 * 60 * 1000,
+    processAliveChecker?: ProcessAliveChecker,
+  ): ActiveSummary {
     const now = Date.now();
     const threshold = now - withinMs;
 
-    // 用 updated_at（内容真的变化时才更新）而非 last_seen_at（每次扫描都刷新）
-    // 这样才能反映"最近真实活动"，而不是"最近被 ymesh 扫到"
+    // 用 file_modified_at（文件实际 mtime）判定活跃度，不受扫描时间影响。
+    // COALESCE 回退到 updated_at 兼容未迁移的老数据。
     const rows = this.db
       .prepare(
-        `SELECT id, source, cwd, project_path, topology, updated_at, message_count
+        `SELECT id, native_session_id, source, cwd, project_path, topology,
+                last_seen_at, updated_at, file_modified_at, message_count
          FROM sessions
-         WHERE retention = 'live' AND updated_at >= ?
-         ORDER BY updated_at DESC`,
+         WHERE retention = 'live' AND COALESCE(file_modified_at, updated_at) >= ?
+         ORDER BY COALESCE(file_modified_at, updated_at) DESC`,
       )
       .all(threshold) as Row[];
 
+    // 进程检测：如果提供了 checker，一次性查询所有候选 session 的进程存活状态
+    const aliveIds = processAliveChecker
+      ? processAliveChecker(rows.map((r) => r.native_session_id as string))
+      : null;
+    const hasProcessInfo = aliveIds !== null;
+
     const sessions: ActiveSessionSummary[] = rows.map((r) => {
-      const lastActivity = r.updated_at as number;
+      const fileModifiedAt = (r.file_modified_at as number | null) ?? (r.updated_at as number);
+      const ageMs = now - fileModifiedAt;
+      const isLive = ageMs < LIVE_THRESHOLD_MS;
+      const nativeId = r.native_session_id as string;
+
+      let activityStatus: ActivityStatus;
+      let processAlive: boolean | null;
+
+      if (hasProcessInfo) {
+        processAlive = aliveIds!.has(nativeId);
+        if (processAlive) {
+          // 进程在 → 用 mtime 区分 active writing vs waiting
+          activityStatus = isLive ? 'live' : 'idle';
+        } else if (ageMs < STALE_THRESHOLD_MS) {
+          // 进程检测不到 + 文件近期有更新 → session ID 可能未暴露在 ps args 中
+          //（如 codex、trae 等 IDE-based agent），不能判定为 stopped
+          activityStatus = isLive ? 'live' : 'idle';
+        } else {
+          // 进程检测不到 + 文件也超过 STALE 阈值 → 确实已停止
+          activityStatus = 'stopped';
+        }
+      } else {
+        // 无进程检测 → 退回 mtime-only（不降低准确性）
+        processAlive = null;
+        activityStatus = isLive
+          ? 'live'
+          : ageMs < STALE_THRESHOLD_MS
+            ? 'idle'
+            : 'stale';
+      }
+
       return {
         sessionId: r.id as string,
+        nativeSessionId: nativeId,
         source: r.source as string,
         cwd: (r.cwd as string | null) ?? null,
         projectPath: (r.project_path as string | null) ?? null,
         topology: r.topology as SessionTopology,
-        lastSeenAt: lastActivity,
+        lastSeenAt: r.last_seen_at as number,
         messageCount: r.message_count as number,
-        isLive: now - lastActivity < LIVE_THRESHOLD_MS,
+        fileModifiedAt,
+        isLive,
+        activityStatus,
+        processAlive,
       };
     });
 
     const bySource: Record<string, number> = {};
     let liveCount = 0;
+    let idleCount = 0;
+    let staleCount = 0;
+    let stoppedCount = 0;
     let subagentActive = 0;
     let rootActive = 0;
 
     for (const s of sessions) {
       bySource[s.source] = (bySource[s.source] ?? 0) + 1;
-      if (s.isLive) liveCount++;
+      if (s.activityStatus === 'live') liveCount++;
+      else if (s.activityStatus === 'idle') idleCount++;
+      else if (s.activityStatus === 'stopped') stoppedCount++;
+      else staleCount++;
       if (s.topology === 'subagent') subagentActive++;
       if (s.topology === 'root') rootActive++;
     }
@@ -500,11 +569,61 @@ export class SessionStore {
     return {
       totalActive: sessions.length,
       liveCount,
+      idleCount,
+      staleCount,
+      stoppedCount,
       subagentActive,
       rootActive,
       bySource,
       sessions,
     };
+  }
+
+  /**
+   * 找出等待用户审阅的 session：最后一条消息是 assistant + 文件近期有活动。
+   *
+   * 判定逻辑：
+   *   - retention = 'live'
+   *   - file_modified_at 在 withinMs 窗口内（默认 30 分钟）
+   *   - 当前 revision 的最后一条消息 role = 'assistant'
+   *
+   * 性能：单条 SQL 用子查询取每个 session 的最后一条消息，走索引。
+   */
+  getSessionsAwaitingReview(withinMs: number = 30 * 60 * 1000): AwaitingReviewSession[] {
+    const now = Date.now();
+    const threshold = now - withinMs;
+
+    const rows = this.db
+      .prepare(
+        `SELECT s.id, s.native_session_id, s.source, s.cwd, s.project_path,
+                s.topology, s.message_count,
+                COALESCE(s.file_modified_at, s.updated_at) AS file_modified_at,
+                lm.role AS last_role, lm.content AS last_content
+         FROM sessions s
+         JOIN messages lm ON lm.id = (
+           SELECT m.id FROM messages m
+           WHERE m.session_id = s.id AND m.revision_id = s.current_revision_id
+           ORDER BY m.seq DESC LIMIT 1
+         )
+         WHERE s.retention = 'live'
+           AND COALESCE(s.file_modified_at, s.updated_at) >= ?
+           AND lm.role = 'assistant'
+         ORDER BY file_modified_at DESC`,
+      )
+      .all(threshold) as Row[];
+
+    return rows.map((r) => ({
+      sessionId: r.id as string,
+      nativeSessionId: r.native_session_id as string,
+      source: r.source as string,
+      cwd: (r.cwd as string | null) ?? null,
+      projectPath: (r.project_path as string | null) ?? null,
+      topology: r.topology as SessionTopology,
+      messageCount: r.message_count as number,
+      fileModifiedAt: r.file_modified_at as number,
+      lastRole: r.last_role as SessionMessage['role'],
+      lastMessagePreview: (r.last_content as string).slice(0, 100),
+    }));
   }
 
   // ─── 跨源去重 ──────────────────────────────────────────────────────────
@@ -828,6 +947,7 @@ export class SessionStore {
       totalInputTokens: (row.total_input_tokens as number | null) ?? null,
       totalOutputTokens: (row.total_output_tokens as number | null) ?? null,
       toolCallCount: (row.tool_call_count as number | null) ?? null,
+      fileModifiedAt: (row.file_modified_at as number | null) ?? null,
     };
   }
 }

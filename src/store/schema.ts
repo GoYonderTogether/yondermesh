@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   total_input_tokens    INTEGER,
   total_output_tokens   INTEGER,
   tool_call_count       INTEGER,
-  UNIQUE (device_id, source_instance_id, native_session_id),
+  file_modified_at       INTEGER,
+ UNIQUE (device_id, source_instance_id, native_session_id),
   FOREIGN KEY (source_instance_id) REFERENCES source_instances(id)
 );
 
@@ -111,6 +112,31 @@ CREATE TABLE IF NOT EXISTS scan_runs (
   FOREIGN KEY (source_instance_id) REFERENCES source_instances(id)
 );
 
+-- 7. agent_messages：跨 session 消息总线
+CREATE TABLE IF NOT EXISTS agent_messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  to_session_id   TEXT,
+  to_project      TEXT,
+  from_session_id TEXT,
+  body            TEXT NOT NULL,
+  kind            TEXT NOT NULL DEFAULT 'info',
+  created_at      INTEGER NOT NULL,
+  read_at         INTEGER,
+  -- mailbox v2 扩展（src/mailbox/core.ts）
+  priority        TEXT NOT NULL DEFAULT 'normal',
+  expires_at      INTEGER,
+  thread_id       TEXT,
+  reply_to_id     INTEGER,
+  FOREIGN KEY (reply_to_id) REFERENCES agent_messages(id)
+);
+`;
+
+/**
+ * 索引定义。必须在 MIGRATION_COLUMNS 之后执行，因为部分索引引用了
+ * 迁移新增的列（如 idx_msg_thread 引用 thread_id）。旧库的 agent_messages
+ * 表在 CREATE TABLE IF NOT EXISTS 时不会重建，必须先 ALTER 再建索引。
+ */
+export const SCHEMA_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_sessions_device        ON sessions(device_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_instance      ON sessions(source_instance_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_source        ON sessions(source);
@@ -122,22 +148,12 @@ CREATE INDEX IF NOT EXISTS idx_rel_from               ON session_relationships(f
 CREATE INDEX IF NOT EXISTS idx_rel_to                 ON session_relationships(to_session_id);
 CREATE INDEX IF NOT EXISTS idx_rel_type               ON session_relationships(relation_type);
 CREATE INDEX IF NOT EXISTS idx_scanruns_instance      ON scan_runs(source_instance_id);
-
--- 7. agent_messages：跨 session 消息总线
-CREATE TABLE IF NOT EXISTS agent_messages (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  to_session_id   TEXT,
-  to_project      TEXT,
-  from_session_id TEXT,
-  body            TEXT NOT NULL,
-  kind            TEXT NOT NULL DEFAULT 'info',
-  created_at      INTEGER NOT NULL,
-  read_at         INTEGER
-);
-
 CREATE INDEX IF NOT EXISTS idx_msg_to_session         ON agent_messages(to_session_id);
 CREATE INDEX IF NOT EXISTS idx_msg_to_project         ON agent_messages(to_project);
 CREATE INDEX IF NOT EXISTS idx_msg_created            ON agent_messages(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_msg_unread             ON agent_messages(read_at, to_session_id);
+CREATE INDEX IF NOT EXISTS idx_msg_thread             ON agent_messages(thread_id);
+CREATE INDEX IF NOT EXISTS idx_msg_expires            ON agent_messages(expires_at);
 `;
 
 /**
@@ -157,4 +173,22 @@ export const MIGRATION_COLUMNS: { table: string; column: string; type: string }[
   { table: 'sessions', column: 'total_cache_creation_tokens', type: 'INTEGER' },
   { table: 'sessions', column: 'grand_total_tokens', type: 'INTEGER' },
   { table: 'sessions', column: 'api_call_count', type: 'INTEGER' },
+  { table: 'sessions', column: 'file_modified_at', type: 'INTEGER' },
+  // mailbox v2 扩展（src/mailbox/core.ts）
+  { table: 'agent_messages', column: 'priority', type: "TEXT NOT NULL DEFAULT 'normal'" },
+  { table: 'agent_messages', column: 'expires_at', type: 'INTEGER' },
+  { table: 'agent_messages', column: 'thread_id', type: 'TEXT' },
+  { table: 'agent_messages', column: 'reply_to_id', type: 'INTEGER' },
+];
+
+/**
+ * 数据回填语句：在 runMigrations 之后执行，幂等。
+ * 每条 { sql, check }：check 查询返回 1 表示已有非 NULL 值，跳过；否则执行 sql。
+ */
+export const MIGRATION_BACKFILLS: { check: string; sql: string }[] = [
+  {
+    check:
+      "SELECT EXISTS(SELECT 1 FROM sessions WHERE file_modified_at IS NOT NULL) AS has",
+    sql: "UPDATE sessions SET file_modified_at = last_seen_at WHERE file_modified_at IS NULL",
+  },
 ];
