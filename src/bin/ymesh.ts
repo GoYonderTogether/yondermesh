@@ -8,10 +8,9 @@
  * 支持 --json 全局标志，输出 JSON 格式。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
 import { hostname, homedir } from 'node:os';
-import { randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
 
 import { SessionStore } from '../store/index.js';
@@ -91,9 +90,10 @@ import { MailboxCore } from '../mailbox/index.js';
 import type {
   MailKind,
   MailPriority,
-  MailboxMessage,
   MessageFilter,
   PostMessageInput,
+  SendMode,
+  SendTarget,
 } from '../mailbox/index.js';
 import { MAIL_KINDS, MAIL_PRIORITIES } from '../mailbox/index.js';
 
@@ -259,6 +259,7 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   launch              启动新 agent session（--cli <agent> --prompt "text" [--model <m>]）
   inject              向运行中 session 注入消息（--cli <agent> --session <id> --message "text"）
   transfer            跨 agent 转交 session（--cli <src> --session <id> --target <dst> [--output <path>]）
+  send                同步注入 v3：发送消息到目标 agent 并同步拿回复（--cli <agent> [--session <id>] [--mode stopped|running|new] --message "text" [--model <m>] [--effort <e>] [--cwd <path>] [--timeout <ms>] [--json]）
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -2407,6 +2408,92 @@ function cmdMailboxUnread(flags: Record<string, string | boolean>): number {
   }
 }
 
+// ─── send 命令（v3 同步注入模型）──────────────────────────────────────────
+//
+// MailboxCore.send() 是 v3 同步注入入口：调用方提供 --cli + --message，
+// 内部依次执行：审计写入 → TriggerAdapter.trigger() → ReplyAdapter.extractReply()
+// → 审计写入回复 → 返回 SendResult。CLI 只做参数解析 + 输出格式化。
+
+/** send 命令：同步注入 v3 */
+async function cmdSend(flags: Record<string, string | boolean>): Promise<number> {
+  const cli = typeof flags.cli === 'string' ? flags.cli : '';
+  const message = typeof flags.message === 'string' ? flags.message : '';
+  const session = typeof flags.session === 'string' ? flags.session : undefined;
+  const rawMode = typeof flags.mode === 'string' ? flags.mode : 'new';
+
+  if (!cli || !message) {
+    console.error('用法: ymesh send --cli <agent> [--session <id>] [--mode stopped|running|new]');
+    console.error('      --message "text" [--model <m>] [--effort <e>] [--cwd <path>]');
+    console.error('      [--timeout <ms>] [--from <sid>] [--json]');
+    return 1;
+  }
+
+  if (rawMode !== 'stopped' && rawMode !== 'running' && rawMode !== 'new') {
+    console.error(`[yondermesh] 无效 --mode: ${rawMode}（合法: stopped | running | new）`);
+    return 1;
+  }
+  if ((rawMode === 'stopped' || rawMode === 'running') && !session) {
+    console.error(`[yondermesh] ${rawMode} 模式需要 --session <id>`);
+    return 1;
+  }
+
+  const model = typeof flags.model === 'string' ? flags.model : undefined;
+  const effort = typeof flags.effort === 'string' ? flags.effort : undefined;
+  const cwd = typeof flags.cwd === 'string' ? flags.cwd : undefined;
+  const fromSid = typeof flags.from === 'string' ? flags.from : undefined;
+  const timeoutMs = typeof flags.timeout === 'string' ? parseInt(flags.timeout, 10) : undefined;
+
+  const target: SendTarget = {
+    cli,
+    sessionId: session,
+    mode: rawMode as SendMode,
+    message,
+    model,
+    effort,
+    cwd,
+    timeoutMs: !isNaN(timeoutMs as number) ? timeoutMs : undefined,
+    fromSessionId: fromSid,
+  };
+
+  const mailbox = openMailbox(flags);
+  try {
+    const result = await mailbox.send(target);
+    if (flags.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return result.delivered ? 0 : 2;
+    }
+
+    // 人类可读输出
+    const status = result.delivered ? '✓ delivered' : '✗ failed';
+    console.log(`\n  [yondermesh] ${status}  cli=${cli}  mode=${rawMode}  channel=${result.channel}  latency=${result.latencyMs}ms`);
+    if (result.newSessionId) {
+      console.log(`  new session: ${result.newSessionId}`);
+    }
+    if (result.exitCode !== undefined) {
+      console.log(`  exit code:   ${result.exitCode}`);
+    }
+    console.log(`  audit msg:   #${result.messageId}` + (result.replyMessageId ? ` (reply #${result.replyMessageId})` : ''));
+    if (result.error) {
+      console.log(`  error:       ${result.error}`);
+    }
+    if (result.response) {
+      const preview = result.response.length > 500
+        ? result.response.slice(0, 500) + ` … (+${result.response.length - 500} chars)`
+        : result.response;
+      console.log(`\n  reply:\n    ${preview.replace(/\n/g, '\n    ')}`);
+    } else if (result.delivered) {
+      console.log('\n  reply: (empty — agent produced no reply text)');
+    }
+    console.log();
+    return result.delivered ? 0 : 2;
+  } catch (err) {
+    console.error(`[yondermesh] send 失败: ${String(err)}`);
+    return 1;
+  } finally {
+    mailbox.close();
+  }
+}
+
 // ─── 主入口 ──────────────────────────────────────────────────────────────
 
 async function main(): Promise<number> {
@@ -2486,6 +2573,9 @@ async function main(): Promise<number> {
 
     case 'transfer':
       return await cmdTransfer(flags);
+
+    case 'send':
+      return await cmdSend(flags);
 
     case 'rollback':
       {

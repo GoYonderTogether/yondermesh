@@ -16,7 +16,7 @@ function setLastSeenAt(store: SessionStore, sessionId: string, ts: number): void
   const db = (store as unknown as {
     db: { prepare: (sql: string) => { run: (...args: unknown[]) => void } };
   }).db;
-  db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(ts, sessionId);
+  db.prepare('UPDATE sessions SET updated_at = ?, file_modified_at = ? WHERE id = ?').run(ts, ts, sessionId);
 }
 
 describe('LOOP-012 验收门 1-2: list_active_sessions', () => {

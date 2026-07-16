@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 
 import type { SessionStore } from '../store/index.js';
 import type { SessionQuery, SessionRecord, SessionTopology } from '../store/types.js';
+import { detectAliveProcesses } from '../store/process-detector.js';
 import { buildSessionHandoff } from './codex-handoff.js';
 import {
   extractProject,
@@ -20,6 +21,25 @@ import {
   queryExtracts,
 } from '../extract/index.js';
 import type { ExtractOptions, QueryOptions } from '../extract/index.js';
+import {
+  buildActiveSessionHints,
+  formatHintsAsText,
+} from './tool-hints.js';
+import { findTool as findNewTool, MCP_TOOLS } from './tools.js';
+import { MailboxCore } from '../mailbox/index.js';
+import { defaultDaemonConfig } from '../daemon/index.js';
+
+/** 安全获取 daemon 配置（避免循环依赖问题） */
+function defaultDaemonConfigSafe(): { dbPath: string; dataDir: string } {
+  try {
+    const config = defaultDaemonConfig();
+    return { dbPath: config.dbPath, dataDir: config.dataDir };
+  } catch {
+    // 兜底：用默认路径
+    const dataDir = process.env.YONDERMESH_HOME ?? join(homedir(), '.yondermesh');
+    return { dbPath: join(dataDir, 'yondermesh.db'), dataDir };
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 类型
@@ -188,7 +208,6 @@ export class McpServer {
           id: req.id,
           result: { tools: this.listTools() },
         };
-
       case 'tools/call': {
         const params = req.params ?? {};
         const name = params.name as string;
@@ -216,7 +235,8 @@ export class McpServer {
   // -- 工具定义 -----------------------------------------------------------
 
   listTools(): McpToolDef[] {
-    return [
+    // 旧版工具（本文件内定义的 handler）
+    const legacy: McpToolDef[] = [
       {
         name: 'search_sessions',
         description:
@@ -308,6 +328,17 @@ export class McpServer {
         },
       },
       {
+        name: 'who_is_waiting',
+        description:
+          '查找等待用户审阅回复的 session。返回最后一条消息是 assistant 且近期有活动的 session 列表，每条含消息预览。返回结果附带下一步指引，提示调用方查看这些 session 的内容细节并主动向用户提议操作。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            within_minutes: { type: 'number', description: '查多少分钟内有活动的 session，默认 30', default: 30 },
+          },
+        },
+      },
+      {
         name: 'post_message',
         description:
           '向另一个 agent session 或项目广播发送消息。用于跨 session 通信，例如通知另一个 agent 任务完成、提出建议、或提出问题。消息通过本地 SQLite 共享，目标 agent 可通过 get_messages 读取。',
@@ -389,11 +420,51 @@ export class McpServer {
         },
       },
     ];
+
+    // 新版 yondermesh_* 工具（来自 MCP_TOOLS）
+    const newTools: McpToolDef[] = MCP_TOOLS.map(({ name, description, inputSchema }) => ({
+      name,
+      description,
+      inputSchema: inputSchema as Record<string, unknown>,
+    }));
+
+    return [...legacy, ...newTools];
   }
 
   // -- 工具执行 -----------------------------------------------------------
 
   async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
+    // 先尝试旧版工具路由
+    let result: McpToolResult;
+    const legacyResult = await this.tryLegacyTool(name, args);
+    if (legacyResult) {
+      result = legacyResult;
+    } else {
+      // 新版 yondermesh_* 工具
+      const newTool = findNewTool(name);
+      if (!newTool) {
+        return { content: `未知工具: ${name}`, isError: true };
+      }
+      const response = await newTool.handler(args);
+      result = {
+        content: response.content.map((c) => c.text).join('\n'),
+        isError: response.isError,
+      };
+    }
+
+    // Channel A: 非 mailbox 工具调用后注入 unread hint
+    if (!name.startsWith('yondermesh_mailbox_') && !name.startsWith('yondermesh_whoami') && !result.isError) {
+      const hint = this.buildUnreadHint(args);
+      if (hint) {
+        result = { content: result.content + '\n' + hint };
+      }
+    }
+
+    return result;
+  }
+
+  /** 尝试旧版工具路由，未匹配返回 null */
+  private async tryLegacyTool(name: string, args: Record<string, unknown>): Promise<McpToolResult | null> {
     switch (name) {
       case 'search_sessions':
         return this.searchSessions(args);
@@ -409,6 +480,8 @@ export class McpServer {
         return this.listActiveSessions(args);
       case 'who_is_working':
         return this.whoIsWorking(args);
+      case 'who_is_waiting':
+        return this.whoIsWaiting(args);
       case 'post_message':
         return this.postMessage(args);
       case 'get_messages':
@@ -420,7 +493,27 @@ export class McpServer {
       case 'query_agent_responses':
         return this.queryAgentResponses(args);
       default:
-        return { content: `未知工具: ${name}`, isError: true };
+        return null;
+    }
+  }
+
+  /** Channel A: 构建 unread hint（self 有未读时返回字符串，否则 null） */
+  private buildUnreadHint(args: Record<string, unknown>): string | null {
+    try {
+      const config = defaultDaemonConfigSafe();
+      const mailbox = new MailboxCore(config.dbPath, config.dataDir);
+      try {
+        const explicitSid = typeof args.self_session_id === 'string' ? args.self_session_id : undefined;
+        const selfSid = mailbox.resolveSelfSession({ explicit: explicitSid });
+        if (!selfSid) return null;
+        const unread = mailbox.countUnread(selfSid);
+        if (unread.total === 0) return null;
+        return `📬 mailbox: ${unread.total} unread (direct ${unread.direct}, broadcast ${unread.broadcast}). Call yondermesh_mailbox_check to read.`;
+      } finally {
+        mailbox.close();
+      }
+    } catch {
+      return null;
     }
   }
 
@@ -553,43 +646,86 @@ export class McpServer {
 
   // -- LOOP-012 新增工具 -------------------------------------------------
 
-  private listActiveSessions(args: Record<string, unknown>): McpToolResult {
+ private listActiveSessions(args: Record<string, unknown>): McpToolResult {
+   const withinMin = typeof args.within_minutes === 'number' ? args.within_minutes : 30;
+   const withinMs = withinMin * 60_000;
+   const summary = this.store.getActiveSessionsSummary(withinMs, detectAliveProcesses);
+    const awaitingReview = this.store.getSessionsAwaitingReview(withinMs);
+    const hints = buildActiveSessionHints(summary, awaitingReview);
+    return { content: JSON.stringify({ ...summary, _hints: hints }) };
+ }
+
+ private whoIsWorking(_args: Record<string, unknown>): McpToolResult {
+   const summary = this.store.getActiveSessionsSummary(30 * 60_000, detectAliveProcesses);
+    const awaitingReview = this.store.getSessionsAwaitingReview(30 * 60_000);
+   const home = homedir();
+
+   const lines: string[] = [];
+   lines.push(
+     `本机当前有 ${summary.totalActive} 个 session 活跃中（${summary.liveCount} 个 live，${summary.subagentActive} 个 subagent）：`,
+   );
+
+   if (summary.totalActive === 0) {
+     lines.push('');
+     lines.push('（无活跃 session）');
+   } else {
+     lines.push('');
+     for (const s of summary.sessions) {
+       const tag =
+         s.activityStatus === 'live' ? '[live] ' :
+         s.activityStatus === 'idle' ? '[idle] ' :
+         s.activityStatus === 'stopped' ? '[stop] ' : '[stale]';
+       const idPrefix = s.topology === 'subagent' ? 'sub:' : '';
+       const shortId = shortIdOf(s.sessionId);
+       const cwd = s.cwd ? s.cwd.replace(home, '~') : '-';
+       const ago = formatRelativeAgo(s.fileModifiedAt);
+       const source = s.source.padEnd(12);
+       lines.push(`${tag} ${idPrefix}${shortId}  ${source}  ${cwd}  最近 ${ago}`);
+     }
+   }
+
+   const sourceParts = Object.entries(summary.bySource).map(([k, v]) => `${k}=${v}`);
+   if (sourceParts.length > 0) {
+     lines.push('');
+     lines.push(`按 source 分布: ${sourceParts.join(', ')}`);
+   }
+
+    // 附加上下文感知指引
+    const hints = buildActiveSessionHints(summary, awaitingReview);
+    lines.push(formatHintsAsText(hints));
+
+    return { content: lines.join('\n') };
+ }
+  private whoIsWaiting(args: Record<string, unknown>): McpToolResult {
     const withinMin = typeof args.within_minutes === 'number' ? args.within_minutes : 30;
     const withinMs = withinMin * 60_000;
-    const summary = this.store.getActiveSessionsSummary(withinMs);
-    return { content: JSON.stringify(summary) };
-  }
-
-  private whoIsWorking(_args: Record<string, unknown>): McpToolResult {
-    const summary = this.store.getActiveSessionsSummary();
+    const sessions = this.store.getSessionsAwaitingReview(withinMs);
+    const summary = this.store.getActiveSessionsSummary(withinMs, detectAliveProcesses);
     const home = homedir();
 
     const lines: string[] = [];
-    lines.push(
-      `本机当前有 ${summary.totalActive} 个 session 活跃中（${summary.liveCount} 个 live，${summary.subagentActive} 个 subagent）：`,
-    );
-
-    if (summary.totalActive === 0) {
-      lines.push('');
-      lines.push('（无活跃 session）');
+    if (sessions.length === 0) {
+      lines.push('当前没有等待用户审阅的 session。');
     } else {
+      lines.push(`有 ${sessions.length} 个 session 等待用户审阅回复：`);
       lines.push('');
-      for (const s of summary.sessions) {
-        const tag = s.isLive ? '[live]' : '[    ]';
+      for (const s of sessions) {
         const idPrefix = s.topology === 'subagent' ? 'sub:' : '';
         const shortId = shortIdOf(s.sessionId);
         const cwd = s.cwd ? s.cwd.replace(home, '~') : '-';
-        const ago = formatRelativeAgo(s.lastSeenAt);
+        const ago = formatRelativeAgo(s.fileModifiedAt);
         const source = s.source.padEnd(12);
-        lines.push(`${tag} ${idPrefix}${shortId}  ${source}  ${cwd}  最近 ${ago}`);
+        const preview = s.lastMessagePreview.length > 60
+          ? s.lastMessagePreview.slice(0, 60) + '...'
+          : s.lastMessagePreview;
+        lines.push(`[REVIEW] ${idPrefix}${shortId}  ${source}  ${cwd}  最近 ${ago}`);
+        lines.push(`         "${preview}"`);
       }
     }
 
-    const sourceParts = Object.entries(summary.bySource).map(([k, v]) => `${k}=${v}`);
-    if (sourceParts.length > 0) {
-      lines.push('');
-      lines.push(`按 source 分布: ${sourceParts.join(', ')}`);
-    }
+    // 附加上下文感知指引
+    const hints = buildActiveSessionHints(summary, sessions);
+    lines.push(formatHintsAsText(hints));
 
     return { content: lines.join('\n') };
   }

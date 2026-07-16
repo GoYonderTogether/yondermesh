@@ -16,10 +16,12 @@ const repoRoot = join(__dirname, '..', '..');
 const siteRoot = join(repoRoot, 'site');
 
 // Run `ymesh help` (or `npm run dev -- help` from repo root if ymesh isn't on PATH).
+// Prefer running from source via tsx so docs always reflect current code,
+// not a potentially-stale installed release.
 function runHelp() {
   const candidates = [
+    ['npx', ['tsx', 'src/bin/ymesh.ts', 'help']],
     ['ymesh', ['help']],
-    ['npm', ['run', 'dev', '--', 'help', '--no-install']],
   ];
   for (const [cmd, args] of candidates) {
     try {
