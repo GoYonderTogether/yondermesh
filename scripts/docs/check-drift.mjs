@@ -30,6 +30,8 @@ const targets = [
   'site/zh/reference/cli.md',
   'site/reference/adapters.md',
   'site/zh/reference/adapters.md',
+  'site/reference/mcp-tools.md',
+  'site/zh/reference/mcp-tools.md',
 ];
 const diff = spawnSync('git', ['diff', '--stat', '--', ...targets], {
   cwd: repoRoot,

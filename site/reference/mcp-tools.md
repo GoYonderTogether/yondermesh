@@ -1,672 +1,193 @@
 ---
 title: MCP Tools
-description: Canonical reference for every tool exposed by the yondermesh MCP server (ymesh mcp) — arguments, return shapes, and CLI invocation examples.
+description: Reference for the orthogonal tool set exposed by the yondermesh MCP server (ymesh mcp) — arguments and invocation.
 outline: [2, 3]
 ---
 
-# MCP Tools
+> **Auto-generated** from `McpServer.listTools()` in `src/mcp/server.ts`. Do not edit by hand — run `npm run sync` in `site/` to regenerate.
 
-The `ymesh mcp` command starts a stdio JSON-RPC server that exposes yondermesh's session graph to any MCP-capable agent (Claude Code, Codex, Cursor, Gemini, Windsurf, Continue, ...). Once registered, agents can call these tools to query recent work, inspect what's happening on this device, hand off tasks, and exchange messages across sessions.
+The `ymesh mcp` command starts a stdio JSON-RPC server that exposes yondermesh's session graph to any MCP-capable agent (Claude Code, Codex, Cursor, Gemini, Windsurf, Continue, ...). Deprecated forwarding aliases are omitted.
 
-This page is the canonical tool list, grounded in `src/mcp/server.ts`. Tools are listed in the order they are registered.
+**8 core orthogonal tools**, plus 4 auxiliary tools (project-history extraction / whoami).
 
 ## How to call
 
 ### From the CLI
 
 ```bash
-ymesh mcp call <tool> [args]
+ymesh mcp call <tool> [key=value ...]
 ```
 
-Arguments are passed as `key=value` pairs. Example:
+## Core tools (orthogonal set)
 
-```bash
-ymesh mcp call who_is_working
-ymesh mcp call search_sessions agent=claude since=7d limit=10
-ymesh mcp call get_session_detail session_id=019f5fe4-b127-7de2-b8f1-efa45bee24cb live=true
-```
+### search_sessions
 
-### From an MCP-capable agent
+Search session records across every AI agent on this device. Filter by time range, project path, agent type, and session type; supports full-text `query` search over message bodies. Use it before starting a new task to find related history, or to review all work on a project.
 
-Register the server in the agent's MCP config:
-
-```json
-{
-  "mcpServers": {
-    "yondermesh": {
-      "command": "ymesh",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-The agent then issues JSON-RPC `tools/call` requests with `name` and `arguments`. yondermesh responds with `{ content: [{ type: "text", text: <json-or-text> }], isError: false }`.
-
-### Common conventions
-
-- **Session IDs** are the native IDs from each CLI (e.g. Claude Code's UUIDv7, Codex's rollout filename stem).
-- **Relative time** strings (`since`, `from`, `to`) accept ISO 8601 timestamps or `<n><unit>` shorthand where unit is `d` / `h` / `m` (e.g. `7d`, `24h`, `30m`).
-- **Topology** is `root` (a real user-initiated session) or `subagent` (a session spawned by another agent). Queries that don't ask for subagents return roots only by default.
-- All JSON returned by tools is a single-line `JSON.stringify` output; the examples below are pretty-printed for readability.
-
-## search_sessions
-
-Search session records across every agent on this device. Use this before starting a new task to find related historical work.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
+| `query` | string | no | Full-text search, case-insensitive, matches message bodies |
+| `search` | string | no | Alias of query |
+| `source` | string | no | Filter by agent type (claude/codex/hermes …); equivalent to the old `agent` param |
 | `project_path` | string | no | Exact project path match |
-| `project_prefix` | string | no | Project path prefix match (directory-boundary safe) |
-| `agent` | string | no | Filter by canonical source: `claude`, `codex`, `opencode`, `hermes`, `kimi`, `cursor`, `copilot`, `gemini` |
-| `topology` | string | no | `root` or `subagent` |
-| `since` | string | no | ISO 8601 or relative (`7d` / `24h` / `30m`) |
-| `limit` | number | no | Return count, default 20, clamped to 1-200 |
+| `project_prefix` | string | no | Project path prefix |
+| `agent` | enum(claude / codex / opencode / hermes / kimi / cursor / copilot / gemini) | no | Filter by agent type (legacy alias, same as source) |
+| `topology` | enum(root / subagent) | no | root = a real user-initiated session; subagent = spawned by another agent |
+| `since` | string | no | Start time, ISO 8601 or relative like 7d / 24h / 30m |
+| `limit` | number | no | Return count (default `20`) |
 
-### Returns
+### get_session
 
-JSON array of session summary objects:
+Return the full message stream of a session. Supports live mode (reads the source file for real-time content), handoff_mode (task takeover), and include_relations (parent/child/related topology). Merges the old get_session_detail + get_session_relations + yondermesh_get_session.
 
-```json
-[
-  {
-    "id": "019f5fe4-b127-7de2-b8f1-efa45bee24cb",
-    "source": "claude",
-    "projectPath": "/Users/zoran/projects/yondermesh",
-    "cwd": "/Users/zoran/projects/yondermesh",
-    "topology": "root",
-    "messageCount": 42,
-    "startedAt": 1719500000000,
-    "lastSeenAt": 1719503600000,
-    "model": "claude-sonnet-4",
-    "cliVersion": "1.0.0",
-    "originator": "cli",
-    "threadSource": "claude-code"
-  }
-]
-```
-
-### Example
-
-```bash
-ymesh mcp call search_sessions project_prefix=/Users/zoran/projects since=7d limit=5
-```
-
-## get_session_detail
-
-Return the message stream for one session. Supports a `live` mode that re-reads the source file (so still-running sessions return their latest messages), plus handoff-oriented options for task takeover.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `session_id` | string | yes | Session ID |
-| `live` | boolean | no | `true` = read source file directly (recommended for running sessions) |
+| `live` | boolean | no | Read the source file directly for real-time content (running sessions return latest) |
 | `limit` | number | no | Return only the last N messages |
-| `include_compacted` | boolean | no | In live mode, also return `compacted_summaries` (codex compressed summaries). Default `false` |
-| `include_tool_calls` | boolean | no | In live mode, preserve `function_call` / `function_call_output` blocks (truncated). Default `false` |
-| `handoff_mode` | boolean | no | `true` = shorthand for `live=true + include_compacted=true + include_tool_calls=true + limit=30`. Default `false` |
+| `include_compacted` | boolean | no | In live mode, attach codex compacted summaries (default `false`) |
+| `include_tool_calls` | boolean | no | In live mode, preserve function_call blocks (default `false`) |
+| `handoff_mode` | boolean | no | Shorthand for live + compacted + tool_calls + last 30 messages (default `false`) |
+| `include_relations` | boolean | no | Attach parent/child/related session topology (default `false`) |
 
-### Returns
+### list_active
 
-Default (DB or plain live mode): JSON array of messages:
+List AI agent sessions currently active or waiting for user review. Merges the old list_active_sessions + who_is_working + who_is_waiting, with live/idle/stopped counts and a per-session runtime summary. Queries the DB directly; reflects state within the most recent scan cycle.
 
-```json
-[
-  { "seq": 0, "role": "user", "content": "..." },
-  { "seq": 1, "role": "assistant", "content": "...", "timestamp": 1719500001000 }
-]
-```
-
-Rich context mode (`include_compacted` / `handoff_mode`): JSON object:
-
-```json
-{
-  "messages": [ /* recent messages, tool calls preserved */ ],
-  "compacted_summaries": [ /* codex compacted history */ ]
-}
-```
-
-### Example
-
-```bash
-ymesh mcp call get_session_detail session_id=019f5fe4-... live=true handoff_mode=true
-```
-
-## get_session_handoff
-
-Purpose-built for task takeover. Reads the source file directly and returns a compacted handoff package: codex-compressed summaries, the last real user message, a tail of recent messages (with `function_call` / `function_call_output` / `custom_tool_call` preserved and truncated), the task plan, session metadata, and live status. Use this when one agent needs to pick up where another left off without losing tool-call detail.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `session_id` | string | yes | Session ID |
-| `tail_messages` | number | no | Number of tail messages (with tool calls) to include. Default `30` |
+| `within_minutes` | number | no | Look back this many minutes for activity (default `30`) |
+| `include_waiting` | boolean | no | Also include sessions waiting for user review (default `true`) |
 
-### Returns
+### overview
 
-JSON `HandoffPackage` object (see `src/mcp/codex-handoff.ts` for the full shape):
+Statistical overview of all AI agent sessions on this device (total / root / subagent / message counts, etc.). Merges the old get_overview.
 
-```json
-{
-  "session_id": "...",
-  "compacted_summaries": [ "..." ],
-  "last_user_message": "...",
-  "recent_messages": [ /* tail with tool calls preserved */ ],
-  "task_plan": [ /* update_plan items, if present */ ],
-  "session": { /* session metadata */ },
-  "is_live": true
-}
-```
-
-### Example
-
-```bash
-ymesh mcp call get_session_handoff session_id=019f5fe4-... tail_messages=50
-```
-
-## get_session_relations
-
-Return the relationship topology for one session: parents, children, and related sessions.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `session_id` | string | yes | Session ID |
+| `since` | string | no | Only count data after this time |
+| `project_prefix` | string | no | Only count matching projects |
 
-### Returns
+### handoff
 
-JSON array of relations:
+Build a compacted handoff package for task takeover. Reads the source file directly and returns codex-compacted summaries, recent tail, task_plan, session metadata, and active status. Merges the old get_session_handoff.
 
-```json
-[
-  { "type": "spawned", "direction": "outgoing", "sessionId": "child-uuid" },
-  { "type": "forked", "direction": "incoming", "sessionId": "parent-uuid" }
-]
-```
-
-`direction` is `outgoing` (this session spawned the related one) or `incoming` (the related session spawned this one).
-
-### Example
-
-```bash
-ymesh mcp call get_session_relations session_id=019f5fe4-...
-```
-
-## get_overview
-
-Return aggregate statistics for all sessions on this device. Useful for daily digests or quick health checks.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `since` | string | no | Only count sessions started after this time (ISO 8601 or relative) |
-| `project_prefix` | string | no | Only count sessions whose project matches this prefix |
+| `session_id` | string | yes | Session ID (required) |
+| `tail_messages` | number | no | Number of tail messages including tool calls (default `30`) |
 
-### Returns
+### send
 
-JSON `SessionStats` object (shape defined by `src/store/types.ts`): typically total counts, breakdown by source, breakdown by topology, and time-bucketed activity.
+Synchronously inject a user message into a target agent CLI session and get the reply. Three modes: new (start a session) / running (inject into a running session) / stopped (resume a stopped session). Merges the old yondermesh_send + launch_agent + inject_session + transfer_session.
 
-### Example
-
-```bash
-ymesh mcp call get_overview since=24h
-```
-
-## list_active_sessions
-
-List sessions currently running or recently active, with a runtime summary. Queries the DB directly; reflects the most recent scan cycle.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `within_minutes` | number | no | Look back window in minutes. Default `30` |
+| `cli` | string | yes | Target CLI id (e.g. hermes/claude/opencode) |
+| `message` | string | yes | User message |
+| `mode` | enum(new / running / stopped) | no | Delivery mode (default `new`) |
+| `session_id` | string | no | Target session id (required for stopped/running modes) |
+| `model` | string | no | Model id (optional) |
+| `effort` | string | no | Reasoning effort (optional) |
+| `cwd` | string | no | Working directory (optional) |
+| `timeout_ms` | number | no | Timeout in milliseconds, default 60000 |
+| `from_session_id` | string | no | Sender session id (for audit) |
 
-### Returns
+### mailbox
 
-JSON `ActiveSessionsSummary` object:
+Asynchronous message read/write. Choose the operation via `action`: post (send/broadcast) / check (read unread) / reply / get (fetch). Merges the old post_message + get_messages + yondermesh_mailbox_*.
 
-```json
-{
-  "totalActive": 3,
-  "liveCount": 2,
-  "subagentActive": 1,
-  "bySource": { "claude": 2, "codex": 1 },
-  "sessions": [
-    {
-      "sessionId": "019f5fe4-...",
-      "source": "claude",
-      "cwd": "/Users/zoran/projects/yondermesh",
-      "topology": "root",
-      "isLive": true,
-      "lastSeenAt": 1719503600000
-    }
-  ]
-}
-```
-
-### Example
-
-```bash
-ymesh mcp call list_active_sessions within_minutes=10
-```
-
-## who_is_working
-
-Quick human-readable summary of which agents are currently working on this machine. Returns plain text, not JSON — designed for an agent to glance at the device's current activity before starting a task.
-
-### Arguments
-
-None.
-
-### Returns
-
-Plain text. Example:
-
-```text
-本机当前有 3 个 session 活跃中（2 个 live，1 个 subagent）：
-
-[live] 019f5fe4-b...  claude        ~/projects/yondermesh  最近 12 秒前
-[live] 019f6a21-c...  codex         ~/projects/myapp      最近 3 分钟前
-[    ] sub:019f6b40-  claude        ~/projects/yondermesh  最近 8 分钟前
-
-按 source 分布: claude=2, codex=1
-```
-
-### Example
-
-```bash
-ymesh mcp call who_is_working
-```
-
-## post_message
-
-Send a message to another agent session or broadcast to a project. Used for cross-session communication — for example, notifying another agent that a task is done, raising a question, or proposing a handoff. Messages are stored in local SQLite; recipients read them via `get_messages`.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `body` | string | yes | Message content |
-| `to_session_id` | string | no | Direct message — target session ID |
-| `to_project` | string | no | Broadcast — target project path (all agents on that project receive it) |
-| `from_session_id` | string | no | Sender session ID |
-| `kind` | string | no | One of `info`, `warning`, `question`, `task_update`. Default `info` |
+| `action` | enum(post / check / reply / get) | no | Operation (default `check`) |
+| `to_session_id` | string | no | post: target session |
+| `to_project` | string | no | post: target project (broadcast) |
+| `from_session_id` | string | no | post/reply: sender |
+| `body` | string | no | post/reply: message body |
+| `kind` | enum(info / warning / question / task_update) | no | Message type (default `info`) |
+| `priority` | enum(low / normal / high / urgent) | no | Priority (default `normal`) |
+| `reply_to_id` | number | no | reply: id of the message being replied to |
+| `self_session_id` | string | no | check/get: explicit own session |
+| `mark_read` | boolean | no | check: mark as read (default `true`) |
 
-One of `to_session_id` or `to_project` should be set; if neither is set the message is stored with no recipient.
+### agents
 
-### Returns
+List local agent CLIs with install status, coverage level, and mount capability; optionally include mount detail. Merges the old yondermesh_list_agents + yondermesh_mount_status.
 
-```json
-{ "messageId": 42, "posted": true }
-```
-
-### Example
-
-```bash
-ymesh mcp call post_message to_session_id=019f6a21-c... body="Tests pass, ready to merge" kind=task_update
-```
-
-## get_messages
-
-Read messages addressed to a session or project. Messages are auto-marked as read on retrieval.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `for_session_id` | string | no | Direct messages for this session |
-| `for_project` | string | no | Broadcast messages for this project |
-| `since_minutes` | number | no | Look back window in minutes. Default `60` |
-| `unread_only` | boolean | no | Only return unread messages. Default `false` |
+| `installed_only` | boolean | no | Return only installed CLIs (default `true`) |
+| `include_mounts` | boolean | no | Attach per-CLI mount detail (default `false`) |
 
-### Returns
+## Auxiliary tools
 
-JSON array of messages (shape from `src/store/`):
+### extract_project_history
 
-```json
-[
-  {
-    "id": 42,
-    "toSessionId": "019f6a21-...",
-    "fromSessionId": "019f5fe4-...",
-    "body": "Tests pass, ready to merge",
-    "kind": "task_update",
-    "createdAt": 1719503600000,
-    "read": false
-  }
-]
-```
+Extract user requirements (user messages) and agent responses (assistant messages) from all session history of a project into indexable NDJSONL files. The first step to understanding real user needs on a project. With force_refresh=false and existing results, returns current stats without re-extracting.
 
-### Example
-
-```bash
-ymesh mcp call get_messages for_session_id=019f6a21-... unread_only=true
-```
-
-## extract_project_history
-
-Extract every user requirement (user message) and agent response (assistant message) from all sessions under a project into indexable NDJSONL files. This is the first step for understanding what a user has actually asked for on a project over time. If `force_refresh=false` and a previous extract exists, returns the existing stats without re-extracting.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `project_path` | string | yes | Project path (cwd prefix match) |
-| `force_refresh` | boolean | no | `true` = re-extract from scratch. Default `false` |
+| `force_refresh` | boolean | no | true forces re-extraction; false returns existing stats if present (default `false`) |
 
-### Returns
+### query_user_requirements
 
-```json
-{
-  "projectHash": "a1b2c3...",
-  "projectPath": "/Users/zoran/projects/yondermesh",
-  "requirementCount": 128,
-  "responseCount": 412,
-  "sessionCount": 14,
-  "extractedAt": 1719503600000,
-  "extractsDir": "~/.yondermesh/extracts/a1b2c3...",
-  "refreshed": true
-}
-```
+Query a project's user requirements (user messages). Filter by keyword, session, time, or ID. Each entry has id, sessionId, content, timestamp. Requires extract_project_history first.
 
-### Example
-
-```bash
-ymesh mcp call extract_project_history project_path=/Users/zoran/projects/yondermesh force_refresh=true
-```
-
-## query_user_requirements
-
-Query the extracted user requirements (user messages) for a project. Filter by keyword, session, time range, or exact line ID. Requires `extract_project_history` to have been run first.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `project_path` | string | yes | Project path (must match the path used for `extract_project_history`) |
-| `keyword` | string | no | Case-insensitive substring match on content |
+| `project_path` | string | yes | Project path (must match the extract call) |
+| `keyword` | string | no | Fuzzy keyword match (case-insensitive, matches content) |
 | `session_id` | string | no | Filter by session ID |
-| `from` | string | no | Start time (ISO 8601 or relative) |
-| `to` | string | no | End time (ISO 8601 or relative) |
-| `id` | number | no | Exact line ID (1-based). When set, all other filters are ignored |
-| `limit` | number | no | Return cap. Default `20`, clamped to 1-500 |
-| `offset` | number | no | Skip first N. Default `0` |
+| `from` | string | no | Start time, ISO 8601 or relative like 7d / 24h / 30m |
+| `to` | string | no | End time, ISO 8601 or relative |
+| `limit` | number | no | Max return count (default `20`) |
+| `offset` | number | no | Skip first N (default `0`) |
+| `id` | number | no | Query by exact ID (= line number, 1-based); ignores other filters when matched |
 
-### Returns
+### query_agent_responses
 
-JSON array of requirement entries (each has `id`, `sessionId`, `content`, `timestamp`).
+Query a project's agent responses (assistant messages). Filter by keyword, session, time, or ID. Requires extract_project_history first.
 
-### Example
-
-```bash
-ymesh mcp call query_user_requirements project_path=/Users/zoran/projects/yondermesh keyword=auth limit=10
-```
-
-## query_agent_responses
-
-Query the extracted agent responses (assistant messages) for a project. Same filter semantics as `query_user_requirements`. Requires `extract_project_history` to have been run first.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `project_path` | string | yes | Project path (must match the path used for `extract_project_history`) |
-| `keyword` | string | no | Case-insensitive substring match on content |
+| `project_path` | string | yes | Project path (must match the extract call) |
+| `keyword` | string | no | Fuzzy keyword match (case-insensitive, matches content) |
 | `session_id` | string | no | Filter by session ID |
-| `from` | string | no | Start time (ISO 8601 or relative) |
-| `to` | string | no | End time (ISO 8601 or relative) |
-| `id` | number | no | Exact line ID (1-based). When set, all other filters are ignored |
-| `limit` | number | no | Return cap. Default `20`, clamped to 1-500 |
-| `offset` | number | no | Skip first N. Default `0` |
+| `from` | string | no | Start time, ISO 8601 or relative like 7d / 24h / 30m |
+| `to` | string | no | End time, ISO 8601 or relative |
+| `limit` | number | no | Max return count (default `20`) |
+| `offset` | number | no | Skip first N (default `0`) |
+| `id` | number | no | Query by exact ID (= line number, 1-based); ignores other filters when matched |
 
-### Returns
+### yondermesh_whoami
 
-JSON array of response entries (each has `id`, `sessionId`, `content`, `timestamp`).
+Resolve your own session id via 3-layer fallback: (1) env YONDERMESH_SELF_SESSION_ID, (2) self_session_id arg, (3) match cwd against recently active sessions in the store. Also reports your current unread message count. Use this at the start of any task to know who you are and whether other agents have sent you messages.
 
-### Example
-
-```bash
-ymesh mcp call query_agent_responses project_path=/Users/zoran/projects/yondermesh session_id=019f5fe4-... limit=20
-```
-
-## yondermesh_mailbox_post
-
-> **(legacy v2, prefer `yondermesh_send` for sync delivery)** — v2 is async (write to SQLite, target polls). For synchronous send-and-get-reply, use [`yondermesh_send`](#yondermesh_send) instead.
-
-Post a message to another session or broadcast to a project. Backed by `MailboxCore` (`src/mailbox/core.ts`), stored in the shared SQLite DB. Supports priority, expiry, and threading.
-
-### Arguments
+#### Arguments
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `body` | string | yes | Message content |
-| `to_session_id` | string | no | Direct message — target session ID |
-| `to_project` | string | no | Broadcast — target project path |
-| `from_session_id` | string | no | Sender session ID |
-| `kind` | string | no | One of `info`, `warning`, `question`, `task_update`. Default `info` |
-| `priority` | string | no | One of `normal`, `urgent`. Default `normal` |
-| `expires_in_seconds` | number | no | TTL; message auto-cleans after this many seconds |
-| `thread_id` | string | no | Explicit thread ID; auto-derived when using `yondermesh_mailbox_reply` |
-
-One of `to_session_id` or `to_project` is required.
-
-### Returns
-
-```json
-{ "messageId": 42, "posted": true }
-```
-
-### Example
-
-```bash
-ymesh mcp call yondermesh_mailbox_post to_session_id=019f6a21-c... body="urgent: build broken" priority=urgent expires_in_seconds=3600
-```
-
-## yondermesh_mailbox_check
-
-> **(legacy v2, prefer `yondermesh_send` for sync delivery)** — use this to read historical/queued messages; for live sync delivery use [`yondermesh_send`](#yondermesh_send).
-
-Peek or pop unread messages for the current session, plus consume any daemon-pushed tray notices. This is the primary "inbox" call. When `mark_read=true` (default), messages are atomically popped and marked read; when `mark_read=false`, messages are peeked without side effects.
-
-Self-session resolution uses three layers (in order): `YONDERMESH_SELF_SESSION_ID` env var → `self_session_id` arg → cwd match against live sessions. The first layer that resolves wins.
-
-### Arguments
-
-| Name | Type | Required | Description |
-|---|---|---|---|
-| `self_session_id` | string | no | Explicit self session ID (overrides cwd lookup, but env var takes precedence) |
-| `mark_read` | boolean | no | `true` (default) = pop semantics (read + mark read); `false` = peek (no side effects) |
-
-### Returns
-
-```json
-{
-  "sessionId": "019f6a21-...",
-  "markRead": true,
-  "unread": { "direct": 1, "broadcast": 0, "total": 1 },
-  "trayNotices": [],
-  "messages": [
-    {
-      "id": 42,
-      "toSessionId": "019f6a21-...",
-      "fromSessionId": "019f5fe4-...",
-      "body": "Tests pass, ready to merge",
-      "kind": "task_update",
-      "priority": "normal",
-      "threadId": null,
-      "createdAt": 1719503600000
-    }
-  ],
-  "hint": "📬 你有 1 条未读消息（direct 1, broadcast 0）。处理后可调 yondermesh_mailbox_post 回复。"
-}
-```
-
-When self cannot be resolved, returns `isError: true`.
-
-### Example
-
-```bash
-ymesh mcp call yondermesh_mailbox_check self_session_id=019f6a21-c... mark_read=false
-```
-
-## yondermesh_mailbox_reply
-
-> **(legacy v2, prefer `yondermesh_send` for sync delivery)** — v2 is async (write to SQLite). For synchronous delivery use [`yondermesh_send`](#yondermesh_send) instead.
-
-Reply to a specific message. Automatically derives `thread_id`: if the parent already has a thread, the reply inherits it; otherwise a new `thread-<parent_id>` is created.
-
-### Arguments
-
-| Name | Type | Required | Description |
-|---|---|---|---|
-| `reply_to_id` | number | yes | ID of the message being replied to |
-| `body` | string | yes | Reply body |
-| `from_session_id` | string | no | Sender session ID |
-
-### Returns
-
-```json
-{ "messageId": 43, "posted": true, "threadId": "thread-42" }
-```
-
-Returns `isError: true` if `reply_to_id` does not exist.
-
-### Example
-
-```bash
-ymesh mcp call yondermesh_mailbox_reply reply_to_id=42 body="ack, on it" from_session_id=019f5fe4-...
-```
-
-## yondermesh_whoami
-
-Resolve and report the current session's identity, plus an unread-message hint. Useful for an agent to confirm "who am I" at the start of a task, and to notice pending mailbox messages. Uses the same three-layer self-resolution as `yondermesh_mailbox_check`.
-
-### Arguments
-
-| Name | Type | Required | Description |
-|---|---|---|---|
-| `self_session_id` | string | no | Explicit self session ID (overrides cwd lookup; env var still wins) |
-
-### Returns
-
-```json
-{
-  "sessionId": "019f6a21-...",
-  "resolved": true,
-  "unread": { "direct": 1, "broadcast": 0, "total": 1 },
-  "hint": "📬 你有 1 条未读消息（direct 1, broadcast 0）。处理后可调 yondermesh_mailbox_post 回复。"
-}
-```
-
-When self cannot be resolved:
-
-```json
-{
-  "sessionId": null,
-  "resolved": false,
-  "hint": "无法解析 self session id。可通过 self_session_id 显式传入..."
-}
-```
-
-### Example
-
-```bash
-ymesh mcp call yondermesh_whoami
-```
-
-## yondermesh_send
-
-Synchronously send a user message to a target agent CLI session and return the agent's reply in the same call. This is the v3 sync-injection tool — unlike the legacy `yondermesh_mailbox_*` (v2 async, where you write to SQLite and the target polls), `yondermesh_send` immediately delivers the message through `TriggerAdapter` and captures the cleaned reply through `ReplyAdapter`.
-
-Backed by `MailboxCore.send()` (`src/mailbox/core.ts`). The flow inside `send()`:
-
-1. **Audit-write the user message** to `agent_messages` (kind=`question`).
-2. **TriggerAdapter.trigger()** delivers the message to the target CLI via the appropriate channel (cli-spawn / stdin / http-api / ws-rpc / tmux / applescript).
-3. **ReplyAdapter.extractReply()** cleans the raw `TriggerResult.response` — strips ANSI escapes, drops CLI-specific noise (e.g. hermes `Warning: Unknown toolsets:` lines, claude `Tip:` lines), removes log/banner prefixes, collapses blank lines.
-4. **Audit-write the reply** to `agent_messages` (kind=`task_update`, linked via `replyToId` + `threadId`).
-5. Returns `SendResult` (see below).
-
-Even if the target agent has no model configured, auth fails, or the upstream API rate-limits, `send()` returns an error message in `response` / `error` instead of hanging.
-
-### Arguments
-
-| Name | Type | Required | Description |
-|---|---|---|---|
-| `cli` | string | yes | Target CLI id (e.g. `hermes`, `claude`, `opencode`, `trae-ide`) |
-| `message` | string | yes | User message to inject into the target agent session |
-| `mode` | string | no | Delivery mode: `stopped` (resume a stopped session with the message), `running` (inject into a running session), `new` (create a new session). Default `new` |
-| `session_id` | string | no | Target session id. Required for `stopped` / `running`; ignored for `new` |
-| `model` | string | no | Model id for `new` sessions (e.g. `gpt-4o`, `claude-sonnet-4`) |
-| `effort` | string | no | Effort level for `new` sessions (e.g. `low` / `medium` / `high`) |
-| `cwd` | string | no | Working directory for the target session |
-| `timeout_ms` | number | no | Timeout in milliseconds. Default `60000` |
-| `from_session_id` | string | no | Sender session id (for the audit trail) |
-
-### Returns
-
-JSON object (`SendResult`):
-
-```json
-{
-  "cli": "hermes",
-  "mode": "new",
-  "delivered": true,
-  "response": "PONG",
-  "exitCode": 0,
-  "channel": "cli-spawn",
-  "latencyMs": 3214,
-  "newSessionId": "019f6a21-c...",
-  "messageId": 21,
-  "replyMessageId": 22
-}
-```
-
-Fields:
-
-- `delivered` — whether the message was successfully delivered to the target CLI (true even if the agent produced no reply).
-- `response` — `ReplyAdapter`-cleaned agent reply text (may be empty string).
-- `exitCode` — process exit code for `cli-spawn` channel.
-- `channel` — the trigger channel actually used (`cli-spawn` / `stdin` / `http-api` / `ws-rpc` / `tmux` / `applescript`).
-- `latencyMs` — total `send()` wall time (audit + trigger + reply extraction).
-- `newSessionId` — present when `mode=new` and a session was created.
-- `error` — failure reason; always set when `delivered=false`.
-- `messageId` — audit row id of the user message (always present, even on delivery failure).
-- `replyMessageId` — audit row id of the assistant reply (present only when a non-empty reply was captured).
-
-### Failure modes
-
-- Invalid `mode`, or `stopped`/`running` without `session_id` → `isError: true` with a validation message.
-- Unknown CLI (not in `WRAPPER_LOADERS`) → `delivered: false`, `error` set, `messageId` still assigned (audit row written).
-- `TriggerAdapter.trigger()` throws → caught, returns `delivered: false` with the exception text in `error`.
-- Target CLI exits non-zero (e.g. upstream API 429) → `delivered: true`, `exitCode` non-zero, the CLI's own error text appears in `response` so the caller can see what went wrong.
-
-### Example
-
-```bash
-ymesh mcp call yondermesh_send cli=hermes mode=new message="Reply with exactly the word PONG and nothing else."
-```
-
-```bash
-ymesh send --cli hermes --message "hello" --mode new --json
-```
-
-See also the [`ymesh send`](./cli#send) CLI command for the same capability from the shell.
-
-## Channel A: piggyback unread hints
-
-When the current session has unread mailbox messages, **any** non-mailbox MCP tool response gets a `📬 mailbox: N unread` line appended to its text content. This lets an agent learn about pending messages without actively polling — the hint surfaces as a side effect of any normal tool call.
-
-The hint is injected by `McpServer.callTool()` in `src/mcp/server.ts`. It uses `MailboxCore.countUnread()` after the primary tool executes, so it reflects the post-call state. To silence the hint, call `yondermesh_mailbox_check` with `mark_read=true` to clear the unread count.
-
-## Related
-
-- `/guide/mcp` — how to register the MCP server in each agent's config
-- `/reference/cli` — `ymesh mcp call`, `ymesh mcp register`, `ymesh mcp status`
-- `/reference/config` — the `mcp` section of `config.yaml`
+| `self_session_id` | string | no | Explicitly pass your session id (fallback when env var is not set) |

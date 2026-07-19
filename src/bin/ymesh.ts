@@ -192,9 +192,15 @@ function openStore(dbPath?: string): SessionStore {
   return new SessionStore(p);
 }
 
-/** help 命令 */
-function cmdHelp(): number {
-  console.log(`
+/** help 命令（支持 zh/en 双语；en 供英文文档站生成器消费，默认 zh 不改变 CLI 行为） */
+function cmdHelp(lang: 'zh' | 'en' = 'zh'): number {
+  console.log(lang === 'en' ? helpTextEn() : helpTextZh());
+  return 0;
+}
+
+/** 中文帮助文本 */
+function helpTextZh(): string {
+  return `
 yondermesh v${VERSION} — 自托管 Agent 上下文总线
 
 用法:
@@ -218,7 +224,7 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   update [--local]    从 Git 源码更新（构建失败自动回退）；--local 跳过 clone，从本地源码打包
   rollback            手动回退到上一个 release 版本
   mcp                 启动 MCP server（stdio JSON-RPC，供其他 agent 挂载）
-  mcp call <tool> [args]  终端直接调用 MCP 工具（如 ymesh mcp call who_is_working）
+  mcp call <tool> [args]  终端直接调用 MCP 工具（如 ymesh mcp call list_active）
   mcp register        注册 MCP server 到 Claude Code 和 Codex（安装后新 session 自动可用）
   mcp unregister      从 Claude Code 和 Codex 注销
   mcp status          查看 MCP 注册状态
@@ -282,8 +288,100 @@ handoff 选项:
   ymesh extract --requirements --id 3
   ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb
   ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb --json --tail 50
-`);
-  return 0;
+`;
+}
+
+/** 英文帮助文本（结构与中文版镜像，供英文文档站生成器解析） */
+function helpTextEn(): string {
+  return `
+yondermesh v${VERSION} — self-hosted Agent Context Bus
+
+Usage:
+  ymesh <command> [options]
+
+Commands:
+  help                Show this help
+  version             Show version
+  scan                Scan all local sessions (27 adapters: cass/claude/codex/hermes/
+                      windsurf/continue/opencode/copilot/openclaw/kimi/qwen/gemini/pi/
+                      factory/vibe/codebuddy/cline/crush/openhands/goose/antigravity/
+                      aider/trae-cli/cursor-ide/trae-ide/amp/chatgpt)
+  status              Show daemon status and last scan result
+  agents              List detected agents and their support status
+  sessions            List sessions (supports filtering)
+  daemon              Start background daemon (live watch + periodic reconcile)
+                      Options: --db <path> --data-dir <dir> --pid-file <path>
+  install             Build a release locally and install it
+    service <action>    LaunchAgent + menubar app (install|uninstall|start|stop|status)
+  releases            List installed release versions
+  update [--local]    Update from Git source (auto-rollback on build failure); --local packs from local source
+  rollback            Roll back to the previous release manually
+  mcp                 Start MCP server (stdio JSON-RPC, for other agents to mount)
+  mcp call <tool> [args]  Call an MCP tool from the terminal (e.g. ymesh mcp call list_active)
+  mcp register        Register MCP server into Claude Code and Codex (auto-available in new sessions)
+  mcp unregister      Unregister from Claude Code and Codex
+  mcp status          Show MCP registration status
+  active              Quickly see which sessions are running now (who is working)
+  waiting             See sessions waiting for your review (agent has replied)
+  doctor              Run system diagnostics (install, database, daemon, log health)
+  mount [status|all|remove]  Manage cross-CLI mounts (MCP/Skill/Plugin into every installed CLI agent)
+  extract             Extract a project's user requirements and assistant responses to NDJSONL (indexed by line/ID)
+  handoff <id>        Extract a compacted handoff package (compacted summaries + tool calls + plan) for task takeover
+  state <action>      Manage runtime state file (sync|show)
+  mailbox <action>    Cross-session message bus (post|get|pop|list|mark-read|check|whoami|unread)
+  launch              Start a new agent session (--cli <agent> --prompt "text" [--model <m>])
+  inject              Inject a message into a running session (--cli <agent> --session <id> --message "text")
+  transfer            Transfer a session across agents (--cli <src> --session <id> --target <dst> [--output <path>])
+  send                Sync injection v3: send a message to a target agent and get the reply synchronously (--cli <agent> [--session <id>] [--mode stopped|running|new] --message "text" [--model <m>] [--effort <e>] [--cwd <path>] [--timeout <ms>] [--json])
+
+Install:
+  curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
+  or: git clone ... && ./install.sh
+
+Global Options:
+  --json              Output as JSON (for script consumption)
+  --db <path>         Database path (default ~/.yondermesh/yondermesh.db)
+
+sessions filter options:
+  --limit <n>         Limit output count (default 20)
+  --source <name>     Filter by source (claude / codex / cass)
+  --topology <type>   Filter by topology (root / subagent)
+  --cwd <path>        Exact cwd match
+  --cwd-prefix <path> cwd prefix match (directory-boundary safe)
+  --project <path>    Exact projectPath match
+  --from <time>       Start time (epoch ms or ISO date)
+  --to <time>         End time (epoch ms or ISO date)
+  --include-archived  Include deduplicated sessions (hidden by default)
+
+extract options:
+  --cwd-prefix <path>  Project dir prefix (default current cwd)
+  --project <path>     Exact projectPath match (alternative to --cwd-prefix)
+  --from / --to        Filter by session start-time range
+  --requirements       Query requirements file (user messages)
+  --responses          Query responses file (assistant messages)
+  --id <n>             Take one entry by line/ID (1-based)
+  --keyword <text>     Fuzzy keyword match (case-insensitive)
+  --session <id>       Filter by yondermesh session ID
+  --limit <n>          Max query results
+  --offset <n>         Skip first N results
+  --list               List all extracted projects
+
+handoff options:
+  --json              Output the handoff package as JSON
+  --tail <n>          Number of tail messages (default 30)
+
+Examples:
+  ymesh scan
+  ymesh sessions --limit 50
+  ymesh sessions --source claude --topology root
+  ymesh sessions --cwd-prefix /Users/zoran/projects --json
+  ymesh status
+  ymesh daemon
+  ymesh extract --cwd-prefix /Users/zoran/projects/yondermesh
+  ymesh extract --requirements --id 3
+  ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb
+  ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb --json --tail 50
+`;
 }
 
 /** version 命令 */
@@ -2197,7 +2295,7 @@ async function main(): Promise<number> {
     case 'help':
     case undefined:
     case '':
-      return cmdHelp();
+      return cmdHelp(flags.lang === 'en' ? 'en' : 'zh');
 
     case 'version':
     case '--version':

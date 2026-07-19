@@ -2,8 +2,9 @@
 //
 // Orchestrator: regenerate every auto-generated doc page from source.
 // Currently runs:
-//   - gen-cli-docs.mjs       (CLI reference from `ymesh help`)
-//   - gen-adapters.mjs       (adapter matrix from src/*/)
+//   - gen-cli-docs.mjs       (CLI reference from `ymesh help`, both locales)
+//   - gen-adapters.mjs       (adapter matrix from src/adapters/registry.ts)
+//   - gen-mcp-docs.mjs       (MCP tool reference from McpServer.listTools())
 //
 // Add new generators here as the docs grow.
 //
@@ -17,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const scriptsDir = __dirname;
 
-const generators = ['gen-cli-docs.mjs', 'gen-adapters.mjs'];
+const generators = ['gen-cli-docs.mjs', 'gen-adapters.mjs', 'gen-mcp-docs.mjs'];
 
 let failed = 0;
 for (const gen of generators) {

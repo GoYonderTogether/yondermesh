@@ -33,7 +33,7 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh update` | [--local]    从 Git 源码更新（构建失败自动回退）；--local 跳过 clone，从本地源码打包 |
 | `ymesh rollback` | 手动回退到上一个 release 版本 |
 | `ymesh mcp` | 启动 MCP server（stdio JSON-RPC，供其他 agent 挂载） |
-| `ymesh mcp` | call &lt;tool&gt; [args]  终端直接调用 MCP 工具（如 ymesh mcp call who_is_working） |
+| `ymesh mcp` | call &lt;tool&gt; [args]  终端直接调用 MCP 工具（如 ymesh mcp call list_active） |
 | `ymesh mcp` | register        注册 MCP server 到 Claude Code 和 Codex（安装后新 session 自动可用） |
 | `ymesh mcp` | unregister      从 Claude Code 和 Codex 注销 |
 | `ymesh mcp` | status          查看 MCP 注册状态 |

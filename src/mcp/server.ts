@@ -130,6 +130,15 @@ function makeDeprecated(description: string, target: string): string {
   return `[deprecated, use ${target}] ${description}`;
 }
 
+/**
+ * T1.3 正交核心工具集(推荐入口)。文档生成器据此把工具分为「核心 8 工具」与
+ * 「辅助工具」两组;新增/调整核心工具时同步更新此常量,即为单一真相源。
+ */
+export const ORTHOGONAL_TOOL_NAMES = [
+  'search_sessions', 'get_session', 'list_active', 'overview',
+  'handoff', 'send', 'mailbox', 'agents',
+] as const;
+
 export class McpServer {
   readonly store: SessionStore;
   private readonly options: McpServerOptions;

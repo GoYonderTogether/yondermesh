@@ -18,10 +18,11 @@ const siteRoot = join(repoRoot, 'site');
 // Run `ymesh help` (or `npm run dev -- help` from repo root if ymesh isn't on PATH).
 // Prefer running from source via tsx so docs always reflect current code,
 // not a potentially-stale installed release.
-function runHelp() {
+function runHelp(lang = 'zh') {
+  const langArgs = lang === 'en' ? ['--lang', 'en'] : [];
   const candidates = [
-    ['npx', ['tsx', 'src/bin/ymesh.ts', 'help']],
-    ['ymesh', ['help']],
+    ['npx', ['tsx', 'src/bin/ymesh.ts', 'help', ...langArgs]],
+    ['ymesh', ['help', ...langArgs]],
   ];
   for (const [cmd, args] of candidates) {
     try {
@@ -55,13 +56,13 @@ function parseHelp(text) {
   for (const raw of lines) {
     const line = raw.trimEnd();
     if (!line) continue;
-    if (line.startsWith('命令:')) { mode = 'cmd'; continue; }
-    if (line.startsWith('通用选项:')) { mode = 'opt'; continue; }
-    if (line.startsWith('sessions 过滤选项:')) { mode = 'subfilter'; continue; }
-    if (line.startsWith('extract 选项:')) { mode = 'subfilter'; continue; }
-    if (line.startsWith('handoff 选项:')) { mode = 'subfilter'; continue; }
-    if (line.startsWith('示例:')) { mode = 'example'; continue; }
-    if (line.startsWith('安装方式:')) { mode = null; continue; }
+    if (line.startsWith('命令:') || line === 'Commands:') { mode = 'cmd'; continue; }
+    if (line.startsWith('通用选项:') || line === 'Global Options:') { mode = 'opt'; continue; }
+    if (line.startsWith('sessions 过滤选项:') || line === 'sessions filter options:') { mode = 'subfilter'; continue; }
+    if (line.startsWith('extract 选项:') || line === 'extract options:') { mode = 'subfilter'; continue; }
+    if (line.startsWith('handoff 选项:') || line === 'handoff options:') { mode = 'subfilter'; continue; }
+    if (line.startsWith('示例:') || line === 'Examples:') { mode = 'example'; continue; }
+    if (line.startsWith('安装方式:') || line === 'Install:') { mode = null; continue; }
 
     if (mode === 'cmd' && line.startsWith('  ')) {
       const m = line.match(/^\s{2,}(\S+)\s+(.*)$/);
@@ -192,18 +193,18 @@ function readVersion() {
   return pkg.version;
 }
 
-// Top-level execution
-const help = runHelp();
-const parsed = parseHelp(help);
+// Top-level execution — each locale renders from its own-language help output.
+const parsedEn = parseHelp(runHelp('en'));
+const parsedZh = parseHelp(runHelp('zh'));
 const version = readVersion();
 
 const enPath = join(siteRoot, 'reference', 'cli.md');
 const zhPath = join(siteRoot, 'zh', 'reference', 'cli.md');
 mkdirSync(dirname(enPath), { recursive: true });
 mkdirSync(dirname(zhPath), { recursive: true });
-writeFileSync(enPath, renderEn(parsed, version), 'utf-8');
-writeFileSync(zhPath, renderZh(parsed, version), 'utf-8');
+writeFileSync(enPath, renderEn(parsedEn, version), 'utf-8');
+writeFileSync(zhPath, renderZh(parsedZh, version), 'utf-8');
 
 console.log(`[gen-cli-docs] wrote ${enPath.replace(repoRoot + '/', '')}`);
 console.log(`[gen-cli-docs] wrote ${zhPath.replace(repoRoot + '/', '')}`);
-console.log(`[gen-cli-docs] ${parsed.commands.length} commands, ${parsed.options.length} global options, ${parsed.subFilters.length} filter options`);
+console.log(`[gen-cli-docs] ${parsedEn.commands.length} commands, ${parsedEn.options.length} global options, ${parsedEn.subFilters.length} filter options`);

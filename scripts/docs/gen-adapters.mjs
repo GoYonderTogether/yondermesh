@@ -1,15 +1,17 @@
 // scripts/docs/gen-adapters.mjs
 //
 // Generate site/reference/adapters.md and site/zh/reference/adapters.md from
-// the CLI adapter directories under src/. Each adapter folder (claude, codex,
-// aider, ...) becomes one row in the support matrix; we detect coverage level
-// (A = native importer, B = markdown/wrapper importer, C = extractor-only) by
-// the files present.
+// the SINGLE SOURCE OF TRUTH: src/adapters/registry.ts (ADAPTERS). Reading the
+// registry (not scanning src/*/ directories) means internal modules like
+// mcp/, sync/, sdk/ can never leak into the matrix, and every count (total /
+// harvest / mount / send-reachable / coverage) is derived programmatically so
+// it cannot drift from code.
 //
 // Run:  node scripts/docs/gen-adapters.mjs
 // CI:   invoked by sync-all.mjs; check-drift.mjs asserts no diff after re-run.
 
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -18,29 +20,45 @@ const repoRoot = join(__dirname, '..', '..');
 const srcDir = join(repoRoot, 'src');
 const siteRoot = join(repoRoot, 'site');
 
-// Skip these src/ subdirs — they are not CLI adapters.
-const NON_ADAPTER_DIRS = new Set([
-  'bin', 'daemon', 'mcp', 'mount', 'store', 'install', 'extract', 'briefing',
-  'sync', 'limited', 'factory', 'index.ts',
-]);
-
-// Coverage level rules:
-//   A — native importer (Importer class reading native session files)
-//   B — markdown / wrapper importer (parse exported md, git log, etc.)
-//   C — extractor only (no full import; partial coverage)
-//   ? — unknown / unread
-function classifyAdapter(name, files) {
-  const has = (f) => files.includes(f);
-  if (has('importer.ts') && has('index.ts')) return 'A';
-  if (has('extractor.ts') && !has('importer.ts')) return 'C';
-  if (has('wrapper.ts') || has('inject.ts')) return 'B';
-  if (has('importer.ts')) return 'A';
-  return '?';
+// Pull the registry via tsx (the registry is TypeScript; .mjs can't import it
+// directly). We write a temp dumper module and run it with `tsx` — this avoids
+// shell-escaping issues that break `tsx -e` on multi-line scripts. The loader
+// function is stringified so we can recover the source directory
+// (`() => import('../claude/index.js')` → `claude`).
+function loadRegistry() {
+  const dumperPath = join(__dirname, '.dump-adapters.mjs');
+  const regUrl = 'file://' + join(srcDir, 'adapters', 'registry.ts').replace(/\\/g, '/');
+  const dumper = [
+    `import { ADAPTERS } from ${JSON.stringify(regUrl)};`,
+    `const rows = ADAPTERS.map((a) => {`,
+    `  const s = a.importerLoader ? String(a.importerLoader) : '';`,
+    `  const m = s.match(/\\.\\.\\/([\\w-]+)\\/index/);`,
+    `  return {`,
+    `    id: a.id, displayName: a.displayName, coverage: a.coverage,`,
+    `    dir: m ? m[1] : null, hasImporter: !!a.importerLoader,`,
+    `    hasMount: Array.isArray(a.mountCapabilities) && a.mountCapabilities.length > 0,`,
+    `    channels: Array.isArray(a.channels) ? a.channels : [],`,
+    `  };`,
+    `});`,
+    `process.stdout.write(JSON.stringify(rows));`,
+  ].join('\n');
+  writeFileSync(dumperPath, dumper, 'utf-8');
+  try {
+    const out = execFileSync('npx', ['tsx', dumperPath], {
+      cwd: repoRoot,
+      encoding: 'utf-8',
+      timeout: 60_000,
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+    });
+    return JSON.parse(out);
+  } finally {
+    rmSync(dumperPath, { force: true });
+  }
 }
 
-function extractAdapterSummary(name, files) {
-  // Try to read the index.ts header comment for a one-line summary.
-  const indexPath = join(srcDir, name, 'index.ts');
+function extractAdapterSummary(dir) {
+  if (!dir) return '';
+  const indexPath = join(srcDir, dir, 'index.ts');
   if (!existsSync(indexPath)) return '';
   try {
     const text = readFileSync(indexPath, 'utf-8');
@@ -58,26 +76,37 @@ function extractAdapterSummary(name, files) {
 }
 
 function listAdapters() {
-  const entries = readdirSync(srcDir, { withFileTypes: true });
-  const adapters = [];
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
-    if (NON_ADAPTER_DIRS.has(e.name)) continue;
-    const dir = join(srcDir, e.name);
-    let files = [];
-    try { files = readdirSync(dir); } catch { continue; }
-    if (!files.some((f) => f.endsWith('.ts'))) continue;
-    const level = classifyAdapter(e.name, files);
-    const summary = extractAdapterSummary(e.name, files);
-    adapters.push({ name: e.name, level, files, summary });
-  }
+  const rows = loadRegistry();
+  const adapters = rows.map((r) => ({
+    name: r.id,
+    dir: r.dir,
+    level: r.coverage,
+    sendReachable: r.channels.length > 0,
+    channels: r.channels,
+    hasMount: r.hasMount,
+    hasImporter: r.hasImporter,
+    summary: extractAdapterSummary(r.dir),
+  }));
   // Stable ordering: A first, then B, then C, then ?, alphabetical within.
   const order = { A: 0, B: 1, C: 2, '?': 3 };
   adapters.sort((a, b) => (order[a.level] - order[b.level]) || a.name.localeCompare(b.name));
   return adapters;
 }
 
-function renderEn(adapters) {
+// Canonical counts — the single place these numbers are computed for docs.
+function computeCounts(adapters) {
+  return {
+    total: adapters.length,
+    harvest: adapters.filter((a) => a.hasImporter).length,
+    mount: adapters.filter((a) => a.hasMount).length,
+    send: adapters.filter((a) => a.sendReachable).length,
+    A: adapters.filter((a) => a.level === 'A').length,
+    B: adapters.filter((a) => a.level === 'B').length,
+    C: adapters.filter((a) => a.level === 'C').length,
+  };
+}
+
+function renderEn(adapters, counts) {
   const out = [];
   out.push('---');
   out.push('title: CLI Adapters');
@@ -85,9 +114,19 @@ function renderEn(adapters) {
   out.push('outline: [2, 3]');
   out.push('---');
   out.push('');
-  out.push('> **Auto-generated** from `src/*/`. Do not edit by hand — run `npm run sync` in `site/` to regenerate.');
+  out.push('> **Auto-generated** from `src/adapters/registry.ts`. Do not edit by hand — run `npm run sync` in `site/` to regenerate.');
   out.push('');
-  out.push('yondermesh reads native session formats from each supported CLI agent. Coverage levels:');
+  out.push('## Coverage at a glance');
+  out.push('');
+  out.push('| Metric | Count | Meaning |');
+  out.push('|---|---|---|');
+  out.push(`| Registered | **${counts.total}** | Total CLI adapters in the registry |`);
+  out.push(`| Harvest | **${counts.harvest}** | Have a session importer (\`ymesh scan\`) |`);
+  out.push(`| Mountable | **${counts.mount}** | Can receive MCP / skill / plugin mounts |`);
+  out.push(`| Send-reachable | **${counts.send}** | Reachable by synchronous \`send\` (non-empty trigger channels) |`);
+  out.push(`| Coverage A / B / C | **${counts.A} / ${counts.B} / ${counts.C}** | Native / wrapper / extractor-only |`);
+  out.push('');
+  out.push('Coverage levels:');
   out.push('');
   out.push('- **A** — Native importer: reads the CLI\'s native session files (JSONL / session DB) directly');
   out.push('- **B** — Wrapper / markdown importer: parses exported markdown, git log, or wrapper output');
@@ -95,11 +134,15 @@ function renderEn(adapters) {
   out.push('');
   out.push('## Support Matrix');
   out.push('');
-  out.push('| CLI | Coverage | Adapter dir | Notes |');
-  out.push('|---|---|---|---|');
+  out.push('| CLI | Coverage | Send | Adapter dir | Notes |');
+  out.push('|---|---|---|---|---|');
   for (const a of adapters) {
     const notes = a.summary || '—';
-    out.push(`| \`${a.name}\` | ${a.level} | [\`src/${a.name}/\`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/${a.name}) | ${notes} |`);
+    const send = a.sendReachable ? '✅' : '—';
+    const dirCell = a.dir
+      ? `[\`src/${a.dir}/\`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/${a.dir})`
+      : '—';
+    out.push(`| \`${a.name}\` | ${a.level} | ${send} | ${dirCell} | ${notes} |`);
   }
   out.push('');
   out.push('## Adding a New Adapter');
@@ -112,7 +155,7 @@ function renderEn(adapters) {
   return out.join('\n');
 }
 
-function renderZh(adapters) {
+function renderZh(adapters, counts) {
   const out = [];
   out.push('---');
   out.push('title: CLI 适配器');
@@ -120,9 +163,19 @@ function renderZh(adapters) {
   out.push('outline: [2, 3]');
   out.push('---');
   out.push('');
-  out.push('> **自动生成** 自 `src/*/`，请勿手动编辑 — 在 `site/` 目录运行 `npm run sync` 重新生成。');
+  out.push('> **自动生成** 自 `src/adapters/registry.ts`，请勿手动编辑 — 在 `site/` 目录运行 `npm run sync` 重新生成。');
   out.push('');
-  out.push('yondermesh 直接读取各 CLI agent 的原生 session 格式。覆盖等级：');
+  out.push('## 覆盖概览');
+  out.push('');
+  out.push('| 口径 | 数量 | 含义 |');
+  out.push('|---|---|---|');
+  out.push(`| 注册总数 | **${counts.total}** | 注册表中的 CLI 适配器总数 |`);
+  out.push(`| 采集 | **${counts.harvest}** | 有 session importer（\`ymesh scan\`）|`);
+  out.push(`| 可挂载 | **${counts.mount}** | 可接收 MCP / skill / plugin 挂载 |`);
+  out.push(`| send 可达 | **${counts.send}** | 可被同步 \`send\` 触达（有非空触发通道）|`);
+  out.push(`| 覆盖 A / B / C | **${counts.A} / ${counts.B} / ${counts.C}** | 原生 / wrapper / 仅 extractor |`);
+  out.push('');
+  out.push('覆盖等级：');
   out.push('');
   out.push('- **A** — 原生 importer：直接读取 CLI 原生 session 文件（JSONL / session DB）');
   out.push('- **B** — Wrapper / markdown importer：解析导出的 markdown、git log 或 wrapper 输出');
@@ -130,11 +183,15 @@ function renderZh(adapters) {
   out.push('');
   out.push('## 支持矩阵');
   out.push('');
-  out.push('| CLI | 覆盖等级 | 适配器目录 | 说明 |');
-  out.push('|---|---|---|---|');
+  out.push('| CLI | 覆盖等级 | send | 适配器目录 | 说明 |');
+  out.push('|---|---|---|---|---|');
   for (const a of adapters) {
     const notes = a.summary || '—';
-    out.push(`| \`${a.name}\` | ${a.level} | [\`src/${a.name}/\`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/${a.name}) | ${notes} |`);
+    const send = a.sendReachable ? '✅' : '—';
+    const dirCell = a.dir
+      ? `[\`src/${a.dir}/\`](https://github.com/GoYonderTogether/yondermesh/tree/main/src/${a.dir})`
+      : '—';
+    out.push(`| \`${a.name}\` | ${a.level} | ${send} | ${dirCell} | ${notes} |`);
   }
   out.push('');
   out.push('## 新增适配器');
@@ -148,13 +205,14 @@ function renderZh(adapters) {
 }
 
 const adapters = listAdapters();
+const counts = computeCounts(adapters);
 const enPath = join(siteRoot, 'reference', 'adapters.md');
 const zhPath = join(siteRoot, 'zh', 'reference', 'adapters.md');
 mkdirSync(dirname(enPath), { recursive: true });
 mkdirSync(dirname(zhPath), { recursive: true });
-writeFileSync(enPath, renderEn(adapters), 'utf-8');
-writeFileSync(zhPath, renderZh(adapters), 'utf-8');
+writeFileSync(enPath, renderEn(adapters, counts), 'utf-8');
+writeFileSync(zhPath, renderZh(adapters, counts), 'utf-8');
 
 console.log(`[gen-adapters] wrote ${enPath.replace(repoRoot + '/', '')}`);
 console.log(`[gen-adapters] wrote ${zhPath.replace(repoRoot + '/', '')}`);
-console.log(`[gen-adapters] ${adapters.length} adapters: A=${adapters.filter(a => a.level === 'A').length} B=${adapters.filter(a => a.level === 'B').length} C=${adapters.filter(a => a.level === 'C').length} ?=${adapters.filter(a => a.level === '?').length}`);
+console.log(`[gen-adapters] total=${counts.total} harvest=${counts.harvest} mount=${counts.mount} send=${counts.send} | A=${counts.A} B=${counts.B} C=${counts.C}`);
