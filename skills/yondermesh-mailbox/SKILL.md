@@ -11,6 +11,10 @@ description: >-
 
 # yondermesh Mailbox
 
+> **异步留言（legacy v2 语义）。** mailbox 是 pull-based 的异步信箱：留言写入共享 SQLite，
+> 对方需主动 check 才能收到。**如果要跨 agent 实时对话/同步投递，首选 `send` 工具**；
+> mailbox 作为异步补充，用于对方不在线或不需即时响应的场景。
+
 Cross-session messaging bus. Lets AI agents send messages to each other through
 a shared SQLite store. Messages can be direct (to a specific session) or broadcast
 (to all agents in a project).
@@ -107,17 +111,13 @@ ymesh mailbox whoami
 3. Agent B calls `yondermesh_mailbox_check` → gets the message (mark_read=true by default)
 4. Agent B can `yondermesh_mailbox_reply` to continue the thread
 
-When daemon is running:
-- Daemon polls for new unread messages every 5 seconds
-- Writes tray notifications to `~/.yondermesh/mailbox-tray/<sid>.txt`
-- `yondermesh_mailbox_check` consumes tray notices (push semantics)
-
-When daemon is not running:
-- `yondermesh_mailbox_check` falls back to direct DB peek (polling mode, <1ms)
-- All functionality still works, just without push notifications
+Delivery is pull-based (there is no daemon push):
+- `yondermesh_mailbox_check` reads unread messages directly from SQLite on demand (<1ms).
+- If a tray note exists at `~/.yondermesh/mailbox-tray/<sid>.txt`, `check` also consumes it in the same call (`consumeTray`); tray notes are written by the posting path, not by a daemon poller.
+- The daemon does not run any mailbox/notifier loop — mailbox works fully whether or not the daemon is running.
 
 ## Channel A: piggyback hints
 
-When you call any non-mailbox MCP tool (e.g., `search_sessions`, `who_is_working`),
+When you call any non-mailbox MCP tool (e.g., `search_sessions`, `list_active`),
 the response will include a `📬 mailbox: N unread` line if you have unread messages.
 This is a passive reminder — you don't need to actively poll.

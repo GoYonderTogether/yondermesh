@@ -19,11 +19,11 @@ We credit reporters in the release notes that ships the fix, unless you prefer o
 
 ## Threat model (summary)
 
-yondermesh is **self-hosted and local-first**. The trust boundary is your own
-machine + your own self-hosted relay. Specifically:
+yondermesh is **self-hosted and local-first**. Today the trust boundary is your
+own machine — the daemon makes no outbound calls. Specifically:
 
 - **Local SQLite (`~/.yondermesh/yondermesh.db`)** — stores every harvested session. File permissions are the only protection. Don't put yondermesh on a shared account.
-- **Cross-device sync relay** — sees only **ciphertext**. The E2E encryption key lives on your devices (`~/.yondermesh/key.pem`); the relay never has it. If you run the official cloud relay as a convenience, the same holds: it cannot read your sessions.
+- **Cross-device sync relay (planned — not yet implemented)** — when sync ships, the relay would see only **ciphertext**, with the E2E encryption key living on your devices (`~/.yondermesh/key.pem`) and never reaching the relay. Until then, nothing syncs and no relay is contacted.
 - **MCP server** — runs as a stdio child process of an agent (Claude Code, Codex, …). It exposes query tools over the agent's stdin/stdout. It does not listen on any TCP port by default (`port: 0` = stdio).
 - **Mount system** — writes into CLI config dirs (`~/.claude/`, `~/.codex/`, `~/.cursor/`, …) to register the ymesh MCP server and skill symlinks. It never modifies the CLI binary or its session writer.
 - **No model proxy** — ymesh never sees your API keys. The CLI runs the model; ymesh only reads what the CLI wrote.
@@ -32,7 +32,7 @@ machine + your own self-hosted relay. Specifically:
 
 - yondermesh does not authenticate users. Anyone with read access to `~/.yondermesh/` can read every session. Treat the data dir as privileged.
 - yondermesh does not encrypt the local SQLite at rest. Use OS-level full-disk encryption (FileVault / BitLocker / LUKS) for sensitive environments.
-- The sync relay is a store-and-forward ciphertext relay. It is not anonymous: it sees source/destination device ids and message sizes. If you need metadata protection, host the relay behind a privacy proxy.
+- The sync relay (planned) is designed as a store-and-forward ciphertext relay. It would not be anonymous: it would see source/destination device ids and message sizes. When sync ships, host the relay behind a privacy proxy if you need metadata protection.
 
 ## Disclosure policy
 

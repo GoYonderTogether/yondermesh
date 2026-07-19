@@ -139,7 +139,7 @@ ymesh sessions --source codex --json
 ymesh active
 ```
 
-输出是 `src/store/types.ts` 中的 `ActiveSummary` 形态：活跃 session 计数、live（正在写入）session 计数、按来源的细分，以及按 `lastSeenAt` 倒序排列的逐 session 列表。这与 MCP 工具 `who_is_working` 背后的数据相同。
+输出是 `src/store/types.ts` 中的 `ActiveSummary` 形态：活跃 session 计数、live（正在写入）session 计数、按来源的细分，以及按 `lastSeenAt` 倒序排列的逐 session 列表。这与 MCP 工具 `list_active` 背后的数据相同。
 
 ## 跨源去重
 
@@ -152,7 +152,7 @@ ymesh active
 两个命令把 session 转成可移植制品：
 
 - **`ymesh extract`** 把一个项目的所有 user 需求与 assistant 响应转储为 NDJSONL 文件（按类型分文件），按行号与 session id 索引。支撑语料导出与离线分析。见 `src/extract/`。
-- **`ymesh handoff <id>`** 为单个 session 构造 `HandoffPackage`——压缩摘要加近期消息加任务计划——让代理 B 接手代理 A 留下的工作。同一构造器支撑 `get_session_handoff` MCP 工具。见 `src/mcp/codex-handoff.ts`。
+- **`ymesh handoff <id>`** 为单个 session 构造 `HandoffPackage`——压缩摘要加近期消息加任务计划——让代理 B 接手代理 A 留下的工作。同一构造器支撑 `handoff` MCP 工具。见 `src/mcp/codex-handoff.ts`。
 
 两个命令都接受共享的过滤标志（`--source`、`--cwd-prefix`、`--project`、`--from`、`--to`、`--limit`）。完整标志列表见 [CLI 参考](/zh/reference/cli)。
 
@@ -160,5 +160,5 @@ ymesh active
 
 - [Daemon](/zh/guide/daemon)——session 如何被采集：扫描 / 监听 / reconcile 循环。
 - [CLI 命令](/zh/reference/cli)——完整的 `ymesh` 命令面，由 `ymesh help` 自动生成。
-- [MCP Server](/zh/guide/mcp)——向代理暴露 session 的 MCP 工具（`search_sessions`、`list_active_sessions`、`get_session_handoff`、`who_is_working`……）。
+- [MCP Server](/zh/guide/mcp)——向代理暴露 session 的 MCP 工具（`search_sessions`、`list_active`、`handoff`、`get_session`……）。
 - [架构](/zh/guide/architecture)——三个平面与治理 session 存储的不变式。

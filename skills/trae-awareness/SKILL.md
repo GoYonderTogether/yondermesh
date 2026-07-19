@@ -20,8 +20,8 @@ Trae 不读取全局指令文件（没有 always-on 注入机制），所以 yon
 
 yondermesh（简称 ymesh）是一个自托管 Agent 上下文总线。它把本机所有 CLI agent
 （Claude Code、Codex、Cursor、Gemini、Windsurf、Trae、Continue 等）的 session 自动
-采集到本地 SQLite，并提供跨设备 E2E 加密同步。任何支持 MCP 的 agent 都能查询其他
-agent 的工作上下文，实现跨设备/跨 CLI 的上下文延续与任务交接。
+采集到本地 SQLite（跨设备 E2E 加密同步为 planned，尚未实现）。任何支持 MCP 的 agent
+都能查询其他 agent 的工作上下文，实现跨 CLI 的上下文延续与任务交接。
 
 ## 可用能力
 
@@ -30,9 +30,10 @@ agent 的工作上下文，实现跨设备/跨 CLI 的上下文延续与任务�
 注意：Trae 的 MCP 通过 IDE UI 配置，不是文件可挂。如果当前 Trae 没配 ymesh MCP
 server，请引导用户在 Trae 设置里手动添加，或改用下面的 CLI 命令。
 
-- `recall_recent_work` — 查询最近 session（跨设备 / 跨 CLI）
-- `whats_on_device` — 查看某台设备的项目状态
-- `handoff_task` — 把任务委托给另一个 agent
+- `search_sessions` — 查询最近 / 关键词匹配的 session（跨 CLI / 跨时间）
+- `list_active` — 看当前哪些 agent 在活动
+- `handoff` — 打包某个 session 的上下文，交接给另一个 agent
+- `check_prior_attempts` — 「这坑别的 agent 踩过没」（洞察，L4 派生层，planned，尚未实现）
 
 ### CLI 命令
 
@@ -40,7 +41,7 @@ server，请引导用户在 Trae 设置里手动添加，或改用下面的 CLI 
 ymesh help                          # 查看所有命令
 ymesh status                        # daemon / 数据库 / 适配器状态
 ymesh sessions --json --limit 10    # 看最近 10 条 session
-ymesh query recent                  # 跨设备查最近工作
+ymesh active                        # 看当前活动的 session
 ymesh doctor                        # 系统健康检查
 ymesh mount                         # 把 ymesh 挂到各 CLI（含 Trae 的 skill 目录）
 ```
@@ -55,8 +56,8 @@ ymesh mount                         # 把 ymesh 挂到各 CLI（含 Trae 的 ski
 | 用户说 | 你应该做 |
 |---|---|
 | "有什么工具" / "你能做什么" | 列出上面的 MCP 工具 + CLI 命令 |
-| "怎么查 session" / "我之前做过什么" | `ymesh sessions --json --limit 10` 或 MCP `recall_recent_work` |
-| "其他 agent 在干嘛" / "别的机器上呢" | MCP `whats_on_device` 或 `ymesh query recent` |
+| "怎么查 session" / "我之前做过什么" | `ymesh sessions --json --limit 10` 或 MCP `search_sessions` |
+| "其他 agent 在干嘛" | MCP `list_active` 或 `ymesh active` |
 | "ymesh 是什么" / "ymesh 干嘛的" | 念上面的"yondermesh 是什么"段落 |
 | "怎么诊断 ymesh" / "ymesh 有问题" | 调用 `yondermesh-diagnose` skill |
 | "怎么挂到 trae" | `ymesh mount`；Trae 走 skill-symlink 到 `~/.trae[-cn]/skills/` |

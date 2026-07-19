@@ -37,10 +37,9 @@ CLI 写下的 session 文件。"不做模型代理"是架构层面的硬约束 �
 
 ## 问：支持哪些 CLI agent？
 
-完整的支持矩阵见 [CLI 适配器](/zh/reference/adapters)。截至 v0.1.0，矩阵
-里有 **22 个 A 级原生 importer**（直接读取 CLI 的原生 session 文件）和
-**4 个 C 级 extractor**（部分覆盖，例如实时 transcript hook）。新 adapter
-会持续增加 —— 矩阵在每次提交时由 `src/*/` 自动重新生成。
+完整的支持矩阵见 [CLI 适配器](/zh/reference/adapters)。共 **32 个注册 adapter**，
+按覆盖分级为 **22 个 A 级、9 个 B 级、1 个 C 级**，其中 **27 个被采集**进本地
+store。新 adapter 会持续增加 —— 矩阵在每次提交时由 `src/*/` 自动重新生成。
 
 ## 问：Windows 能用吗？
 
@@ -60,10 +59,11 @@ Windows 支持在路线图上，但尚未发布。
 
 ## 问：跨设备同步是如何工作的？
 
-端到端加密。每台设备都有自己的 `~/.yondermesh/key.pem`。同步 agent 从本地
-`SessionStore` 读取新 session，用本地密钥加密后把密文推送到自托管 relay。
-对端设备拉取密文后用自己的密钥解密。relay 只能看到密文、源/目的设备 id
-以及消息大小，永远看不到 session 内容。配置细节见[跨设备同步](/zh/guide/sync)。
+规划中 —— 尚未实现。设计意图是端到端加密：每台设备都有自己的
+`~/.yondermesh/key.pem`；同步 agent 将从本地 `SessionStore` 读取新 session，
+用本地密钥加密后把密文推送到自托管 relay；对端设备拉取密文后用自己的密钥解密，
+relay 只能看到密文、源/目的设备 id 以及消息大小，永远看不到 session 内容。
+目前同步代码路径是空壳。配置细节见[跨设备同步](/zh/guide/sync)。
 
 ## 问：怎么把一个任务从一个 agent 交接给另一个 agent？
 
@@ -75,11 +75,11 @@ ymesh handoff <session-id>
 ymesh handoff <session-id> --json --tail 50
 ```
 
-或者，在任意支持 MCP 的 agent 内部直接调用 `get_session_handoff` MCP 工具 —— 它
+或者，在任意支持 MCP 的 agent 内部直接调用 `handoff` MCP 工具 —— 它
 会返回相同的浓缩 handoff 包（摘要 + 最近的 tool call + plan）作为 JSON，
 可直接注入给接收方 agent。
 
-`ymesh handoff` 的参数见 [CLI 命令](/zh/reference/cli)，`get_session_handoff` 的
+`ymesh handoff` 的参数见 [CLI 命令](/zh/reference/cli)，`handoff` 的
 schema 见 [MCP 工具](/zh/reference/mcp-tools)。
 
 ## 问：怎么新增一个 CLI adapter？

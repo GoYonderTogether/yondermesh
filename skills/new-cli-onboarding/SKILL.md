@@ -200,7 +200,7 @@ G. 完成第 3-6 步（source-aliases / registry / 测试 / 文档）
 
 ## 已接入 CLI 参考表
 
-当前 8 个已注册 CLI（来源 `src/mount/registry.ts`）：
+统一适配器注册表（`src/adapters/registry.ts`）当前注册 **32** 个 CLI（采集 27 / 可挂载 30 / send 可达 26；覆盖 22A/9B/1C）。下表列出其中的主力 CLI 作为参考：
 
 | CLI id | homeDir | 采集方式 | 挂载策略 | source canonical |
 |---|---|---|---|---|

@@ -3,24 +3,26 @@
 > yondermesh's bird's-eye view + codemap. Answers two questions: **"Where does the code for X live?"** and **"What is this module I'm looking at actually doing?"**
 > Rule (following matklad's *ARCHITECTURE.md* advice): write only the things that don't change often. **Name files but don't paste line-level links** (use symbol search). Don't try to stay in sync line-by-line with the code; revisit when modules are added or boundaries move. Inline comments carry the detail.
 > All descriptions are grounded in the actual `src/` code.
+>
+> *Corresponds to yondermesh v0.1.0 · last reconciled 2026-07-18. Auto-generated references (CLI / adapters / MCP tools) live under `site/reference/` and are guarded by `check-drift`; this file is hand-maintained — revisit when modules or boundaries move.*
 
 ## 0. Product narrative
 
 You don't use one AI coding agent. You use Claude Code, Codex, Aider, Gemini CLI, Cursor, Windsurf, Trae, Continue, OpenCode, Hermes, and a dozen more — spread across laptop, desktop, and server. Each one is an island. Context dies at the session boundary. Agent A on your laptop has no idea what Agent B on your desktop just did.
 
-**yondermesh is the collaboration hub of the Agent era.** One daemon, one MCP server, zero intrusion — it aggregates every CLI agent on every device into a single working whole with cross-platform memory, cross-device real-time awareness, and continuous handoff. Five capabilities form the loop:
+**yondermesh is a self-hosted Agent Context Bus — a neutral interconnect for all your agents.** One daemon, one MCP server, zero intrusion — it aggregates every CLI agent on every device into a single working whole. Shared cross-agent memory is the first capability that rides on top of that interconnect (alongside cross-device real-time awareness and continuous handoff) — the bus is the foundation, memory is what it makes possible. Five capabilities form the loop:
 
 - **Collect** — every session from every CLI on every device flows into one local SQLite. Your agents stop being islands and start acting as one working whole.
-- **Sync** — E2E-encrypted cross-device sync via a self-hosted relay. Only ciphertext ever leaves your machine.
+- **Sync (planned — not yet implemented)** — designed as E2E-encrypted cross-device sync via a self-hosted relay where only ciphertext leaves your machine. The sync code path is currently a stub.
 - **Query** — any agent queries any other agent's context via MCP tools. Topology-aware, source-aware, project-aware.
 - **Hand off** — agent A picks up exactly where agent B stopped, even on a different machine. Sessions stop dying at the boundary; they become a continuous workflow.
-- **Send** — synchronously inject a user message into any connected CLI agent and get the reply back. 28 CLIs, 6 trigger channels, 3 modes (stopped / running / new). Failure is never silent.
+- **Send** — synchronously inject a user message into any connected CLI agent and get the reply back. Send reaches 26 CLIs — 23 via wrapper channels (stopped/running modes), plus Claude Code and Codex via new-mode spawn, plus ChatGPT via the IDE class. 5 channels in use (cli-spawn / http-api / ws-rpc / tmux / applescript; `stdin` is defined but unused), 3 modes (stopped / running / new). Failure is never silent.
 
 The hub is a deliberately small piece of infrastructure: not another CLI, not another model, not another cloud. It makes the agents you already use act as one.
 
 ## I. Overview
 
-**yondermesh** is a self-hosted Agent Context Bus: one daemon + one MCP server that lets your AI coding agents share a single working surface across devices and CLIs. Sessions are harvested from each CLI's native format into local SQLite; an MCP server exposes query and handoff tools to any MCP-capable agent; cross-device sync moves ciphertext only over a self-hosted relay; the trigger layer synchronously injects user messages into any connected CLI and returns the cleaned reply.
+**yondermesh** is a self-hosted Agent Context Bus: one daemon + one MCP server that lets your AI coding agents share a single working surface across devices and CLIs. Sessions are harvested from each CLI's native format into local SQLite; an MCP server exposes query and handoff tools to any MCP-capable agent; the trigger layer synchronously injects user messages into any connected CLI and returns the cleaned reply; cross-device sync (moving ciphertext only over a self-hosted relay) is planned but not yet implemented.
 
 > **Core mental model**: an agent's session is the unit of context. Sessions have topology (`root` / `subagent` / `sidechain`), source (`claude` / `codex` / `cass` / `hermes` / `continue` / `windsurf` / …), and project (`cwd` / `projectPath`). Every MCP tool is a structured query over this session graph. Every adapter is a reader of one CLI's native format. Every mount is a non-invasive extension (MCP / skill / always-on) installed into a CLI's config without modifying the CLI itself. Every `send` is a synchronous round-trip through the trigger layer (message → trigger → reply → audit).
 
@@ -71,8 +73,8 @@ Adapters present (alphabetical): `aider`, `amp`, `antigravity`, `cass`, `chatgpt
 
 - `src/mcp/server.ts` — `McpServer` class. stdio JSON-RPC. `listTools()` merges legacy tools (defined inline in `server.ts`) with the `yondermesh_*` registry (`src/mcp/tools.ts`). `callTool()` routes to legacy first, then new tools, then injects the **Channel A** piggyback hint (`📬 mailbox: N unread`) when the calling session has unread mailbox messages.
 - `src/mcp/register.ts` — registers the ymesh MCP server into Claude Code (`claude mcp add`) and Codex (`~/.codex/config.toml`). `registerAll` / `unregisterAll` / `checkRegistration`.
-- `src/mcp/codex-handoff.ts` — builds a `HandoffPackage` (compacted summaries + recent messages + task plan) for a session id. Used by `ymesh handoff` and the `handoff_task` MCP tool.
-- `src/mcp/tools.ts` — registry of `yondermesh_*` tools: `list_agents` / `query_sessions` / `get_session` / `launch_agent` / `inject_session` / `transfer_session` / `mount_status` + the mailbox quartet (`mailbox_check` / `mailbox_post` / `mailbox_reply` / `whoami`, marked legacy v2) + `yondermesh_send` (v3 sync injection). Each handler is self-contained (opens its own `SessionStore` / `MailboxCore`), avoiding cross-call shared state.
+- `src/mcp/codex-handoff.ts` — builds a `HandoffPackage` (compacted summaries + recent messages + task plan) for a session id. Used by `ymesh handoff` and the `handoff` MCP tool.
+- `src/mcp/server.ts` — `McpServer.listTools()` is the canonical tool surface: **8 orthogonal tools** — `search_sessions` / `get_session` / `list_active` / `overview` / `handoff` / `send` / `mailbox` / `agents` (the `ORTHOGONAL_TOOL_NAMES` constant) — plus 4 auxiliary tools (`extract_project_history` / `query_user_requirements` / `query_agent_responses` / `yondermesh_whoami`). All older `yondermesh_*` / `get_session_detail` / `who_is_working` names are retained as deprecated forwarding aliases (`[deprecated, use X]`). `src/mcp/tools.ts` holds the legacy handler registry those aliases route through. The reference page `site/reference/mcp-tools.md` is auto-generated from `listTools()` by `scripts/docs/gen-mcp-docs.mjs`. Each handler is self-contained (opens its own `SessionStore` / `MailboxCore`), avoiding cross-call shared state.
 
 ### Trigger (`src/trigger/`)
 
@@ -98,7 +100,7 @@ back to MailboxCore (audit-write + return SendResult)
 
 ### Mailbox (`src/mailbox/`)
 
-The mailbox is yondermesh's cross-session message bus. One `MailboxCore` business layer backs both the `ymesh mailbox` / `ymesh send` CLI commands and the `yondermesh_mailbox_*` / `yondermesh_send` MCP tools — CLI and MCP are thin shells, never re-implementing logic.
+The mailbox is yondermesh's cross-session message bus. One `MailboxCore` business layer backs both the `ymesh mailbox` / `ymesh send` CLI commands and the `mailbox` / `send` MCP tools — CLI and MCP are thin shells, never re-implementing logic.
 
 **v3 sync-injection model (primary).** `MailboxCore.send(target: SendTarget): Promise<SendResult>` is the unified entry point for synchronous message delivery. It orchestrates the 3-layer architecture (message → trigger → reply): audit-writes the user message (`kind=question`) → `TriggerAdapter.trigger()` delivers it to the target CLI → `ReplyAdapter.extractReply()` cleans the raw response → audit-writes the reply (`kind=task_update`, linked via `replyToId` + `threadId=thread-<messageId>`) → returns `SendResult`. Even on failure (unknown CLI, trigger throws, non-zero exit, upstream API rate-limit) the call returns with `delivered`/`error`/`response` populated instead of hanging — the CLI's own error text surfaces in `response` so the caller can see what went wrong. The constructor accepts optional `TriggerAdapter` / `ReplyAdapter` for DI (deterministic unit tests inject a `FakeTriggerAdapter`).
 
@@ -136,13 +138,13 @@ The mount system extends ymesh's reach into other CLIs without modifying them. E
 - `src/extract/extractor.ts` — `extractProject`: dumps every user requirement + assistant response for a project to NDJSONL files (one per kind), indexed by line number / session id. Powers `ymesh extract`.
 - `src/extract/index.ts` — `queryExtracts` reads those NDJSONL files back with filters (id / keyword / session / limit / offset). Powers `ymesh extract --requirements --id N`.
 
-### Briefing (`src/briefing/`)
+### Briefing (`src/briefing/`) — planned (L4 derivation seed)
 
-- `src/briefing/generator.ts` — daily digest: "your N agents across M devices did K tasks today, X% success rate". Output goes to `~/.yondermesh/briefings/`.
+- `src/briefing/generator.ts` — **stub**. Intended as the first L4 surface: a daily digest ("your N agents did K tasks today, plus which sessions look stuck") written to `~/.yondermesh/briefings/`, built from deterministic SessionStore queries with no LLM. No digest is produced yet.
 
-### Sync (`src/sync/`)
+### Sync (`src/sync/`) — planned (not yet implemented)
 
-- `src/sync/agent.ts` — cross-device sync agent. Reads new sessions from `SessionStore`, encrypts with the local key, pushes to the self-hosted relay. Pulls peer updates and decrypts. **Ciphertext only leaves the device.**
+- `src/sync/agent.ts` — **stub**. Intended cross-device sync agent: read new sessions from `SessionStore`, encrypt with the local key, push ciphertext to a self-hosted relay, pull peer updates and decrypt — **ciphertext only would leave the device**. Currently no data syncs.
 
 ### Public docs site (`site/`, `scripts/docs/`)
 
@@ -157,17 +159,19 @@ The mount system extends ymesh's reach into other CLIs without modifying them. E
 
 1. **No CLI modification.** Adapters read native files; mounts write into the CLI's own config dir but never patch the CLI binary or its session writer.
 2. **No model proxy.** ymesh never touches API keys. The CLI runs the model; ymesh only reads what the CLI wrote.
-3. **No cloud lock-in.** Sync relay is self-hostable. Cloud relay is optional convenience and never sees plaintext.
-4. **No UI.** Config-file driven; daemon runs headless. The docs site (`site/`) is for humans reading about ymesh, not for operating it.
-5. **Topology-aware.** Every session has a topology (`root` / `subagent` / `sidechain`). Queries that don't explicitly ask for subagents return roots only by default.
-6. **Source-canonical.** Every session has a canonical source ID (e.g. `claude`, not `ClaudeCode` or `claude-code`). `source-aliases.ts` normalizes.
-7. **Doc lag = bug.** Code change = doc change in the same commit. `scripts/docs/check-drift.mjs` and `scripts/docs/verify-links.mjs` enforce this in CI.
+3. **No cloud lock-in.** Sync (planned) is designed self-hostable; any cloud relay would be optional convenience and never see plaintext.
+4. **No UI.** Config-file driven; daemon runs headless. The docs site (`site/`) is for humans reading about ymesh, not for operating it. UI is not a layer.
+5. **Failure is never silent.** Every `send` / trigger path returns with `delivered` / `error` / `response` populated instead of hanging; the CLI's own error text surfaces to the caller. Unknown CLI, missing model, non-zero exit, upstream rate-limit all become visible text.
+6. **Deterministic-first kernel.** The derivation layer (L4) and all core logic run without an LLM in the kernel — stuck-detection, timelines, and `check_prior_attempts` are deterministic queries, not model calls.
+7. **Topology-aware.** Every session has a topology (`root` / `subagent` / `sidechain`). Queries that don't explicitly ask for subagents return roots only by default.
+8. **Source-canonical.** Every session has a canonical source ID (e.g. `claude`, not `ClaudeCode` or `claude-code`). `source-aliases.ts` normalizes.
+9. **Doc lag = bug.** Code change = doc change in the same commit. `scripts/docs/check-drift.mjs` and `scripts/docs/verify-links.mjs` enforce this in CI.
 
 ## IV. Module boundaries
 
 - `src/store/` is the only writer to SQLite. Adapters call `SessionStore` methods; they never write SQL directly.
 - `src/bin/ymesh.ts` is the only place commands are registered. Adding a command = adding a `case` to the `main()` switch + a `cmd*` function.
 - `src/mount/` never imports from `src/<adapter>/`. Mount strategies are CLI-config-driven, not adapter-driven.
-- `src/mailbox/` is the only place mailbox business logic lives. CLI (`src/bin/ymesh.ts` `cmdMailbox` / `cmdSend`) and MCP (`src/mcp/tools.ts` mailbox + `yondermesh_send` handlers) are thin shells — they open a `MailboxCore`, call a method (`send` / `postMessage` / …), format output. Never re-implement mailbox logic in the shell layers.
+- `src/mailbox/` is the only place mailbox business logic lives. CLI (`src/bin/ymesh.ts` `cmdMailbox` / `cmdSend`) and MCP (`src/mcp/tools.ts` `mailbox` + `send` handlers) are thin shells — they open a `MailboxCore`, call a method (`send` / `postMessage` / …), format output. Never re-implement mailbox logic in the shell layers.
 - `src/trigger/` is the only place that spawns or talks to a target CLI process for delivery. `MailboxCore.send()` delegates to `TriggerAdapter` for delivery and `ReplyAdapter` for reply cleaning; the message layer never imports a CLI wrapper directly. `ReplyAdapter` is pure (no I/O, no process calls) so it is safe to unit-test deterministically.
 - `scripts/docs/` never imports from `src/`. It shells out to `ymesh help` and reads `src/*/` as plain files. This keeps the docs generator decoupled from internal refactors.

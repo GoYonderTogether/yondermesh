@@ -32,8 +32,9 @@ procedure; the canonical *mapping table* (which change owes which doc) lives in
    | You changed… | Must also update |
    |---|---|
    | `src/bin/ymesh.ts` (CLI commands / flags / help text) | Run `npm run sync --prefix site` — `site/reference/cli.md` (en + zh) is auto-regenerated from `ymesh help`. |
-   | `src/<adapter>/` (added / removed / coverage level changed) | Run `npm run sync --prefix site` — `site/reference/adapters.md` (en + zh) is auto-regenerated from `src/*/`. |
-   | Daemon protocol, MCP tool list, mount strategies | `site/reference/mcp-tools.md`, `site/guide/mount.md`, `AGENTS.md` codemap section |
+   | `src/adapters/registry.ts` (added / removed / coverage / channels / mount) | Run `npm run sync --prefix site` — `site/reference/adapters.md` (en + zh) is auto-regenerated from the registry. |
+   | MCP tool list / schema (`src/mcp/server.ts`, `ORTHOGONAL_TOOL_NAMES`) | Run `npm run sync --prefix site` — `site/reference/mcp-tools.md` (en + zh) is auto-regenerated from `McpServer.listTools()`. A new tool/param also needs an English entry in `scripts/docs/mcp-en-descriptions.mjs` (the generator fails the build otherwise). |
+   | Daemon protocol, mount strategies | `site/guide/mount.md`, `AGENTS.md` codemap section |
    | `package.json` version bump | `CHANGELOG.md` entry in the same commit |
    | New top-level feature | `README.md` feature list + a new `site/guide/<topic>.md` page linked from the sidebar in `site/.vitepress/config.ts` |
    | `~/.yondermesh/` file layout | `site/reference/files.md` |
@@ -47,9 +48,10 @@ procedure; the canonical *mapping table* (which change owes which doc) lives in
    npm run sync --prefix site
    ```
 
-   This regenerates `site/reference/cli.md` and `site/reference/adapters.md`
-   (both en + zh) from `ymesh help` and `src/*/`. Commit the result if it
-   changed — that is the whole point.
+   This regenerates `site/reference/cli.md` (from `ymesh help`, both langs),
+   `site/reference/adapters.md` (from `src/adapters/registry.ts`), and
+   `site/reference/mcp-tools.md` (from `McpServer.listTools()`) — all en + zh.
+   Commit the result if it changed — that is the whole point.
 
 4. **Hygiene gates.**
 
@@ -84,6 +86,16 @@ procedure; the canonical *mapping table* (which change owes which doc) lives in
    the GitHub poster; the site is the manual. They overlap on purpose only on
    the quickstart.
 5. **`CHANGELOG.md`** vs `package.json`: every published version has an entry.
+6. **Freshness stamps** on hand-maintained docs. `README.md`, `README.zh-CN.md`,
+   `ARCHITECTURE.md`, and each `skills/*/SKILL.md` (plus its reference snapshots)
+   carry a `Corresponds to vX.Y.Z · last reconciled YYYY-MM-DD` line. When a full
+   audit reconciles a file, bump its date. A stamp far behind `package.json`
+   version is itself a drift signal — audit that file.
+7. **Hard-coded counts** (adapter totals, channel counts, tool counts) belong in
+   the auto-generated reference pages, not prose. If a hand-written doc states a
+   number, it must match the registry-derived truth (`node scripts/docs/gen-adapters.mjs`
+   logs the canonical `total/harvest/mount/send` + `A/B/C`); prefer linking the
+   reference page over restating the number.
 
 Report findings with `file:line` evidence; fix mechanically-safe drift in the
 same pass, open issues for anything needing a decision.

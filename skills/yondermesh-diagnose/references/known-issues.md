@@ -1,5 +1,7 @@
 # 已知问题与诊断决策树
 
+> 最后核实：2026-07-18
+
 按症状快速定位问题根因和修复方法。
 
 ## 症状索引
@@ -61,7 +63,7 @@ export PATH="$HOME/.yondermesh/bin:$PATH"
 1. 确认 daemon 在运行: `ymesh daemon status` 或 `diagnose.sh --section daemon`
 2. 手动 scan: `ymesh scan` 看是否能发现
 3. 检查 fs.watch 是否有报错: 查看日志中的 watchErrors
-4. 如果 watch 不支持，daemon 会退回定时扫描（默认每 5 分钟一次）
+4. 如果 watch 不支持，daemon 会退回定时扫描（默认每 60 秒一次，即 1 分钟；见 src/daemon/config.ts reconcileIntervalMs）
 5. 确认文件确实存在于预期路径: `ls ~/.claude/projects/` 或 `ls ~/.codex/sessions/`
 
 ## 5. session 关系全部为空

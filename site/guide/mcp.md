@@ -78,42 +78,42 @@ ymesh mcp call <tool> [args]
 Examples:
 
 ```bash
-# Quick "who is on this machine" summary
-ymesh mcp call who_is_working
+# Quick "who is active on this machine"
+ymesh mcp call list_active
 
 # Search recent codex sessions from the last 7 days
-ymesh mcp call search_sessions --agent codex --since 7d
+ymesh mcp call search_sessions source=codex since=7d
 
 # Get a compacted handoff package for a session id
-ymesh mcp call get_session_handoff --session-id 019f5fe4-b127-7de2-b8f1-efa45bee24cb
+ymesh mcp call handoff session_id=019f5fe4-b127-7de2-b8f1-efa45bee24cb
 
 # Inspect a running session live, with tool calls preserved
-ymesh mcp call get_session_detail --session-id <id> --live --include-tool-calls
+ymesh mcp call get_session session_id=<id> live=true include_tool_calls=true
 
 # Broadcast a heads-up to every agent in a project
-ymesh mcp call post_message --to-project /Users/YOU/projects/app --body "tests are red on main"
+ymesh mcp call mailbox action=post to_project=/Users/YOU/projects/app body="tests are red on main"
 ```
 
 Arguments are passed as the tool's `arguments` object. Output is the raw tool result content (JSON or plain text, depending on the tool). This is useful for scripting, debugging, and quick inspection from a shell.
 
 ## MCP tools
 
-The full tool list is defined in `src/mcp/server.ts` (`McpServer.listTools()`). The canonical reference page is [MCP Tools](/reference/mcp-tools).
+The tool surface is **8 orthogonal core tools** plus 4 auxiliary tools, defined in `src/mcp/server.ts` (`McpServer.listTools()`, with the core set in the `ORTHOGONAL_TOOL_NAMES` constant). The per-argument, per-return canonical reference is auto-generated from `listTools()` — do not restate it here; see **[MCP Tools reference](/reference/mcp-tools)**.
 
-| Tool | Key arguments | What it returns |
-|---|---|---|
-| `search_sessions` | `project_path`, `project_prefix`, `agent`, `topology`, `since`, `limit` | Sessions matching the filter, each as a summary (id, source, project, cwd, topology, message count, started/last-seen timestamps, model, CLI version, originator). `limit` defaults to 20 and is clamped to 1–200. |
-| `get_session_detail` | `session_id` (required), `live`, `limit`, `include_compacted`, `include_tool_calls`, `handoff_mode` | Message list for a session. `live=true` reads the native source file directly so running sessions return their latest messages. `handoff_mode=true` is shorthand for `live + include_compacted + include_tool_calls + tail 30`, designed for task takeover. |
-| `get_session_handoff` | `session_id` (required), `tail_messages` (default 30) | A compacted `HandoffPackage` — see [Handoff packages](#handoff-packages). Built by `src/mcp/codex-handoff.ts`. |
-| `get_session_relations` | `session_id` (required) | Parent, child, and related sessions for the given id, with direction (`incoming` / `outgoing`) and relation type. |
-| `get_overview` | `since`, `project_prefix` | Aggregate stats over the local session store (counts by source, topology, time buckets). |
-| `list_active_sessions` | `within_minutes` (default 30) | Sessions with activity in the window, plus a runtime summary (total active, live count, subagent count, by-source breakdown). Direct store query, reflects the most recent scan cycle. |
-| `who_is_working` | — | Human-readable summary of which agents are currently active on this machine: per-session line with `[live]` tag, source, cwd, last-seen relative time, and a by-source footer. |
-| `post_message` | `body` (required), `to_session_id` or `to_project`, `from_session_id`, `kind` | Broadcasts a message to another session (direct) or to all agents in a project (broadcast). `kind` is `info` / `warning` / `question` / `task_update`. Delivered via local SQLite. |
-| `get_messages` | `for_session_id` or `for_project`, `since_minutes` (default 60), `unread_only` | Messages addressed to the session or project, marked read on retrieval. Counterpart to `post_message`. |
-| `extract_project_history` | `project_path` (required), `force_refresh` | Extracts every user requirement and assistant response for a project to indexed NDJSONL files under `~/.yondermesh/extracts/<hash>/`. Returns counts. With `force_refresh=false` and an existing index, returns the existing stats without re-extracting. |
-| `query_user_requirements` | `project_path` (required), `keyword`, `session_id`, `from`, `to`, `limit`, `offset`, `id` | User messages extracted by `extract_project_history`. Each entry carries an `id` (1-based line number), session id, content, and timestamp. `id` short-circuits other filters. |
-| `query_agent_responses` | `project_path` (required), `keyword`, `session_id`, `from`, `to`, `limit`, `offset`, `id` | Assistant messages extracted by `extract_project_history`. Same query shape as `query_user_requirements`. |
+Core tools at a glance:
+
+| Tool | Purpose |
+| --- | --- |
+| `search_sessions` | Search sessions across every agent (time / project / agent / topology filters + full-text `query`). |
+| `get_session` | Full message stream for one session; `live` for running sessions, `handoff_mode` for takeover, `include_relations` for topology. |
+| `list_active` | Sessions active now or waiting for review, with a runtime summary. |
+| `overview` | Aggregate stats over the local session store. |
+| `handoff` | Compacted `HandoffPackage` for task takeover — see [Handoff packages](#handoff-packages). |
+| `send` | Synchronously inject a message into a target CLI and get the reply — see [Synchronous injection](#synchronous-injection-send). |
+| `mailbox` | Asynchronous cross-session message bus (post / check / reply / get). |
+| `agents` | List local agent CLIs with install status, coverage, and mount capability. |
+
+The 4 auxiliary tools (`extract_project_history`, `query_user_requirements`, `query_agent_responses`, `yondermesh_whoami`) cover project-history extraction and self-identification. Older tool names (`get_session_detail`, `get_session_handoff`, `list_active_sessions`, `who_is_working`, `get_overview`, `post_message`, `yondermesh_*`, …) remain as **deprecated forwarding aliases** so existing callers keep working.
 
 ### Relative time
 
@@ -209,7 +209,7 @@ Trae does **not** expose MCP config as a file ymesh can write. Configure it thro
 
 ## Handoff packages
 
-`get_session_handoff` and `get_session_detail` (with `handoff_mode=true`) build a `HandoffPackage` from the codex rollout JSONL, falling back to a simplified form for Claude Code sessions. The package is built by `src/mcp/codex-handoff.ts` and contains:
+`handoff` (and `get_session` with `handoff_mode=true`) builds a `HandoffPackage` from the codex rollout JSONL, falling back to a simplified form for Claude Code sessions. The package is built by `src/mcp/codex-handoff.ts` and contains:
 
 - `session_meta` — cwd, topology (`root` / `subagent`), model, CLI version, originator.
 - `compacted_summaries` — codex post-compact summaries, sorted by `window_number`. The noisy `replacement_history` is stripped.
@@ -222,15 +222,15 @@ This is the same package that `ymesh handoff <id>` produces on the CLI, so MCP a
 
 ## Cross-session message bus
 
-`post_message` and `get_messages` together form a lightweight cross-session message bus backed by the local SQLite store. A message can be addressed either to a specific session (`to_session_id`) or to a project (`to_project`, broadcast to every agent working in that project). Messages are marked read automatically when `get_messages` retrieves them, so an agent polling with `get_messages --for-session-id <self>` will only see new messages.
+The `mailbox` tool is a lightweight **asynchronous** cross-session message bus backed by the local SQLite store. Pick the operation via `action`: `post` (send a direct message or project broadcast), `check` (read unread), `reply`, or `get`. A message can be addressed either to a specific session (`to_session_id`) or to a project (`to_project`, broadcast to every agent working in that project). Messages are marked read when retrieved, so an agent polling with `mailbox action=check` only sees new messages.
 
-This bus is local-only — it is not replicated by cross-device sync. Use it for same-machine coordination between agents (for example, one agent telling another that a test suite has gone red).
+This bus is local-only — it is not replicated by cross-device sync (which is [planned](/guide/sync), not yet implemented). Use it for same-machine coordination between agents (for example, one agent telling another that a test suite has gone red).
 
-The legacy `yondermesh_mailbox_*` tools (`mailbox_check` / `mailbox_post` / `mailbox_reply`) are the v2 surface of the same bus. They are marked `(legacy v2, prefer yondermesh_send for sync delivery)` in their descriptions and remain available for audit reads — including reads of threads written by the v3 `yondermesh_send` tool.
+`mailbox` is asynchronous (leave a message, poll for it later). When you need a **synchronous** round-trip — ask a question and block for the answer — use `send` (below). The older `yondermesh_mailbox_*` / `post_message` / `get_messages` names remain as deprecated aliases routing through the same bus.
 
-## Synchronous injection: `yondermesh_send`
+## Synchronous injection: `send`
 
-`yondermesh_send` is the v3 sync-injection entry point — it sends a user message to any connected CLI agent and gets the reply back in the same call. This is what closes the loop the v2 mailbox left open: until v3, an agent could leave a message for another agent but could never ask a question and get an answer. Now it can.
+`send` is the synchronous-injection entry point — it delivers a user message to any connected CLI agent and gets the reply back in the same call. This is what closes the loop the async mailbox leaves open: with `mailbox` an agent can leave a message for another agent but cannot ask a question and block for the answer; `send` can. (Older callers may know this tool as `yondermesh_send`, now a deprecated alias.)
 
 | Argument | Required | Description |
 |---|---|---|
@@ -246,7 +246,7 @@ The legacy `yondermesh_mailbox_*` tools (`mailbox_check` / `mailbox_post` / `mai
 
 Returns `{ cli, mode, delivered, response, exitCode, channel, latencyMs, newSessionId, error, messageId, replyMessageId }`. `delivered` is true when the message reached the CLI (even if the reply is empty). `response` is the cleaned reply text — `ReplyAdapter` strips ANSI, drops CLI banners and log lines, and folds blank lines, so what you get back is the agent's actual answer, not its startup noise. The full thread (your message + the reply) is audit-logged into `agent_messages` (your message as `kind=question`, the reply as `kind=task_update`, linked via `replyToId` + `threadId=thread-<messageId>`).
 
-Failure is never silent. `yondermesh_send` never throws (except for argument validation) and never hangs. Unknown CLI, missing model, non-zero exit, upstream API rate-limit — all surface as text in `response` or `error`, with `delivered=false`. The CLI's own error text appears in `response` so the caller can see exactly what went wrong.
+Failure is never silent. `send` never throws (except for argument validation) and never hangs. Unknown CLI, missing model, non-zero exit, upstream API rate-limit — all surface as text in `response` or `error`, with `delivered=false`. The CLI's own error text appears in `response` so the caller can see exactly what went wrong.
 
 The same capability is on the CLI as `ymesh send` — see [Quickstart](/guide/quickstart#talk-to-any-agent-get-a-reply) for examples. The internal architecture is in `src/mailbox/core.ts` (`MailboxCore.send`), `src/trigger/adapter.ts` (`TriggerAdapter`), and `src/trigger/reply-adapter.ts` (`ReplyAdapter`) — see [Architecture](/guide/architecture) for the four-plane model.
 

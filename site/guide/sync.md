@@ -1,12 +1,16 @@
 ---
 title: Cross-device Sync
-description: yondermesh syncs sessions across your devices through a self-hosted relay, with ciphertext only ever leaving the device. Learn how it works, how to configure it, and the privacy model.
+description: yondermesh will sync sessions across your devices through a self-hosted relay, with ciphertext only ever leaving the device. Learn how it works, how to configure it, and the privacy model.
 outline: [2, 3]
 ---
 
 # Cross-device Sync
 
-Your AI coding agents span multiple machines — a laptop, a desktop, a work VM. Context should follow. yondermesh syncs sessions across your devices through a self-hosted relay, with ciphertext only ever leaving the device.
+::: warning planned — not yet implemented
+Cross-device sync is a **planned** capability. The design below is real, but `src/sync/agent.ts` is currently a TODO stub — no data is synced yet. This page documents the intended architecture, not shipped behavior.
+:::
+
+Your AI coding agents span multiple machines — a laptop, a desktop, a work VM. Context should follow. yondermesh is designed to sync sessions across your devices through a self-hosted relay, with ciphertext only ever leaving the device.
 
 ## Why sync
 

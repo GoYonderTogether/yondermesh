@@ -25,15 +25,15 @@ features:
     details: 通过自托管 relay 做端到端加密跨设备同步。尚未实现 — sync 代码路径是 TODO 空壳。
   - icon: 🔍
     title: 查询
-    details: 任何 agent 通过 MCP 工具查询其他 agent 的上下文。search_sessions、list_active_sessions、get_session_handoff —— 全部原生 MCP。
+    details: 任何 agent 通过 MCP 工具查询其他 agent 的上下文。search_sessions、get_session、list_active、handoff —— 8 个正交 MCP 工具。
   - icon: 🤝
     title: 接力
     details: Agent A 从 Agent B 停下的地方继续，即使在不同机器上。浓缩摘要 + 工具调用轨迹 + 任务计划打包成一个 JSON。
   - icon: 📨
     title: "同步注入 (preview)"
-    details: 向任意已接入的 CLI agent 实时发一条消息并同步拿到回复。23 个 CLI，6 种触发通道，3 种模式。Claude Code 和 Codex 支持尚未接入（planned）。
+    details: 向任意已接入的 CLI agent 实时发一条消息并同步拿到回复。26 个 CLI 可经 5 种触发通道（cli-spawn / http-api / ws-rpc / tmux / applescript）触达，3 种模式。
   - icon: 🧠
-    title: 记忆感知
+    title: 上下文感知
     details: 拓扑感知（root / subagent / sidechain）、来源感知（claude / codex / cass / hermes / continue / windsurf / 等）、项目感知（cwd / projectPath）。
   - icon: 🪶
     title: 零侵入

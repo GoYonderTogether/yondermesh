@@ -167,16 +167,16 @@ Trae 不支持文件挂载 MCP。如果要在 Trae 中使用 yondermesh MCP 工�
 在终端调用工具来验证连通性，无需走 Agent 往返：
 
 ```bash
-ymesh mcp call who_is_working
+ymesh mcp call list_active
 ```
 
 最先值得试的几个工具：
 
 - `search_sessions`——返回整个 mesh 中的近期 session。问你的 Agent："我的 Agent 们最近
   在做什么？"
-- `list_active_sessions`——检查某台设备的项目状态。问："我的笔记本上现在有什么？"
-- `who_is_working`——列出当前活跃的 session。问："现在谁在干活？"
-- `get_session_handoff`——为另一个 Agent 构建一个浓缩的交接包。
+- `list_active`——列出当前活跃的 session、检查某台设备的项目状态。问："现在谁在干活？"
+- `overview`——本地 session 库的聚合统计。问："我的笔记本上现在有什么？"
+- `handoff`——为另一个 Agent 构建一个浓缩的交接包。
 
 ## 向任意 Agent 提问，拿回回复
 
@@ -206,13 +206,13 @@ ymesh send --cli hermes --mode new --message "列出本仓库下的所有打开�
 
 回复会经过 `ReplyAdapter` —— 一个纯函数清洗器，去掉 ANSI、丢掉 CLI banner 和日志行、
 折叠空行 —— 所以你拿到的是 Agent 真正的回答，而不是它的启动噪声。完整线程（你的消息 +
-回复）会被审计写入 `yondermesh_mailbox_check` 也读的那张 `agent_messages` 表，方便后续查询。
+回复）会被审计写入 `mailbox` 工具也读的那张 `agent_messages` 表，方便后续查询。
 
 如果出问题（未知 CLI、未配 model、上游 API 限流、非零退出），`send` 永不 hang、永不抛错 ——
 它会带着 `delivered=false` 和 `response` 里的错误文本返回，让你看清发生了什么。退出码：
 `0` 投递成功，`2` 未投递，`1` 校验或意外错误。
 
-MCP 客户端通过 `yondermesh_send` 工具获得相同能力 —— schema 见 [MCP Server](/zh/guide/mcp)。
+MCP 客户端通过 `send` 工具获得相同能力 —— schema 见 [MCP Server](/zh/guide/mcp)。
 
 ## 下一步
 

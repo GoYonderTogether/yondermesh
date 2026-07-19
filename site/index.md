@@ -25,15 +25,15 @@ features:
     details: E2E-encrypted cross-device sync via self-hosted relay. Not yet implemented — the sync code path is a TODO stub.
   - icon: 🔍
     title: Query
-    details: Any agent queries any other agent's context via MCP tools. search_sessions, list_active_sessions, get_session_handoff — all native MCP.
+    details: Any agent queries any other agent's context via MCP tools. search_sessions, get_session, list_active, handoff — 8 orthogonal MCP tools.
   - icon: 🤝
     title: Hand off
     details: Agent A picks up where agent B left off, even on a different machine. Compacted summaries + tool trail + plan shipped in one JSON package.
   - icon: 📨
     title: "Send (preview)"
-    details: Synchronously inject a message into any connected CLI agent and get the reply back. 23 CLIs, 6 trigger channels, 3 modes. Claude Code and Codex support is planned.
+    details: Synchronously inject a message into any connected CLI agent and get the reply back. 26 CLIs reachable via 5 trigger channels (cli-spawn / http-api / ws-rpc / tmux / applescript), 3 modes.
   - icon: 🧠
-    title: Memory-aware
+    title: Context-aware
     details: Topology-aware (root / subagent / sidechain), source-aware (claude / codex / cass / hermes / continue / windsurf / …), and project-aware (cwd / projectPath).
   - icon: 🪶
     title: Zero intrusion

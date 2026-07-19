@@ -13,9 +13,10 @@ query. The result: every CLI agent on every device stops being an island and
 becomes part of one working whole — a shared working surface with cross-platform
 memory, cross-device real-time awareness, and continuous handoff.
 
-This is the collaboration hub of the Agent era. Not another CLI, not another
-model, not another cloud. A deliberately small piece of infrastructure that
-makes the agents you already use act as one.
+This is a self-hosted Agent Context Bus — a neutral interconnect for all your
+agents, on top of which shared cross-agent memory becomes possible. Not another
+CLI, not another model, not another cloud. A deliberately small piece of
+infrastructure that makes the agents you already use act as one.
 
 ## The problem: agents are islands
 
@@ -88,15 +89,19 @@ The daemon lifecycle is simple: `start -> scan-once -> watch (fs events) ->
 periodic reconcile -> idle`. It reads native files only and never modifies them.
 See the [CLI Adapters reference](/reference/adapters) for the full support matrix.
 
-### Sync
+### Sync (planned — not yet implemented)
 
-Cross-device sync via a self-hosted relay. Sessions are encrypted end-to-end with
-a local key before they ever leave the device — the relay only sees ciphertext.
-Cloud relay is optional convenience; you can self-host the relay and never let
-plaintext leave your machines.
+> Cross-device sync is a **planned** capability. `src/sync/agent.ts` is currently
+> a TODO stub — no data is synced yet. The description below is the intended
+> design, not shipped behavior.
 
-The sync agent reads new sessions from the local `SessionStore`, encrypts them
-with the local key, pushes ciphertext to the relay, and pulls peer updates to
+Cross-device sync via a self-hosted relay. Sessions will be encrypted end-to-end
+with a local key before they ever leave the device — the relay only sees
+ciphertext. Cloud relay is optional convenience; you can self-host the relay and
+never let plaintext leave your machines.
+
+The sync agent will read new sessions from the local `SessionStore`, encrypt them
+with the local key, push ciphertext to the relay, and pull peer updates to
 decrypt locally. The relay is a dumb pipe: it never holds a decryption key. The
 result is cross-platform memory without cloud lock-in.
 
@@ -105,12 +110,14 @@ result is cross-platform memory without cloud lock-in.
 Any MCP-capable agent queries any other agent's context through a small set of
 MCP tools:
 
-- `search_sessions` — query recent sessions across the entire mesh.
-- `list_active_sessions` — inspect a remote device's project state.
-- `who_is_working` — see which agents are currently active.
-- `list_active_sessions` — enumerate live sessions.
-- `search_sessions` — full-text search over harvested sessions.
-- `get_session_handoff` — delegate a task to another agent.
+- `search_sessions` — full-text search over harvested sessions across the mesh.
+- `get_session` — inspect a specific session's detail and relations.
+- `list_active` — see which agents and sessions are currently active.
+- `overview` — a bird's-eye view of the whole mesh.
+- `handoff` — build a compacted handoff package to delegate a task.
+- `send` — synchronously inject a message into a connected CLI and get the reply.
+- `mailbox` — post and read audit-logged messages between agents.
+- `agents` — enumerate the agents registered across your devices.
 
 Because the store is [topology-aware](/guide/sessions) (root / subagent /
 sidechain), source-aware (`claude`, `codex`, `cass`, `hermes`, `continue`,
@@ -127,7 +134,7 @@ summary plus recent tool calls plus task plan — that can be fed into another
 agent's context window. This is the bridge that turns isolated sessions into a
 continuous workflow across devices.
 
-The same mechanism powers the `get_session_handoff` MCP tool, so an agent can request a
+The same mechanism powers the `handoff` MCP tool, so an agent can request a
 handoff package programmatically without a human in the loop.
 
 ### Send
@@ -137,18 +144,20 @@ reply back. This is the newest capability, and it closes the loop that earlier
 versions left open: until `send`, the mesh was read-only — agents could see each
 other but could not talk back. Now they can.
 
-`ymesh send` (CLI) and `yondermesh_send` (MCP tool) are the unified entry points.
+`ymesh send` (CLI) and `send` (MCP tool) are the unified entry points.
 They pick the right channel for the target CLI, deliver the message, clean the
 reply, and write the full thread to the audit log — all in one call.
 
-- **28 CLIs supported** — claude, codex, hermes, gemini, goose, aider, amp,
-  factory, vibe, codebuddy, trae-cli, opencode, qwen, openhands, kimi, openclaw,
-  pi, copilot, crush, cline, continue, antigravity, plus the IDE class (trae-ide,
-  windsurf, cursor-ide, chatgpt).
-- **6 trigger channels** — `cli-spawn` (spawn a fresh process), `stdin` (write to
-  a running session's stdin), `http-api` (POST to the CLI's HTTP API),
-  `ws-rpc` (WebSocket / JSON-RPC), `tmux` (send-keys into a tmux pane), and
-  `applescript` (macOS keystroke injection for IDE-class CLIs).
+- **26 CLIs reachable (32 registered)** — 23 via wrapper channels, plus Claude
+  Code and Codex via new-mode spawn, plus ChatGPT via the IDE class: claude,
+  codex, hermes, gemini, goose, aider, amp, factory, vibe, codebuddy, trae-cli,
+  opencode, qwen, openhands, kimi, openclaw, pi, copilot, crush, cline, continue,
+  antigravity, plus the IDE class (trae-ide, windsurf, cursor-ide, chatgpt).
+- **5 trigger channels in use** — `cli-spawn` (spawn a fresh process),
+  `http-api` (POST to the CLI's HTTP API), `ws-rpc` (WebSocket / JSON-RPC),
+  `tmux` (send-keys into a tmux pane), and `applescript` (macOS keystroke
+  injection for IDE-class CLIs). A sixth channel, `stdin`, is defined in the type
+  system but not yet wired.
 - **3 trigger modes** — `stopped` (resume a stopped session with `--resume` and a
   message flag), `running` (inject into a live session in-place), and `new`
   (launch a fresh session, with optional `model` and `effort`).

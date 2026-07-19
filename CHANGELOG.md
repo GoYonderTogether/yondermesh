@@ -20,15 +20,17 @@ cleaned reply, all in one call.
   process) → `ReplyAdapter.extractReply()` (pure-function reply cleaner, no I/O).
   The split keeps the message layer mockable for deterministic unit tests and
   the reply cleaner trivially testable.
-- **6 trigger channels** — `cli-spawn`, `stdin`, `http-api`, `ws-rpc`, `tmux`,
-  `applescript`. The adapter picks one per `TriggerMode` and per-CLI capability.
+- **6 trigger channels defined** — `cli-spawn`, `stdin`, `http-api`, `ws-rpc`,
+  `tmux`, `applescript`; 5 are wired in the registry (`stdin` is reserved but
+  unused). The adapter picks one per `TriggerMode` and per-CLI capability.
 - **3 trigger modes** — `stopped` (resume a stopped session with `--resume` and
   a message flag), `running` (inject into a live session in-place),
   `new` (launch a fresh session, with optional `model` and `effort`).
-- **23 CLIs wired** (Claude Code and Codex not yet wired — planned) — hermes, gemini, goose, aider, amp, factory,
-  vibe, codebuddy, trae-cli, opencode, qwen, openhands, kimi, openclaw, pi,
-  copilot, crush, cline, continue, antigravity, plus the IDE class (trae-ide,
-  windsurf, cursor-ide, chatgpt). Each loads its wrapper on demand via
+- **26 CLIs reachable** (23 via wrapper channels; Claude Code and Codex via
+  new-mode spawn; ChatGPT via the IDE class) — hermes, gemini, goose, aider,
+  amp, factory, vibe, codebuddy, trae-cli, opencode, qwen, openhands, kimi,
+  openclaw, pi, copilot, crush, cline, continue, antigravity, plus the IDE class
+  (trae-ide, windsurf, cursor-ide, chatgpt). Each loads its wrapper on demand via
   `WRAPPER_LOADERS` in `src/mcp/tools.ts`.
 - **Failure is never silent.** `send()` never throws (except during argument
   validation) and never hangs. Unknown CLI, missing model, non-zero exit,
@@ -56,9 +58,28 @@ Internal SDD: `docs/spec-mailbox-v3.md` (gitignored). Public docs: Trigger and
 Mailbox sections in `ARCHITECTURE.md`, plus `yondermesh_send` in the MCP tools
 reference.
 
+### Changed — unified adapter registry & orthogonal MCP tool surface
+
+- **Unified adapter registry** (`src/adapters/registry.ts`) — the single source
+  of truth that merges the three previously-scattered CLI tables (`WRAPPER_LOADERS`,
+  mount `CLI_REGISTRY`, `cmdScan` importers). Canonical counts: **32 registered**,
+  **27 harvest** (importer), **30 mountable**, **26 send-reachable**; coverage
+  **22 A / 9 B / 1 C**. Interface / trigger / harvest layers now read capabilities
+  from the registry.
+- **MCP tool surface converged to 8 orthogonal tools** — `search_sessions`,
+  `get_session`, `list_active`, `overview`, `handoff`, `send`, `mailbox`, `agents`
+  (exported as `ORTHOGONAL_TOOL_NAMES` in `src/mcp/server.ts`), plus 4 auxiliary
+  tools (`extract_project_history`, `query_user_requirements`,
+  `query_agent_responses`, `yondermesh_whoami`). All older names
+  (`yondermesh_*`, `who_is_working`, `list_active_sessions`, `get_session_detail`,
+  `get_session_handoff`, …) are retained as **deprecated forwarding aliases**, so
+  existing callers keep working while new integrations use the orthogonal set.
+
 ### Added — docs & infra
 - Public documentation site (`site/`, VitePress) with English + Chinese locales.
-- Doc-code sync pipeline: `scripts/docs/sync-all.mjs`, `gen-cli-docs.mjs`, `gen-adapters.mjs`.
+- Doc-code sync pipeline: `scripts/docs/sync-all.mjs`, `gen-cli-docs.mjs` (bilingual
+  from `ymesh help`), `gen-adapters.mjs` (from the registry), `gen-mcp-docs.mjs`
+  (from `McpServer.listTools()`).
 - CI workflows: `docs-deploy.yml` (main → GitHub Pages) and `docs-check.yml` (PR drift + link check).
 - `doc-sync` skill (`skills/doc-sync/SKILL.md`) for reconciling docs with code.
 - Top-level canonical docs: `ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md`.

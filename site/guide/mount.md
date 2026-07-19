@@ -10,7 +10,7 @@ The mount system is how yondermesh extends other CLIs without modifying them. A 
 
 This is the **Mount plane** of yondermesh's four-plane architecture (Local, Sync, Mount, Trigger). It is implemented in `src/mount/` and is the single entry point for getting ymesh capabilities into every supported CLI on a machine.
 
-yondermesh supports **28 CLIs** end-to-end — the mount system reaches into the ones that expose a config-file surface, while the trigger layer (`src/trigger/`) reaches into all 28 for synchronous message injection. The two planes are deliberately separate: mount is about passive presence (MCP config, skills, always-on context), trigger is about active delivery (cli-spawn / stdin / http-api / ws-rpc / tmux / applescript).
+yondermesh registers **32 adapters** — **27 are harvested**, **30 are mountable**, and the trigger layer (`src/trigger/`) reaches **26 of them** for synchronous message injection (23 via wrapper channels, plus Claude Code and Codex via new-mode spawn, plus ChatGPT via the IDE class). The two planes are deliberately separate: mount is about passive presence (MCP config, skills, always-on context), trigger is about active delivery (cli-spawn / http-api / ws-rpc / tmux / applescript — `stdin` is defined but not yet wired).
 
 ## What mounts are
 
@@ -63,7 +63,7 @@ Unmounts every ymesh extension from every detected CLI. For config-rewriting str
 
 ## Supported CLIs and their strategies
 
-yondermesh supports **28 CLIs end-to-end** — every one of them can be synchronously injected via `ymesh send` / `yondermesh_send` (Trigger plane), and the ones that expose a config-file surface can also be mounted (Mount plane). The public CLI coverage table below (sourced from `src/mount/registry.ts`) shows the Mount-plane strategies; the Trigger-plane coverage is broader and lives in the wrapper registry (`WRAPPER_LOADERS` in `src/mcp/tools.ts`).
+yondermesh registers **32 adapters** — **27 harvested**, **30 mountable**, and **26 send-reachable** via `ymesh send` / the `send` MCP tool (Trigger plane). The ones that expose a config-file surface can also be mounted (Mount plane). The public CLI coverage table below (sourced from `src/mount/registry.ts`) shows the Mount-plane strategies; the Trigger-plane coverage is broader and lives in the wrapper registry (`WRAPPER_LOADERS` in `src/mcp/tools.ts`).
 
 | CLI | MCP mount | Skill mount | Always-on injection |
 |---|---|---|---|
@@ -76,7 +76,7 @@ yondermesh supports **28 CLIs end-to-end** — every one of them can be synchron
 | trae-cn | — | skill-symlink (`~/.trae-cn/skills/`) | — |
 | continue | — | skill-symlink (`~/.continue/skills/`) | — |
 
-The registry declares many more CLIs (Factory, Vibe, CodeBuddy, Copilot, Pi / OMP / GSD-Pi, OpenHands, Goose, Crush, Cline, Antigravity, Amp, Qwen, Hermes, plus IDE-shared variants). Some CLIs (Aider, OpenClaw, Kimi, ChatGPT desktop) declare no mount capabilities and are detected-but-not-mounted. The live, auto-regenerated matrix is on the [CLI Adapters](/reference/adapters) page. For the trigger-plane coverage — i.e. which of the 28 CLIs `ymesh send` can talk to — see the wrapper loaders in `src/mcp/tools.ts`; the trigger layer is independent of the mount layer and reaches CLIs that mounts cannot.
+The registry declares many more CLIs (Factory, Vibe, CodeBuddy, Copilot, Pi / OMP / GSD-Pi, OpenHands, Goose, Crush, Cline, Antigravity, Amp, Qwen, Hermes, plus IDE-shared variants). Some CLIs (Aider, OpenClaw, Kimi, ChatGPT desktop) declare no mount capabilities and are detected-but-not-mounted. The live, auto-regenerated matrix is on the [CLI Adapters](/reference/adapters) page. For the trigger-plane coverage — i.e. which of the 26 send-reachable CLIs `ymesh send` can talk to — see the wrapper loaders in `src/mcp/tools.ts`; the trigger layer is independent of the mount layer and reaches CLIs that mounts cannot.
 
 ## Strategy implementations
 

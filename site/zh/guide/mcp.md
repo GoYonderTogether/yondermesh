@@ -79,41 +79,41 @@ ymesh mcp call <tool> [args]
 
 ```bash
 # 快速查看本机谁在干活
-ymesh mcp call who_is_working
+ymesh mcp call list_active
 
 # 搜索最近 7 天的 codex session
-ymesh mcp call search_sessions --agent codex --since 7d
+ymesh mcp call search_sessions source=codex since=7d
 
 # 获取某个 session id 的浓缩 handoff 包
-ymesh mcp call get_session_handoff --session-id 019f5fe4-b127-7de2-b8f1-efa45bee24cb
+ymesh mcp call handoff session_id=019f5fe4-b127-7de2-b8f1-efa45bee24cb
 
 # 以 live 模式查看正在运行的 session，保留 tool call
-ymesh mcp call get_session_detail --session-id <id> --live --include-tool-calls
+ymesh mcp call get_session session_id=<id> live=true include_tool_calls=true
 
 # 向某个项目下所有 agent 广播消息
-ymesh mcp call post_message --to-project /Users/YOU/projects/app --body "tests are red on main"
+ymesh mcp call mailbox action=post to_project=/Users/YOU/projects/app body="tests are red on main"
 ```
 
 参数会作为工具的 `arguments` 对象传入。输出是工具结果的原始内容（JSON 或纯文本，取决于工具）。这在脚本编排、调试和快速查看时很有用。
 
 ## MCP 工具
 
-完整工具列表定义在 `src/mcp/server.ts`（`McpServer.listTools()`）。规范参考页见 [MCP 工具](/zh/reference/mcp-tools)。
+工具面是 **8 个正交核心工具** 加 4 个辅助工具，定义在 `src/mcp/server.ts`（`McpServer.listTools()`，核心集在 `ORTHOGONAL_TOOL_NAMES` 常量里）。逐参数、逐返回值的规范参考由 `listTools()` 自动生成 —— 这里不再重复，见 **[MCP 工具参考](/zh/reference/mcp-tools)**。
 
-| 工具 | 主要参数 | 返回内容 |
-|---|---|---|
-| `search_sessions` | `project_path`、`project_prefix`、`agent`、`topology`、`since`、`limit` | 匹配过滤条件的 session 列表，每条是摘要（id、source、project、cwd、topology、消息数、起止时间、model、CLI 版本、originator）。`limit` 默认 20，限制在 1–200 之间。 |
-| `get_session_detail` | `session_id`（必填）、`live`、`limit`、`include_compacted`、`include_tool_calls`、`handoff_mode` | session 的消息列表。`live=true` 直接读源文件，正在运行的 session 也能拿到最新消息。`handoff_mode=true` 等价于 `live + include_compacted + include_tool_calls + 尾部 30 条`，专为任务接管设计。 |
-| `get_session_handoff` | `session_id`（必填）、`tail_messages`（默认 30） | 浓缩的 `HandoffPackage` —— 见 [Handoff 包](#handoff-包)。由 `src/mcp/codex-handoff.ts` 构建。 |
-| `get_session_relations` | `session_id`（必填） | 该 session 的父 / 子 / 关联 session，带方向（`incoming` / `outgoing`）和关系类型。 |
-| `get_overview` | `since`、`project_prefix` | 本地 session 库的聚合统计（按 source、topology、时间桶的计数）。 |
-| `list_active_sessions` | `within_minutes`（默认 30） | 时间窗口内有活动的 session，附带运行时摘要（总数、live 数、subagent 数、按 source 分布）。直查数据库，反映最近扫描周期的状态。 |
-| `who_is_working` | — | 人类可读的摘要：本机当前哪些 agent 活跃，每条 session 一行，含 `[live]` 标记、source、cwd、最近活动相对时间，末尾附 by-source 统计。 |
-| `post_message` | `body`（必填）、`to_session_id` 或 `to_project`、`from_session_id`、`kind` | 向另一个 session（直接消息）或某项目下所有 agent（广播）发送消息。`kind` 取值 `info` / `warning` / `question` / `task_update`。通过本地 SQLite 投递。 |
-| `get_messages` | `for_session_id` 或 `for_project`、`since_minutes`（默认 60）、`unread_only` | 取出发给该 session 或项目的消息，读取后自动标记已读。是 `post_message` 的对端。 |
-| `extract_project_history` | `project_path`（必填）、`force_refresh` | 提取某项目全部历史中的用户需求与 agent 响应到 `~/.yondermesh/extracts/<hash>/` 下的 NDJSONL 文件，返回计数。`force_refresh=false` 且已有索引时直接返回现有统计，不重新提取。 |
-| `query_user_requirements` | `project_path`（必填）、`keyword`、`session_id`、`from`、`to`、`limit`、`offset`、`id` | 查询 `extract_project_history` 提取出的 user 消息。每条含 `id`（1-based 行号）、session id、content、timestamp。命中 `id` 时忽略其它过滤。 |
-| `query_agent_responses` | `project_path`（必填）、`keyword`、`session_id`、`from`、`to`、`limit`、`offset`、`id` | 查询 `extract_project_history` 提取出的 assistant 消息。查询形态与 `query_user_requirements` 相同。 |
+核心工具一览：
+
+| 工具 | 用途 |
+| --- | --- |
+| `search_sessions` | 跨所有 agent 搜索 session（时间 / 项目 / agent / 拓扑过滤 + 全文 `query`）。 |
+| `get_session` | 单个 session 的完整消息流；`live` 读正在运行的 session，`handoff_mode` 用于接管，`include_relations` 带拓扑关系。 |
+| `list_active` | 当前活跃或等待 review 的 session，附运行时摘要。 |
+| `overview` | 本地 session 库的聚合统计。 |
+| `handoff` | 用于任务接管的浓缩 `HandoffPackage` —— 见 [Handoff 包](#handoff-包)。 |
+| `send` | 同步向目标 CLI 注入一条消息并拿回回复 —— 见 [同步注入](#同步注入-send)。 |
+| `mailbox` | 异步的跨 session 消息总线（post / check / reply / get）。 |
+| `agents` | 列出本机 agent CLI，含安装状态、覆盖情况和挂载能力。 |
+
+4 个辅助工具（`extract_project_history`、`query_user_requirements`、`query_agent_responses`、`yondermesh_whoami`）负责项目历史提取与自我识别。旧工具名（`get_session_detail`、`get_session_handoff`、`list_active_sessions`、`who_is_working`、`get_overview`、`post_message`、`yondermesh_*` 等）仍保留为 **deprecated 转发别名**，让现有调用方继续可用。
 
 ### 相对时间
 
@@ -209,7 +209,7 @@ Trae **不**把 MCP 配置作为文件暴露给 ymesh 写入。请通过 Trae ID
 
 ## Handoff 包
 
-`get_session_handoff` 和 `get_session_detail`（`handoff_mode=true`）会从 codex rollout JSONL 构建 `HandoffPackage`，Claude Code session 回退到简化版。包由 `src/mcp/codex-handoff.ts` 构建，包含：
+`handoff`（以及 `get_session` 的 `handoff_mode=true`）会从 codex rollout JSONL 构建 `HandoffPackage`，Claude Code session 回退到简化版。包由 `src/mcp/codex-handoff.ts` 构建，包含：
 
 - `session_meta` —— cwd、topology（`root` / `subagent`）、model、CLI 版本、originator。
 - `compacted_summaries` —— codex post-compact 摘要，按 `window_number` 升序排列。冗余的 `replacement_history` 已剔除。
@@ -222,15 +222,15 @@ Trae **不**把 MCP 配置作为文件暴露给 ymesh 写入。请通过 Trae ID
 
 ## 跨 session 消息总线
 
-`post_message` 与 `get_messages` 共同构成一个轻量的跨 session 消息总线，后端是本地 SQLite。消息可以发给指定 session（`to_session_id`，直接消息）或某个项目（`to_project`，广播给该项目下所有 agent）。`get_messages` 读取后会自动标记已读，所以 agent 用 `get_messages --for-session-id <self>` 轮询时只会看到新消息。
+`mailbox` 工具是一个轻量的**异步**跨 session 消息总线，后端是本地 SQLite。通过 `action` 选择操作：`post`（发直接消息或项目广播）、`check`（读未读）、`reply`、`get`。消息可以发给指定 session（`to_session_id`，直接消息）或某个项目（`to_project`，广播给该项目下所有 agent）。消息读取后会自动标记已读，所以 agent 用 `mailbox action=check` 轮询时只会看到新消息。
 
-该总线仅本机有效 —— 不会被跨设备同步复制。它适合同机 agent 之间的协调（例如一个 agent 通知另一个 agent 测试挂了）。
+该总线仅本机有效 —— 不会被跨设备同步复制（同步[规划中](/zh/guide/sync)，尚未实现）。它适合同机 agent 之间的协调（例如一个 agent 通知另一个 agent 测试挂了）。
 
-legacy 的 `yondermesh_mailbox_*` 工具（`mailbox_check` / `mailbox_post` / `mailbox_reply`）是同一条总线的 v2 表面。它们在描述里已标记 `(legacy v2, prefer yondermesh_send for sync delivery)`，仍可用于审计读取 —— 包括读取 v3 `yondermesh_send` 工具写入的线程。
+`mailbox` 是异步的（留言，稍后轮询取回）。当你需要**同步**往返 —— 问一句、阻塞等回复 —— 用 `send`（见下）。旧的 `yondermesh_mailbox_*` / `post_message` / `get_messages` 名称仍作为 deprecated 别名保留，路由到同一条总线。
 
-## 同步注入：`yondermesh_send`
+## 同步注入 send
 
-`yondermesh_send` 是 v3 同步注入入口 —— 它把一条 user message 发给任意已接入的 CLI agent，并在同一次调用里拿回回复。这正是补上 v2 mailbox 留下的缺口：在 v3 之前，一个 agent 可以给另一个 agent 留言，但永远没法"问一句、答一句"。现在可以了。
+`send` 是同步注入入口 —— 它把一条 user message 发给任意已接入的 CLI agent，并在同一次调用里拿回回复。这正是补上异步 mailbox 留下的缺口：用 `mailbox` 一个 agent 可以给另一个 agent 留言，但没法"问一句、答一句"；`send` 可以。（旧调用方可能把这个工具叫 `yondermesh_send`，现已是 deprecated 别名。）
 
 | 参数 | 必填 | 说明 |
 |---|---|---|
@@ -246,7 +246,7 @@ legacy 的 `yondermesh_mailbox_*` 工具（`mailbox_check` / `mailbox_post` / `m
 
 返回 `{ cli, mode, delivered, response, exitCode, channel, latencyMs, newSessionId, error, messageId, replyMessageId }`。`delivered` 为 true 表示消息已送达 CLI（即使回复为空）。`response` 是清洗后的回复文本 —— `ReplyAdapter` 会剥离 ANSI、丢弃 CLI banner 与日志行、折叠空行，所以你拿到的是 agent 的真实回答，而不是它的启动噪声。完整线程（你的消息 + 回复）会被审计写入 `agent_messages`（你的消息记为 `kind=question`，回复记为 `kind=task_update`，通过 `replyToId` + `threadId=thread-<messageId>` 关联）。
 
-失败永不沉默。`yondermesh_send` 永不抛异常（参数校验除外），永不挂起。未知 CLI、未配 model、非零退出、上游 API 限流 —— 全部以文本形式回到 `response` 或 `error`，并置 `delivered=false`。CLI 自己的报错文本会原样出现在 `response` 里，调用方能看到到底哪里出了问题。
+失败永不沉默。`send` 永不抛异常（参数校验除外），永不挂起。未知 CLI、未配 model、非零退出、上游 API 限流 —— 全部以文本形式回到 `response` 或 `error`，并置 `delivered=false`。CLI 自己的报错文本会原样出现在 `response` 里，调用方能看到到底哪里出了问题。
 
 同一能力在 CLI 侧是 `ymesh send` —— 示例见 [快速开始](/zh/guide/quickstart#向任意-agent-提问拿回回复)。内部架构在 `src/mailbox/core.ts`（`MailboxCore.send`）、`src/trigger/adapter.ts`（`TriggerAdapter`）、`src/trigger/reply-adapter.ts`（`ReplyAdapter`）—— 四平面模型见 [架构](/zh/guide/architecture)。
 

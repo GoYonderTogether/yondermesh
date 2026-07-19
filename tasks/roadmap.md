@@ -6,14 +6,16 @@
 
 ## 0. 诊断与原则
 
-**一句话诊断**：文档不是落后于代码，而是超前于代码——README/官网描绘的是完全体（5 能力、28 CLI、E2E 同步），代码实际交付的是「采集 + 查询 + 挂载 + 23 CLI 同步注入」。
+**一句话诊断**：文档不是落后于代码，而是超前于代码——README/官网描绘的是完全体（5 能力、28 CLI、E2E 同步），代码实际交付的是「采集 + 查询 + 挂载 + 26 CLI 同步注入」（send 可达 26 = 23 wrapper + Claude Code/Codex new 模式 + ChatGPT IDE 类）。
 
 **三条铁律**：
 1. **承诺 = 事实**。文档只描述有测试、能跑通的能力；未实现的标 `planned`，代码在但没发版的标 `preview`。
 2. **分层清晰**。适配层（每个 CLI 的私有知识）、能力层（CLI 无关的业务）、接口层（CLI + MCP 薄壳）三层解耦，接口层与能力层禁止直接 import `src/<cli>/`。
 3. **可验收**。每个任务有明确的验收命令或断言，`npm test` + `npm run typecheck` 是所有代码任务的地板。
 
-**讲人话**：不造新词。已有概念沿用（session / 采集 / 挂载 / 注入 / 接力）。禁止发明"上下文总线""协作中枢"之外的新隐喻。
+> ⚠️ **定位已更新（2026-07-18）**：见 `docs/product-vision-agent-bus-v0.1.md`（取代 `_alignment-plan-2026-07-18.md` 的战略定位）。核心纠偏：**护城河 = 互联基座（L0–L2），记忆（L4 派生）是跑在护城河上的产品杠杆，不是护城河本身**。「L4 = 护城河 v2」的旧判断作废。本 roadmap 的任务仍有效，但涉及"护城河/定位"的措辞以 product-vision v0.1 为准。
+
+**讲人话**：不造新词。已有概念沿用（session / 采集 / 挂载 / 注入 / 接力）。canonical 词汇表见 `docs/_alignment-plan-2026-07-18.md §1`——「共同记忆 / 派生（L4）/ 洞察 / 六环」为已有概念的准用词，不算新造词；其中"派生（L4）"的**战略地位**以 product-vision v0.1 为准（杠杆，非护城河）。
 
 ## 状态图例
 
@@ -27,7 +29,7 @@
 |---|---|---|---|
 | **M0** | 真相对齐：文档降到事实 | 无（仅改文档） | T0.1–T0.4 |
 | **M1** | 架构分层 + MCP 工具收敛 | 中（重构，行为不变） | T1.1–T1.4 |
-| **M2** | 空壳功能重新规划（SDD 可验收） | 高（新实现或明确降级） | T2.1–T2.3 |
+| **M2** | 空壳功能重新规划 + L4 派生旗舰（SDD 可验收） | 高（新实现或明确降级） | T2.1–T2.4 |
 | **M3** | send 旗舰补齐 + spec-kit + 五轴 TDD | 中 | T3.1–T3.4 |
 | **M4** | CI 护栏防复发 | 低 | T4.1–T4.3 |
 
@@ -168,6 +170,18 @@
 - **依赖**：T0.1。
 - **影响文件**：`src/sync/agent.ts`、`docs/sdd/sync.md`、`README.md`（+zh）、`site/guide/sync.md`。
 
+### [ ] T2.4 L4 派生层旗舰：从"能搜到"上移到"主动告诉你该注意什么"（产品杠杆）
+- **定位**：**护城河 = L0–L2 互联基座（采集/归一/检索）**——中立、跨厂商、本地优先，是任何在位者结构上都占不了的位置。**L4 派生层不是护城河，是跑在护城河上的产品杠杆**：它把互联能力放大成用户可感知的价值（"主动告诉你该注意什么"），是 demo 与付费的矛头，但只有站在互联基座上才长得出来。本任务全部 **deterministic-first，内核零 LLM**。（定位依据：`docs/product-vision-agent-bus-v0.1.md`）
+- **打包五个 deterministic 派生能力**（每个先写 `docs/sdd/derive-*.md` 可验收）：
+  1. **内容搜索 FTS**：SQLite FTS5 索引 session 消息正文，让 `search_sessions.search` 参数真生效（当前只有元数据 `=`/前缀 LIKE，无正文搜索）。这是四问①召回的地板。
+  2. **卡住检测**：可确定性判定（如"最近 N 小时无更新且最后一条是 assistant 提问"），喂给 briefing。
+  3. **项目时间线**：按项目/任务聚合跨 session 事件，消费 `derived_from`/`continued_from` 拓扑。
+  4. **决策提取**：从 session 提取"试过什么/结论"，是 check_prior_attempts 的数据源。
+  5. **`check_prior_attempts` 洞察工具（旗舰第四问）**：MCP 工具，输入任务/报错，返回"别的 agent 之前踩过没、结论是什么"。demo 里最该有的一幕。
+- **验收条件**：FTS 用 fixture store 断言正文命中；卡住/时间线/决策提取数字与 `ymesh sessions` 交叉核对；`check_prior_attempts` 用 fixture 返回历史尝试；全部单测覆盖、零 LLM 依赖。
+- **依赖**：T1.3（检索层）、T2.2（简报消费卡住检测）。
+- **影响文件**：`src/store/schema.ts`（FTS5）、`src/store/index.ts`、`src/derive/*.ts`（新建）、`src/mcp/tools.ts`（check_prior_attempts）、`tests/derive-*.test.ts`、`docs/sdd/derive-*.md`。
+
 ---
 
 ## M3 — send 旗舰补齐 + spec-kit + 五轴 TDD
@@ -208,11 +222,12 @@
 - **验收条件**：`adapters.md` 不含非适配器行，含 factory；`check-drift.mjs` 通过。
 - **影响文件**：`scripts/docs/gen-adapters.mjs`。
 
-### [ ] T4.2 新增 gen-mcp-docs.mjs 管线
+### [x] T4.2 新增 gen-mcp-docs.mjs 管线（2026-07-18 完成）
 - **目标**：`site/reference/mcp-tools.md` 从 `listTools()` 自动生成，消除漏 8 个工具的问题。
-- **验收条件**：生成的 mcp-tools.md == listTools() 工具集；接入 sync-all.mjs。
+- **验收条件**：生成的 mcp-tools.md == listTools() 工具集；接入 sync-all.mjs。✓
+- **落地**：`scripts/docs/gen-mcp-docs.mjs` 从 `McpServer.listTools()` 出中英两页，按 `ORTHOGONAL_TOOL_NAMES`（新增导出常量）分「核心 8 正交 + 4 辅助」；英文 prose 走 `mcp-en-descriptions.mjs` 并带**完整性断言**（新工具/参数漏译则 build 失败）。已接入 `sync-all.mjs` 与 `check-drift.mjs` 门禁。同轮把 `gen-adapters.mjs` 改为从 `src/adapters/registry.ts` 出（杜绝内部目录混入 + 数字程序化），`gen-cli-docs.mjs` 支持 `ymesh help --lang en` 双语（修英文站曾整页中文）。
 - **依赖**：T1.3、T1.4。
-- **影响文件**：新增 `scripts/docs/gen-mcp-docs.mjs`、`scripts/docs/sync-all.mjs`。
+- **影响文件**：新增 `scripts/docs/gen-mcp-docs.mjs`、`scripts/docs/mcp-en-descriptions.mjs`；改 `sync-all.mjs`、`check-drift.mjs`、`gen-adapters.mjs`、`gen-cli-docs.mjs`、`src/mcp/server.ts`、`src/bin/ymesh.ts`。
 
 ### [ ] T4.3 claims-lint 断言检查
 - **目标**：CI 扫描 README/site，拦截三类漂移：已废弃工具名、硬编码适配器数字、shipped 标签指向无测试模块。

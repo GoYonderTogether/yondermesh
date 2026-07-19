@@ -9,6 +9,8 @@
 [English](README.md) | **[简体中文](README.zh-CN.md)**
 
 > **状态标签：** `shipped` = 已实现且有测试 · `preview` = 代码已存在但未发版 · `planned` = 未实现（仅设计）。
+>
+> *对应 v0.1.0 · 最后核对 2026-07-18。适配器 / 通道 / 工具数量均由源码推导；实时矩阵以自动生成的[参考页](https://goyondertogether.github.io/yondermesh/zh/reference/adapters)为准。*
 
 ## 为什么是 yondermesh
 
@@ -24,7 +26,7 @@
 - **同步（Sync）** `planned` —— 通过自托管 relay 做端到端加密跨设备同步。尚未实现；sync 代码路径是 TODO 空壳。
 - **查询（Query）** `shipped` —— 任何 agent 通过 MCP 工具查询其他 agent 的上下文。拓扑感知、来源感知、项目感知。
 - **接力（Hand off）** `shipped` —— Agent A 从 Agent B 停下的地方继续，即使换了机器。session 不再在边界处消亡，而是成为一条连续的工作流。
-- **同步注入（Send）** `preview` —— 向任意已接入的 CLI agent 实时发一条 user message 并同步拿到回复。23 个 CLI（Claude Code 和 Codex 尚未接入 — planned）。6 种通道（cli-spawn / stdin / http-api / ws-rpc / tmux / applescript），3 种模式（停止 / 运行中 / 新建）。即使对方 agent 没配 model，至少也能返回错误消息，而不是沉默。
+- **同步注入（Send）** `preview` —— 向任意已接入的 CLI agent 实时发一条 user message 并同步拿到回复。26 个 CLI（23 个经 wrapper 通道支持 stopped/running，Claude Code 与 Codex 经 new 模式 spawn 接入，ChatGPT 经 IDE 类接入）。5 种在用通道（cli-spawn / http-api / ws-rpc / tmux / applescript），3 种模式（停止 / 运行中 / 新建）。即使对方 agent 没配 model，至少也能返回错误消息，而不是沉默。
 
 ## 快速开始
 
@@ -65,7 +67,7 @@ ymesh mount all
 }
 ```
 
-现在任何支持 MCP 的 agent 都可以调用 `who_is_working`、`search_sessions`、`get_session_handoff`、`yondermesh_send` 等工具。
+现在任何支持 MCP 的 agent 都可以调用 `search_sessions`、`list_active`、`handoff`、`send` 等 8 个正交 MCP 工具。
 
 ### 向任意 agent 提问，拿回回复
 
@@ -77,7 +79,7 @@ ymesh send --cli hermes --mode new --message "用一句话总结当前分支最�
 ymesh send --cli opencode --session <id> --mode stopped --message "再对上一次 commit 做同样的事。"
 ```
 
-`ymesh send`（或 `yondermesh_send` MCP 工具）是同步消息投递的统一入口。它为目标 CLI 选对通道、投递消息、清洗回复、把整条线程写进审计日志 —— 全部一次调用完成。
+`ymesh send`（或 `send` MCP 工具）是同步消息投递的统一入口。它为目标 CLI 选对通道、投递消息、清洗回复、把整条线程写进审计日志 —— 全部一次调用完成。
 
 ## 核心特性
 
@@ -86,7 +88,7 @@ ymesh send --cli opencode --session <id> --mode stopped --message "再对上一�
 - **跨设备同步** `planned` —— 端到端加密 relay 设计已存在；sync 代码路径是 TODO 空壳，尚未可用。
 - **Mount 系统** `shipped` —— 非侵入式地把 MCP server、skill、always-on 上下文安装到每个 CLI 自己的配置目录。
 - **Session 接力** `shipped` —— 提取浓缩 handoff 包（摘要 + 近期消息 + 任务计划），传给另一个 agent。
-- **同步注入（Mailbox v3）** `preview` —— `ymesh send` / `yondermesh_send` 把 user message 投递到任意已接入的 CLI 并返回清洗后的回复。6 种触发通道，3 种模式（停止 / 运行中 / 新建，新建模式可选 `model` + `effort`）。失败永不沉默：未知 CLI、未配 model、上游 API 限流，都会以文本形式回到 response 里。
+- **同步注入（Mailbox v3）** `preview` —— `ymesh send` / `send`（MCP 工具）把 user message 投递到任意已接入的 CLI 并返回清洗后的回复。5 种在用触发通道，3 种模式（停止 / 运行中 / 新建，新建模式可选 `model` + `effort`）。失败永不沉默：未知 CLI、未配 model、上游 API 限流，都会以文本形式回到 response 里。
 - **每日简报** `planned` —— 活动摘要设计已存在；briefing generator 是 TODO 空壳，尚未可用。
 - **无 UI、无云锁定、无模型代理、无 agent 修改。**
 
@@ -135,7 +137,7 @@ ymesh send --cli opencode --session <id> --mode stopped --message "再对上一�
 
 ## CLI 覆盖
 
-yondermesh 读取每个 CLI agent 的原生 session 格式，并通过触发层向其中 23 个 CLI 同步注入消息。各 CLI 的挂载策略：
+yondermesh 读取每个 CLI agent 的原生 session 格式，并通过触发层向其中 26 个 CLI（23 个经 wrapper 通道支持 stopped/running，Claude Code 与 Codex 经 new 模式 spawn 接入，ChatGPT 经 IDE 类接入）同步注入消息。各 CLI 的挂载策略：
 
 | CLI | MCP 挂载 | Skill 挂载 | Always-on 注入 |
 |---|---|---|---|
@@ -148,7 +150,7 @@ yondermesh 读取每个 CLI agent 的原生 session 格式，并通过触发层�
 | trae-cn | — | skill-symlink (`~/.trae-cn/skills/`) | — |
 | continue | — | skill-symlink (`~/.continue/skills/`) | — |
 
-完整适配器矩阵（27 个 CLI，覆盖等级 A/B/C）：[文档/reference/adapters](https://goyondertogether.github.io/yondermesh/zh/reference/adapters)
+完整适配器矩阵（32 注册 · 27 可采集 · 26 send 可达，覆盖等级 A/B/C）：[文档/reference/adapters](https://goyondertogether.github.io/yondermesh/zh/reference/adapters)
 
 ## 配置
 
@@ -188,8 +190,8 @@ yondermesh 读取每个 CLI agent 的原生 session 格式，并通过触发层�
 ## 路线图
 
 - [x] **M1** —— daemon + collector + 本地 SQLite + MCP 查询工具
-- [x] **M2** —— session 接力（`get_session_handoff`、`ymesh handoff`）
-- [x] **Mailbox v3** —— 同步注入（`ymesh send` / `yondermesh_send`）；23 个 CLI，6 种触发通道，3 种模式
+- [x] **M2** —— session 接力（`handoff`、`ymesh handoff`）
+- [x] **Mailbox v3** —— 同步注入（`ymesh send` / `send`）；26 个 CLI（23 个经 wrapper 通道支持 stopped/running，Claude Code 与 Codex 经 new 模式 spawn 接入，ChatGPT 经 IDE 类接入），5 种在用触发通道，3 种模式
 - [ ] **M3** —— 企业版：审计日志、RBAC、session 回放、合规报告
 - `planned` **跨设备同步** —— 端到端加密 relay；sync 代码路径是 TODO 空壳
 - `planned` **每日简报** —— 活动摘要；generator 是 TODO 空壳

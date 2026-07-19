@@ -6,7 +6,7 @@ outline: [2, 3]
 
 # Architecture
 
-yondermesh is a self-hosted **Agent Context Bus**: one daemon plus one MCP server that let your AI coding agents share a single working surface across devices and CLIs. Sessions are harvested from each CLI's native format into local SQLite; an MCP server exposes query and handoff tools to any MCP-capable agent; cross-device sync moves ciphertext only over a self-hosted relay; the trigger layer synchronously injects user messages into any connected CLI and returns the cleaned reply. Five capabilities — Collect, Sync, Query, Hand off, Send — turn every CLI agent on every device into one working whole.
+yondermesh is a self-hosted **Agent Context Bus**: one daemon plus one MCP server that let your AI coding agents share a single working surface across devices and CLIs. Sessions are harvested from each CLI's native format into local SQLite; an MCP server exposes query and handoff tools to any MCP-capable agent; cross-device sync (planned, not yet implemented) will move ciphertext only over a self-hosted relay; the trigger layer synchronously injects user messages into any connected CLI and returns the cleaned reply. Five capabilities — Collect, Sync (planned), Query, Hand off, Send — turn every CLI agent on every device into one working whole.
 
 ## Overview
 
@@ -20,9 +20,9 @@ Trigger plane      MailboxCore → TriggerAdapter (cli-spawn / stdin / http-api 
 ```
 
 - The **Local plane** reads what each CLI wrote and turns it into structured queries. Adapters are pure readers; they never modify native files.
-- The **Sync plane** ships context between your own devices. Ciphertext only leaves the device — the relay never sees plaintext.
+- The **Sync plane** is **planned, not yet implemented** (`src/sync/agent.ts` is a TODO stub). By design it will ship context between your own devices — ciphertext only leaves the device, the relay never sees plaintext.
 - The **Mount plane** installs ymesh extensions (MCP server config, skill symlinks, always-on paragraphs) into each CLI's own config directory. It edits config files, never binaries.
-- The **Trigger plane** is the synchronous delivery-and-reply path. `MailboxCore.send()` audit-writes the user message, hands it to `TriggerAdapter` (the only layer that spawns or talks to a CLI process), pipes the raw response through `ReplyAdapter` (a pure-function text cleaner), audit-writes the reply, and returns. 28 CLIs, 6 channels, 3 modes. Failure is never silent: unknown CLI, missing model, non-zero exit, upstream API rate-limit all surface as text in the response.
+- The **Trigger plane** is the synchronous delivery-and-reply path. `MailboxCore.send()` audit-writes the user message, hands it to `TriggerAdapter` (the only layer that spawns or talks to a CLI process), pipes the raw response through `ReplyAdapter` (a pure-function text cleaner), audit-writes the reply, and returns. 26 CLIs, 5 channels in use (a sixth, `stdin`, is defined but not yet wired), 3 modes. Failure is never silent: unknown CLI, missing model, non-zero exit, upstream API rate-limit all surface as text in the response.
 
 The CLI itself (`ymesh`) is a thin wrapper over the same `SessionStore` that the daemon writes to. `ymesh scan`, `ymesh sessions`, `ymesh active` are direct store queries — there is no separate daemon protocol for read-only commands.
 
@@ -102,10 +102,10 @@ The source tree under `src/` is organized by responsibility. The table below is 
 | `src/` (per-adapter) | One directory per supported CLI (`aider`, `claude`, `codex`, `cass`, `gemini`, `windsurf`, …). Each adapter follows the `importer.ts` / `wrapper.ts` / `inject.ts` / `extractor.ts` file pattern. |
 | `src/store/` | The only writer/reader of SQLite. `SessionStore` class, schema, types, source aliases, dedup logic. |
 | `src/daemon/` | `YondermeshDaemon` lifecycle + `defaultDaemonConfig` / `defaultDataDir`. |
-| `src/mcp/` | `McpServer` (stdio JSON-RPC) + registration into Claude Code and Codex + handoff package builder + `yondermesh_send` sync-injection tool. |
+| `src/mcp/` | `McpServer` (stdio JSON-RPC) + registration into Claude Code and Codex + handoff package builder + `send` sync-injection tool. |
 | `src/mount/` | Mount system: installs ymesh extensions into each CLI's config dir without modifying the CLI. |
-| `src/mailbox/` | `MailboxCore` — the only place mailbox business logic lives. `send()` (v3 sync injection) + `postMessage` / `peekMessages` / … (v2 legacy audit surface). Backs both `ymesh send` / `ymesh mailbox` CLI and `yondermesh_send` / `yondermesh_mailbox_*` MCP tools. |
-| `src/trigger/` | `TriggerAdapter` (delivery, the only layer that spawns or talks to a CLI process) + `ReplyAdapter` (pure-function reply cleaner, no I/O). 6 channels × 3 modes across 28 CLIs. |
+| `src/mailbox/` | `MailboxCore` — the only place mailbox business logic lives. `send()` (v3 sync injection) + `postMessage` / `peekMessages` / … (v2 legacy audit surface). Backs both `ymesh send` / `ymesh mailbox` CLI and `send` / `mailbox` MCP tools. |
+| `src/trigger/` | `TriggerAdapter` (delivery, the only layer that spawns or talks to a CLI process) + `ReplyAdapter` (pure-function reply cleaner, no I/O). 5 channels in use (a sixth, `stdin`, is defined but not yet wired) × 3 modes across 26 CLIs. |
 | `src/install/` | Release build, launcher symlink, git updater, skill linker, path resolution. |
 | `src/extract/` | `ymesh extract` — dumps user requirements + assistant responses to NDJSONL files. |
 | `src/briefing/` | Daily digest generator (output to `~/.yondermesh/briefings/`). |
@@ -116,7 +116,7 @@ A few cross-cutting rules keep the boundaries clean:
 - `src/store/` is the only writer to SQLite. Adapters call `SessionStore` methods; they never write SQL directly.
 - `src/bin/ymesh.ts` is the only place commands are registered. Adding a command means adding a `case` to `main()` plus a `cmd*` function.
 - `src/mount/` never imports from `src/<adapter>/`. Mount strategies are driven by CLI config, not by adapter code.
-- `src/mailbox/` is the only place mailbox business logic lives. CLI (`cmdMailbox` / `cmdSend`) and MCP (`yondermesh_send` / `yondermesh_mailbox_*`) are thin shells — they open a `MailboxCore`, call a method (`send` / `postMessage` / …), format output. They never re-implement mailbox logic.
+- `src/mailbox/` is the only place mailbox business logic lives. CLI (`cmdMailbox` / `cmdSend`) and MCP (`send` / `mailbox`) are thin shells — they open a `MailboxCore`, call a method (`send` / `postMessage` / …), format output. They never re-implement mailbox logic.
 - `src/trigger/` is the only place that spawns or talks to a target CLI process for delivery. `MailboxCore.send()` delegates to `TriggerAdapter` for delivery and `ReplyAdapter` for reply cleaning; the message layer never imports a CLI wrapper directly. `ReplyAdapter` is pure (no I/O, no process calls) so it is safe to unit-test deterministically.
 - `scripts/docs/` never imports from `src/`. It shells out to `ymesh help` and reads `src/*/` as plain files, keeping the docs generator decoupled from internal refactors.
 

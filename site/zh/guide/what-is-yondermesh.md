@@ -12,7 +12,7 @@ yondermesh 是一个自托管的 **Agent 上下文总线（Agent Context Bus）*
 设备上每个 CLI 的 Agent 不再是孤岛，而是聚合成一个有共享工作面的整体 —— 跨平台记忆、
 跨设备实时感知、连续接力。
 
-这是 Agent 时代的协作中枢。不是又一个 CLI，不是又一个模型，不是又一片云。只是一块刻意
+这是 Agent 时代的 Context Bus —— 连接你所有 agent 的中立互联层，共同记忆是在它之上长出来的能力。不是又一个 CLI，不是又一个模型，不是又一片云。只是一块刻意
 保持很小的基础设施，让你已经在用的那些 Agent 作为一个整体协同工作。
 
 ## 问题：Agent 是孤岛
@@ -75,13 +75,16 @@ Aider git log、Continue session 等等。无需修改 CLI；守护进程读取�
 守护进程生命周期很简单：`启动 -> 扫描一次 -> 监听（fs 事件）-> 定时 reconcile -> 空闲`。
 它只读原生文件，从不修改。完整的支持矩阵见 [CLI 适配器参考](/zh/reference/adapters)。
 
-### 同步（Sync）
+### 同步（Sync，规划中 —— 尚未实现）
 
-通过自托管 relay 进行跨设备同步。session 在离开设备之前用本地密钥进行端到端加密 ——
-relay 只看到密文。云 relay 是可选的便利设施；你可以自托管 relay，永远不让明文离开你的
-机器。
+> 跨设备同步是**规划中**的能力。`src/sync/agent.ts` 目前是 TODO 空壳 —— 尚未同步任何
+> 数据。下面描述的是设计意图，不是已发布的行为。
 
-同步 agent 从本地 `SessionStore` 读取新 session，用本地密钥加密，将密文推送到 relay，
+设计上通过自托管 relay 进行跨设备同步。session 将在离开设备之前用本地密钥进行端到端加密
+—— relay 只看到密文。云 relay 是可选的便利设施；你可以自托管 relay，永远不让明文离开你
+的机器。
+
+同步 agent 将从本地 `SessionStore` 读取新 session，用本地密钥加密，将密文推送到 relay，
 并拉取对端更新后在本地解密。relay 是一根"哑管道"：它永远不持有解密密钥。结果是跨平台
 记忆，但不锁定云。
 
@@ -89,12 +92,14 @@ relay 只看到密文。云 relay 是可选的便利设施；你可以自托管 
 
 任何支持 MCP 的 Agent 都能通过一小组 MCP 工具查询其他 Agent 的上下文：
 
-- `search_sessions` —— 查询整个 mesh 中的近期 session。
-- `list_active_sessions` —— 检查某台远程设备的项目状态。
-- `who_is_working` —— 查看当前哪些 Agent 正在活动。
-- `list_active_sessions` —— 枚举活跃 session。
-- `search_sessions` —— 对已采集 session 做全文搜索。
-- `get_session_handoff` —— 将任务委派给另一个 Agent。
+- `search_sessions` —— 对已采集 session 做全文搜索，覆盖整个 mesh。
+- `get_session` —— 查看某个 session 的详情与关系。
+- `list_active` —— 查看当前哪些 Agent 与 session 正在活动。
+- `overview` —— 整个 mesh 的鸟瞰视图。
+- `handoff` —— 构建浓缩的交接包，把任务委派给另一个 Agent。
+- `send` —— 向已接入的 CLI 同步注入消息并拿到回复。
+- `mailbox` —— 在 Agent 之间投递与读取审计日志消息。
+- `agents` —— 枚举你各设备上注册的 Agent。
 
 由于存储是[拓扑感知](/zh/guide/sessions)的（root / subagent / sidechain）、
 源感知的（`claude`、`codex`、`cass`、`hermes`、`continue`、`windsurf`、...）、
@@ -108,7 +113,7 @@ Agent A 从 Agent B 停下的地方继续，即使换了机器。session 不再�
 摘要加上近期工具调用加上任务计划 —— 可以喂给另一个 Agent 的上下文窗口。这就是把孤立
 session 变成跨设备连续工作流的桥梁。
 
-同一机制也驱动了 `get_session_handoff` MCP 工具，因此 Agent 可以在无需人工介入的情况下以编程
+同一机制也驱动了 `handoff` MCP 工具，因此 Agent 可以在无需人工介入的情况下以编程
 方式请求交接包。
 
 ### 同步注入（Send）
@@ -117,16 +122,18 @@ session 变成跨设备连续工作流的桥梁。
 合上了之前版本留下的那个口子：在 `send` 出现之前，mesh 是只读的 —— Agent 互相能看见，
 但没法对话回去。现在可以了。
 
-`ymesh send`（CLI）和 `yondermesh_send`（MCP 工具）是统一入口。它们为目标 CLI 选对通
+`ymesh send`（CLI）和 `send`（MCP 工具）是统一入口。它们为目标 CLI 选对通
 道、投递消息、清洗回复、把整条线程写进审计日志 —— 全部一次调用完成。
 
-- **28 个 CLI 全打通** —— claude、codex、hermes、gemini、goose、aider、amp、factory、
-  vibe、codebuddy、trae-cli、opencode、qwen、openhands、kimi、openclaw、pi、copilot、
-  crush、cline、continue、antigravity，加上 IDE 类（trae-ide、windsurf、cursor-ide、
-  chatgpt）。
-- **6 种触发通道** —— `cli-spawn`（spawn 新进程）、`stdin`（向运行中 session 的 stdin
-  写入）、`http-api`（POST 到 CLI 的 HTTP API）、`ws-rpc`（WebSocket / JSON-RPC）、
-  `tmux`（向 tmux pane send-keys）、`applescript`（macOS 上对 IDE 类 CLI 发 keystroke）。
+- **26 个 CLI 可达**（共 32 注册）—— 23 个经 wrapper 通道，加上 Claude Code 与 Codex 经
+  new 模式 spawn，加上 ChatGPT 经 IDE 类：claude、codex、hermes、gemini、goose、aider、
+  amp、factory、vibe、codebuddy、trae-cli、opencode、qwen、openhands、kimi、openclaw、
+  pi、copilot、crush、cline、continue、antigravity，加上 IDE 类（trae-ide、windsurf、
+  cursor-ide、chatgpt）。
+- **实际在用 5 种触发通道** —— `cli-spawn`（spawn 新进程）、`http-api`（POST 到 CLI 的
+  HTTP API）、`ws-rpc`（WebSocket / JSON-RPC）、`tmux`（向 tmux pane send-keys）、
+  `applescript`（macOS 上对 IDE 类 CLI 发 keystroke）。第六种通道 `stdin` 在类型系统里
+  有定义，但尚未接线。
 - **3 种触发模式** —— `stopped`（用 `--resume` 加 message flag 恢复已停止的 session）、
   `running`（向运行中 session 原地注入）、`new`（创建新 session，可选 `model` 和
   `effort`）。

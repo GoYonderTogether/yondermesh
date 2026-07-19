@@ -177,18 +177,18 @@ yondermesh tool. You can also invoke tools directly from the terminal to verify
 connectivity without an agent round-trip:
 
 ```bash
-ymesh mcp call who_is_working
+ymesh mcp call list_active
 ```
 
 The most useful tools to try first:
 
 - `search_sessions` — returns recent sessions across the mesh. Ask your
   agent: "What did my agents work on recently?"
-- `list_active_sessions` — inspects a device's project state. Ask: "What's on my
+- `list_active` — lists currently active sessions and inspects a device's
+  project state. Ask: "Who is working right now?"
+- `overview` — aggregate stats over the local session store. Ask: "What's on my
   laptop right now?"
-- `who_is_working` — lists currently active sessions. Ask: "Who is working
-  right now?"
-- `get_session_handoff` — builds a compacted handoff package for another agent to pick
+- `handoff` — builds a compacted handoff package for another agent to pick
   up.
 
 ## Talk to any agent, get a reply
@@ -225,7 +225,7 @@ The reply goes through `ReplyAdapter` — a pure-function cleaner that strips
 ANSI, drops CLI banners and log lines, and folds blank lines — so what you get
 back is the agent's actual answer, not its startup noise. The full thread (your
 message + the reply) is audit-logged into the same `agent_messages` table that
-`yondermesh_mailbox_check` reads, so you can query it later.
+the `mailbox` tool reads, so you can query it later.
 
 If something goes wrong (unknown CLI, missing model, upstream API rate-limit,
 non-zero exit), `send` never hangs and never throws — it returns with
@@ -233,7 +233,7 @@ non-zero exit), `send` never hangs and never throws — it returns with
 exactly what happened. Exit code is `0` on delivery, `2` when not delivered, `1`
 on validation or unexpected errors.
 
-MCP clients get the same capability via the `yondermesh_send` tool — see
+MCP clients get the same capability via the `send` tool — see
 [MCP Server](/guide/mcp) for the schema.
 
 ## Next steps

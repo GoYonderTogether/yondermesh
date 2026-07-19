@@ -9,6 +9,8 @@
 **[English](README.md)** | [简体中文](README.zh-CN.md)
 
 > **Status labels:** `shipped` = implemented and tested · `preview` = code exists but not yet released · `planned` = not implemented (design only).
+>
+> *Corresponds to v0.1.0 · last reconciled 2026-07-18. Counts (adapters / channels / tools) are derived from source; the live matrices are the auto-generated [reference pages](https://goyondertogether.github.io/yondermesh/reference/adapters).*
 
 ---
 
@@ -26,7 +28,7 @@ That fragmentation is the tax you pay every time you switch CLIs or machines. yo
 - **Sync** `planned` — end-to-end-encrypted cross-device sync via a self-hosted relay. Not yet implemented; the sync code path is a TODO stub.
 - **Query** `shipped` — any agent queries any other agent's context via MCP tools. Topology-aware, source-aware, project-aware.
 - **Hand off** `shipped` — agent A picks up exactly where agent B stopped, even on a different machine. Sessions stop dying at the boundary; they become a continuous workflow.
-- **Send** `preview` — synchronously inject a user message into any connected CLI agent and get the reply back. 23 CLIs (Claude Code and Codex not yet wired — planned). 6 channels (cli-spawn / stdin / http-api / ws-rpc / tmux / applescript), 3 modes (stopped / running / new). Even if the target agent has no model configured, you still get an error message instead of silence.
+- **Send** `preview` — synchronously inject a user message into any connected CLI agent and get the reply back. 26 CLIs (23 via wrapper channels for stopped/running; Claude Code and Codex via new-mode spawn; ChatGPT via the IDE class). 5 channels in use (cli-spawn / http-api / ws-rpc / tmux / applescript), 3 modes (stopped / running / new). Even if the target agent has no model configured, you still get an error message instead of silence.
 
 ## Quick start
 
@@ -67,7 +69,7 @@ Or add manually to your agent config (`.claude/claude_desktop_config.json` or eq
 }
 ```
 
-Now any MCP-capable agent can call `who_is_working`, `search_sessions`, `get_session_handoff`, `yondermesh_send`, and more.
+Now any MCP-capable agent can call `search_sessions`, `list_active`, `handoff`, `send`, and the rest of the 8 orthogonal MCP tools.
 
 ### Talk to any agent, get a reply
 
@@ -79,16 +81,15 @@ ymesh send --cli hermes --mode new --message "Summarize the latest commit on thi
 ymesh send --cli opencode --session <id> --mode stopped --message "Now do the same for the previous commit."
 ```
 
-`ymesh send` (or the `yondermesh_send` MCP tool) is the unified entry point for synchronous message delivery. It picks the right channel for the target CLI, delivers the message, cleans the reply, and writes the full thread to the audit log — all in one call.
+`ymesh send` (or the `send` MCP tool) is the unified entry point for synchronous message delivery. It picks the right channel for the target CLI, delivers the message, cleans the reply, and writes the full thread to the audit log — all in one call.
 
 ## Key features
 
 - **27 CLI adapters, one working whole** — reads native session formats from Claude Code, Codex, Hermes, Gemini, Goose, Aider, Amp, Factory, Vibe, CodeBuddy, Trae CLI, OpenCode, Qwen, OpenHands, Kimi, OpenClaw, Pi, Copilot, Crush, Cline, Continue, Antigravity, plus the IDE class (Trae IDE, Windsurf, Cursor IDE, ChatGPT). No CLI modification. Full matrix: [adapters reference](https://goyondertogether.github.io/yondermesh/reference/adapters).
 - **MCP server** — tools exposed over stdio JSON-RPC; any MCP-capable agent gets cross-device context, handoff, and synchronous send.
-- **MCP server** — tools exposed over stdio JSON-RPC; any MCP-capable agent gets cross-device context, handoff, and synchronous send.
 - **Mount system** — non-invasively installs MCP servers, skills, and always-on context into each CLI's own config dir.
 - **Session handoff** `shipped` — extract a compacted handoff package (summaries + recent messages + task plan) and pass it to another agent.
-- **Synchronous injection (Mailbox v3)** `preview` — `ymesh send` / `yondermesh_send` deliver a user message to any connected CLI and return the cleaned reply. 23 CLIs (Claude Code and Codex not yet wired — planned). 6 trigger channels, 3 modes (stopped / running / new, with optional `model` + `effort` for `new`). Failure is never silent: unknown CLI, missing model, upstream API rate-limit all surface as text in the response.
+- **Synchronous injection (Mailbox v3)** `preview` — `ymesh send` / `send` (MCP) deliver a user message to any connected CLI and return the cleaned reply. 26 CLIs (23 via wrapper channels for stopped/running; Claude Code and Codex via new-mode spawn; ChatGPT via the IDE class). 5 trigger channels in use, 3 modes (stopped / running / new, with optional `model` + `effort` for `new`). Failure is never silent: unknown CLI, missing model, upstream API rate-limit all surface as text in the response.
 - **Cross-device sync** `planned` — E2E-encrypted relay design exists; the sync code path is a TODO stub, not yet functional.
 - **Daily briefing** `planned` — activity digest design exists; the briefing generator is a TODO stub, not yet functional.
 - **No UI, no cloud lock-in, no model proxy, no agent modification.**
@@ -138,7 +139,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full codemap and architectural in
 
 ## CLI coverage
 
-yondermesh reads native session formats from each CLI agent, and — through the trigger layer — can synchronously inject messages into 23 of those CLIs. Mount strategies per CLI:
+yondermesh reads native session formats from each CLI agent, and — through the trigger layer — can synchronously inject messages into 26 of those CLIs. Mount strategies per CLI:
 
 | CLI | MCP mount | Skill mount | Always-on injection |
 |---|---|---|---|
@@ -151,7 +152,7 @@ yondermesh reads native session formats from each CLI agent, and — through the
 | trae-cn | — | skill-symlink (`~/.trae-cn/skills/`) | — |
 | continue | — | skill-symlink (`~/.continue/skills/`) | — |
 
-Full adapter matrix (27 CLIs, coverage levels A/B/C): [docs/reference/adapters](https://goyondertogether.github.io/yondermesh/reference/adapters)
+Full adapter matrix (32 registered · 27 with harvest · 26 send-reachable, coverage levels A/B/C): [docs/reference/adapters](https://goyondertogether.github.io/yondermesh/reference/adapters)
 
 ## Configuration
 
@@ -191,8 +192,8 @@ Full documentation: **https://goyondertogether.github.io/yondermesh/**
 ## Roadmap
 
 - [x] **M1** — daemon + collector + local SQLite + MCP query tools
-- [x] **M2** — session handoff (`get_session_handoff`, `ymesh handoff`)
-- [x] **Mailbox v3** — synchronous injection (`ymesh send` / `yondermesh_send`); 23 CLIs, 6 trigger channels, 3 modes
+- [x] **M2** — session handoff (`handoff`, `ymesh handoff`)
+- [x] **Mailbox v3** — synchronous injection (`ymesh send` / `send`); 26 CLIs (23 via wrapper channels for stopped/running; Claude Code and Codex via new-mode spawn; ChatGPT via the IDE class), 5 trigger channels in use, 3 modes
 - [ ] **M3** — enterprise: audit trail, RBAC, session replay, compliance reports
 - `planned` **Cross-device sync** — E2E-encrypted relay; sync code path is a TODO stub
 - `planned` **Daily briefing** — activity digest; generator is a TODO stub

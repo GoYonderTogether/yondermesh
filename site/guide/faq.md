@@ -15,12 +15,11 @@ documents. For broken setups, see [Troubleshooting](/guide/troubleshooting).
 ## Q: Does yondermesh send my code to a cloud?
 
 No. yondermesh is **self-hosted and local-first**. Sessions are stored in a
-local SQLite file at `~/.yondermesh/yondermesh.db`. The only thing that ever
-leaves your device is **ciphertext** destined for the cross-device sync relay
-— and that relay is something you run yourself. Even if you opt into the
-official cloud relay as a convenience, it sees only ciphertext; the E2E
-encryption key lives on your devices in `~/.yondermesh/key.pem` and never
-leaves them.
+local SQLite file at `~/.yondermesh/yondermesh.db`, and today **nothing leaves
+your device at all** — the daemon makes no outbound calls. Cross-device sync is
+planned (not yet implemented); when it ships, the only thing that would leave is
+**ciphertext** destined for a relay you run yourself, with the E2E encryption
+key living on your devices in `~/.yondermesh/key.pem` and never leaving them.
 
 ## Q: Does yondermesh touch my API keys?
 
@@ -40,11 +39,10 @@ it never patches the CLI binary or its session writer.
 
 ## Q: Which CLI agents are supported?
 
-See the [adapter matrix](/reference/adapters) for the live list. As of v0.1.0
-the matrix has **22 A-level native importers** (read the CLI's native session
-files directly) and **4 C-level extractors** (partial coverage, e.g. live
-transcript hooks). New adapters land regularly — the matrix is auto-regenerated
-from `src/*/` on every commit.
+See the [adapter matrix](/reference/adapters) for the live list. There are
+**32 registered adapters** graded by coverage — **22 A-level, 9 B-level, 1
+C-level** — of which **27 are harvested** into the local store. New adapters land
+regularly — the matrix is auto-regenerated from `src/*/` on every commit.
 
 ## Q: Does it work on Windows?
 
@@ -68,12 +66,12 @@ operating it.
 
 ## Q: How does cross-device sync work?
 
-End-to-end encrypted. Each device has its own `~/.yondermesh/key.pem`. The
-sync agent reads new sessions from the local `SessionStore`, encrypts them
-with the local key, and pushes ciphertext to the self-hosted relay. Peer
-devices pull ciphertext and decrypt with their own key. The relay sees only
-ciphertext, source/destination device ids, and message sizes — never session
-content. See [Cross-device Sync](/guide/sync) for configuration.
+Planned — not yet implemented. The intended design is end-to-end encrypted:
+each device has its own `~/.yondermesh/key.pem`; the sync agent would read new
+sessions from the local `SessionStore`, encrypt with the local key, and push
+ciphertext to a self-hosted relay; peers pull ciphertext and decrypt with their
+own key, so the relay sees only ciphertext and metadata — never session content.
+Today the sync code path is a stub. See [Cross-device Sync](/guide/sync).
 
 ## Q: How do I hand off a task from one agent to another?
 
@@ -85,12 +83,12 @@ ymesh handoff <session-id>
 ymesh handoff <session-id> --json --tail 50
 ```
 
-Or, from inside any MCP-capable agent, call the `get_session_handoff` MCP tool — it
+Or, from inside any MCP-capable agent, call the `handoff` MCP tool — it
 returns the same compacted handoff package (summary + recent tool calls +
 plan) as JSON, ready to inject into the receiving agent.
 
 See [CLI Commands](/reference/cli) for `ymesh handoff` flags and
-[MCP Tools](/reference/mcp-tools) for the `get_session_handoff` schema.
+[MCP Tools](/reference/mcp-tools) for the `handoff` schema.
 
 ## Q: How do I add a new CLI adapter?
 
@@ -166,10 +164,11 @@ affected — paired devices will re-push their sessions on the next sync cycle.
 
 ## Q: Is there a daily digest?
 
-Yes. The briefing generator writes a daily digest to
-`~/.yondermesh/briefings/` summarizing agent activity across all devices
-("your N agents across M devices did K tasks today, X% success rate"). Enable
-or disable it in `config.yaml`:
+Planned — not yet implemented. The design is a daily digest written to
+`~/.yondermesh/briefings/` summarizing agent activity ("your N agents across M
+devices did K tasks today, plus which sessions look stuck"). It's the first
+user-facing surface of the L4 derivation layer, but the briefing generator is
+currently a stub — no digest is produced yet. The intended config shape:
 
 ```yaml
 briefing:
