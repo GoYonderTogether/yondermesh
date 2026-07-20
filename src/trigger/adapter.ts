@@ -66,6 +66,46 @@ const IDE_APP_NAME: Record<string, string> = {
 };
 
 /**
+ * IDE 类 CLI 聚焦 chat 面板的快捷键（用于 AppleScript keystroke）。
+ * 在 activate 之后、Cmd+V 之前发送，确保焦点在 chat 输入框而非编辑器。
+ *
+ * 面板名（代码注释已确认）：
+ *   - cursor-ide: Composer（src/cursor-ide/wrapper.ts:5）
+ *   - windsurf:   Cascade  (src/windsurf/wrapper.ts:2-4)
+ *   - trae-ide:   Chat      (src/trae-ide/wrapper.ts:6)
+ *
+ * 格式：'cmd+l' / 'cmd+shift+i' / 'cmd+option+c' 等，小写，+ 分隔。
+ * 修复背景：原 applescriptTrigger 缺少聚焦步骤，导致 windsurf/trae 的
+ * Cmd+V 粘贴到 Untitled 缓冲区而非 chat 输入框（cursor 靠 UX 巧合能工作）。
+ */
+const IDE_CHAT_FOCUS_SHORTCUT: Record<string, string> = {
+  'cursor-ide': 'cmd+l',  // Composer 输入框（Cursor 默认 Cmd+L）
+  'windsurf':    'cmd+l',  // Cascade 面板（Windsurf 重新映射 Cmd+L）
+  'trae-ide':    'cmd+l',  // Chat 面板（VS Code fork 行业惯例；备选 cmd+shift+i）
+};
+
+/** 把 'cmd+l' / 'cmd+shift+i' 解析为 AppleScript keystroke 片段 */
+function formatKeystroke(shortcut: string): { key: string; mods: string } | null {
+  const parts = shortcut.toLowerCase().split('+').map((s) => s.trim());
+  if (parts.length === 0) return null;
+  const key = parts[parts.length - 1];
+  const modNames: string[] = [];
+  for (let i = 0; i < parts.length - 1; i++) {
+    const m = parts[i];
+    if (m === 'cmd' || m === 'command') modNames.push('command');
+    else if (m === 'shift') modNames.push('shift');
+    else if (m === 'ctrl' || m === 'control') modNames.push('control');
+    else if (m === 'alt' || m === 'option' || m === 'opt') modNames.push('option');
+    else return null; // 未知修饰键
+  }
+  if (modNames.length === 0) return { key, mods: '' };
+  const mods = modNames.length === 1
+    ? `${modNames[0]} down`
+    : `{${modNames.map((m) => `${m} down`).join(', ')}}`;
+  return { key, mods };
+}
+
+/**
  * CLI launch 命令构造器：每个 CLI 的 new session 命令格式
  *
  * 备注：以下 CLI 命令格式正确，但需要外部认证/配置才能拿到回复：
@@ -460,6 +500,35 @@ function applescriptTrigger(req: TriggerRequest): TriggerResult {
     // ignore
   }
   spawnSync('sleep', ['1']);
+
+  // 聚焦 chat 面板（避免焦点在编辑器 → Cmd+V 粘贴到 Untitled 缓冲区）
+  // 修复背景：windsurf/trae 被 activate 后焦点默认在编辑器，Cmd+V 会把消息粘进
+  // 一个 Untitled 内存缓冲区而非 chat 输入框。先发送聚焦快捷键（如 Cmd+L）把
+  // 焦点切到 chat 输入框，再粘贴。cursor 靠 UX 巧合原本就能工作，加这步是显式化。
+  const focusShortcut = IDE_CHAT_FOCUS_SHORTCUT[req.cli];
+  if (focusShortcut) {
+    const ks = formatKeystroke(focusShortcut);
+    if (ks) {
+      try {
+        const script = ks.mods
+          ? [
+              'tell application "System Events"',
+              `  keystroke "${ks.key}" using ${ks.mods}`,
+              '  delay 0.5',
+              'end tell',
+            ].join('\n')
+          : [
+              'tell application "System Events"',
+              `  keystroke "${ks.key}"`,
+              '  delay 0.5',
+              'end tell',
+            ].join('\n');
+        spawnSync('osascript', ['-e', script], { encoding: 'utf-8', timeout: 3000 });
+      } catch {
+        // 聚焦失败不阻塞——继续 Cmd+V（最坏情况退化到原行为）
+      }
+    }
+  }
 
   // 保存原剪贴板
   let oldClip = '';
