@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>Yonder Loop 看板</title>
+<style>
+  :root { --ink:#141416; --gold:#FF6A1A; --gold-l:#FFF0E5; --line:#E8E6E1; --soft:#F4F4F2; --gray:#8A8A90;
+    --draft:#8A8A90; --approved:#2A6EC9; --running:#FF6A1A; --passed:#2E8B57; --failed:#B23A3A; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,"Noto Sans CJK SC",system-ui,sans-serif; color:var(--ink); background:#fff; }
+  header { display:flex; align-items:center; gap:16px; padding:12px 20px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0; }
+  header .sub { color:var(--gray); font-size:13px; }
+  header .feat { margin-left:auto; font-size:13px; color:var(--gray); }
+  header button { font-size:13px; padding:6px 12px; border:1px solid var(--gold); background:var(--gold); color:#fff; border-radius:6px; cursor:pointer; }
+  .grid { display:grid; grid-template-columns: 280px 1fr 320px; gap:0; height: calc(100vh - 53px); }
+  .col { border-right:1px solid var(--line); overflow:auto; padding:14px; }
+  .col:last-child { border-right:0; }
+  .card { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:8px; cursor:pointer; background:#fff; }
+  .card.active { border-color:var(--gold); background:var(--gold-l); }
+  .card .t { font-weight:600; font-size:14px; }
+  .card .i { font-size:11px; color:var(--gray); margin-top:2px; }
+  .badge { display:inline-block; font-size:11px; padding:2px 8px; border-radius:10px; color:#fff; margin-left:6px; }
+  .s-draft{background:var(--draft)} .s-approved{background:var(--approved)} .s-running{background:var(--running)}
+  .s-passed{background:var(--passed)} .s-failed{background:var(--failed)}
+  /* 功能状态（features.yaml）颜色：与 loop 状态共用调色板 */
+  .s-shipped{background:var(--passed)} .s-preview{background:var(--running)}
+  .s-building{background:var(--approved)} .s-planned{background:var(--draft)} .s-dropped{background:var(--failed)}
+  .empty { color:var(--gray); font-size:13px; padding:20px 4px; }
+  label { font-size:11px; color:var(--gray); display:block; margin:10px 0 3px; }
+  input,select,textarea { width:100%; font:inherit; font-size:13px; padding:7px 9px; border:1px solid var(--line); border-radius:6px; resize:vertical; }
+  textarea { min-height:64px; line-height:1.5; }
+  .row { display:flex; gap:10px; } .row > * { flex:1; }
+  .btns { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
+  .btns button { padding:8px 14px; border-radius:6px; cursor:pointer; font-size:13px; border:1px solid var(--ink); background:#fff; }
+  .btns .primary { background:var(--ink); color:#fff; }
+  .btns .gold { background:var(--gold); color:#fff; border-color:var(--gold); }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th,td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); }
+  th { color:var(--gray); font-weight:600; }
+  .pill { font-size:10px; padding:1px 6px; border-radius:8px; color:#fff; }
+  details { margin-top:18px; }
+  summary { cursor:pointer; font-weight:600; font-size:13px; }
+  .guide { font-size:12px; line-height:1.6; color:#444; }
+  .guide b { color:var(--ink); }
+  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--ink); color:#fff; padding:8px 16px; border-radius:6px; font-size:13px; opacity:0; transition:.2s; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Yonder Loop 看板</h1>
+  <span class="sub">tasks/loops/*.md · AI 也能直接改文件</span>
+  <span class="feat" id="featSummary"></span>
+  <button onclick="newLoop()">+ 新建 loop</button>
+</header>
+<div class="grid">
+  <div class="col" id="listCol">
+    <div class="empty" id="listEmpty">加载中…</div>
+    <div id="loopList"></div>
+  </div>
+  <div class="col" id="editorCol">
+    <div class="empty" id="editorEmpty">← 选一个 loop，或点右上"新建"</div>
+    <div id="editor" style="display:none"></div>
+  </div>
+  <div class="col">
+    <b style="font-size:13px;">功能清单（features.yaml）</b>
+    <table id="featTable"><thead><tr><th>功能</th><th>分类</th><th>状态</th></tr></thead><tbody></tbody></table>
+    <details open>
+      <summary>四模块怎么写</summary>
+      <div class="guide">
+        <p><b>1. 目标 (Goal)</b>：成功长什么样 + 约束。例："给一天全部 session 生成结构化汇总，不能漏报失败任务。"</p>
+        <p><b>2. 上下文 (Context)</b>：每次循环必须读的固定文件。例："读 ARCHITECTURE.md、docs/features.yaml、src/briefing/ 现状。"</p>
+        <p><b>3. 行动约束 (Action)</b>：允许哪些工具/命令、能改哪些范围。例："只能改 src/briefing/ 与 tests/briefing/；用 vitest 验证。"</p>
+        <p><b>4. 观察与反馈 (Observation)</b>：怎么判断做对——测试 + 一个"检查者" sub-agent 对抗审查；失败把错误丢回继续，直到通过。</p>
+        <p><b>Prompt</b>：复制给 agent 的提示词，须要求"用 sub-agent 执行 + 自验证到通过才停、不许撒谎"。留空则自动从四模块生成。</p>
+        <p><b>verifier</b>：定义"完成"的命令（如 <code>npm test -- briefing</code>），scan 据此判 passed/failed。必须可机器校验。</p>
+        <p><b>状态机</b>：draft（人写）→ 人审改 approved → scan 跑 verifier → passed/failed。passed 且有 feature 关联 → 自动把该 feature 置 shipped。</p>
+      </div>
+    </details>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// 防误用：直接双击打开文件（file://）时给明确提示，浏览器在 file 协议下不能 fetch。
+if (location.protocol === 'file:') {
+  document.body.innerHTML =
+    '<div style="font-family:-apple-system,"Noto Sans CJK SC",sans-serif;padding:48px;max-width:620px;margin:0 auto;line-height:1.7;color:#141416">'+
+    '<h2 style="margin-top:0">别直接打开文件，要用本地服务</h2>'+
+    '<p>这个看板通过本地 server 提供数据和写回能力，<b>不能双击 html 打开</b>（file:// 协议下浏览器禁止 fetch）。</p>'+
+    '<p>在项目根目录跑：</p>'+
+    '<pre style="background:#F4F4F2;padding:14px;border-radius:8px;overflow:auto">npm run loop:ui</pre>'+
+    '<p>然后浏览器打开 <a href="http://localhost:5174" style="color:#FF6A1A">http://localhost:5174</a></p>'+
+    '</div>';
+  throw new Error('run via `npm run loop:ui`, not by opening the file directly');
+}
+const STATUS_CN = { draft:'草稿', approved:'已审核', running:'运行中', passed:'通过', failed:'失败' };
+let loops = [], selected = null, features = [];
+
+function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1600); }
+
+async function api(path, opts){ const r = await fetch(path, opts||{}); return r.json(); }
+
+async function fetchLoops(){
+  try { loops = await api('/api/loops'); } catch { return; }
+  renderList();
+  renderFeatSummary();
+}
+async function fetchFeatures(){
+  try { features = await api('/api/features'); } catch { return; }
+  renderFeatTable(); renderFeatSummary();
+}
+
+function renderList(){
+  const el = document.getElementById('loopList');
+  document.getElementById('listEmpty').style.display = loops.length ? 'none':'block';
+  el.innerHTML = loops.map(l => `
+    <div class="card ${selected===l.id?'active':''}" onclick="selectLoop('${l.id}')">
+      <div class="t">${esc(l.title||l.id)} <span class="badge s-${l.status}">${STATUS_CN[l.status]||l.status}</span></div>
+      <div class="i">${esc(l.id)}${l.feature?' · → '+esc(l.feature):''}${l.verifier?' · ✓':''}</div>
+    </div>`).join('');
+}
+
+function renderFeatTable(){
+  const tb = document.querySelector('#featTable tbody');
+  tb.innerHTML = features.map(f=>`<tr><td>${esc(f.name||f.id)}</td><td>${esc((f.category||'').replace(/^[A-Z]-/,''))}</td>
+    <td><span class="pill s-${f.status}">${STATUS_CN[f.status]||f.status}</span></td></tr>`).join('');
+}
+function renderFeatSummary(){
+  if(!features.length) return;
+  const c = {}; features.forEach(f=>c[f.status]=(c[f.status]||0)+1);
+  const order=['shipped','preview','building','planned','dropped'];
+  const cn={shipped:'已上线',preview:'预览',building:'在建',planned:'计划中',dropped:'已砍'};
+  document.getElementById('featSummary').textContent =
+    order.filter(s=>c[s]).map(s=>`${cn[s]} ${c[s]}`).join(' · ');
+}
+
+function esc(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+
+async function selectLoop(id){
+  selected = id;
+  renderList();
+  try {
+    const l = await api('/api/loop?id='+encodeURIComponent(id));
+    renderEditor(l);
+  } catch(e){ toast('加载失败'); }
+}
+
+function renderEditor(l){
+  document.getElementById('editorEmpty').style.display='none';
+  const e = document.getElementById('editor'); e.style.display='block';
+  const opts = ['draft','approved','running','passed','failed'].map(s=>`<option value="${s}" ${l.status===s?'selected':''}>${STATUS_CN[s]}</option>`).join('');
+  e.innerHTML = `
+    <div class="row">
+      <div><label>id（文件名）</label><input id="f_id" value="${esc(l.id)}" ${l.id?'readonly':''}></div>
+      <div><label>标题</label><input id="f_title" value="${esc(l.title)}"></div>
+    </div>
+    <div class="row">
+      <div><label>状态</label><select id="f_status">${opts}</select></div>
+      <div><label>关联 feature（features.yaml 的 id）</label><input id="f_feature" value="${esc(l.feature)}" placeholder="如 briefing"></div>
+    </div>
+    <label>verifier（判定完成的命令）</label>
+    <input id="f_verifier" value="${esc(l.verifier)}" placeholder="如 npm test -- briefing">
+    <label>1. 目标 (Goal)</label><textarea id="f_goal">${esc(l.goal)}</textarea>
+    <label>2. 上下文 (Context)</label><textarea id="f_context">${esc(l.context)}</textarea>
+    <label>3. 行动约束 (Action)</label><textarea id="f_action">${esc(l.action)}</textarea>
+    <label>4. 观察与反馈 (Observation)</label><textarea id="f_observation">${esc(l.observation)}</textarea>
+    <label>Prompt（复制给 agent；留空则自动从四模块生成）</label><textarea id="f_prompt" style="min-height:96px">${esc(l.prompt)}</textarea>
+    <div class="btns">
+      <button class="primary" onclick="saveLoop()">保存</button>
+      <button class="gold" onclick="copyPrompt()">复制 Prompt</button>
+      <button onclick="runScan()">运行扫描</button>
+      <span style="align-self:center;font-size:11px;color:var(--gray)">last_run: ${esc(l.last_run||'—')}</span>
+    </div>`;
+}
+
+function gather(){
+  return {
+    id: document.getElementById('f_id').value.trim(),
+    title: document.getElementById('f_title').value.trim(),
+    status: document.getElementById('f_status').value,
+    feature: document.getElementById('f_feature').value.trim(),
+    verifier: document.getElementById('f_verifier').value.trim(),
+    goal: document.getElementById('f_goal').value,
+    context: document.getElementById('f_context').value,
+    action: document.getElementById('f_action').value,
+    observation: document.getElementById('f_observation').value,
+    prompt: document.getElementById('f_prompt').value,
+  };
+}
+
+async function saveLoop(){
+  const body = gather();
+  if(!body.id){ toast('id 不能空'); return; }
+  const r = await api('/api/loop',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){ toast('已保存'); selected=body.id; await fetchLoops(); }
+  else toast('保存失败：'+(r.error||''));
+}
+
+async function copyPrompt(){
+  let p = document.getElementById('f_prompt').value.trim();
+  if(!p){
+    // 自动从四模块拼
+    const g=gather();
+    p = `你是一个 loop 执行者，必须用 sub-agent（Agent 工具）做任务执行。\n\n【目标】${g.goal||'（未填）'}\n【上下文】每次循环先读：${g.context||'（未填）'}\n【约束】${g.action||'（未填）'}\n【完成判据】${g.observation||'（未填）'}\n${g.verifier?'【验证命令】`'+g.verifier+'` 必须 exit 0。':''}\n\n规则：未通过就把错误当新上下文继续，通过才停；不许撒谎声称通过。`;
+  }
+  try { await navigator.clipboard.writeText(p); toast('Prompt 已复制'); }
+  catch { prompt('复制：', p); }
+}
+
+async function runScan(){
+  if(!selected){ toast('先选一个 loop'); return; }
+  toast('扫描中…');
+  await api('/api/scan?id='+encodeURIComponent(selected),{method:'POST'});
+  await fetchLoops();
+  await fetchFeatures();
+  await selectLoop(selected);
+  toast('扫描完成');
+}
+
+async function newLoop(){
+  const title = prompt('loop 标题（英文 id 会自动从标题生成）');
+  if(!title) return;
+  const id = title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40) || ('loop-'+Date.now());
+  const body = { id, title, status:'draft', feature:'', verifier:'',
+    goal:'', context:'', action:'', observation:'', prompt:'' };
+  const r = await api('/api/loop',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){ toast('已新建'); await fetchLoops(); selectLoop(id); }
+}
+
+fetchLoops(); fetchFeatures();
+setInterval(()=>{ fetchLoops(); fetchFeatures(); }, 2500);
+</script>
+</body>
+</html>

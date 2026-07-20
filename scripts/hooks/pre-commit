@@ -1,0 +1,16 @@
+#!/bin/sh
+# yondermesh pre-commit：提交前校验功能状态漂移。
+# 详见 scripts/docs/check-features.mjs。临时跳过：git commit --no-verify。
+ROOT=$(git rev-parse --show-toplevel)
+if [ -f "$ROOT/scripts/docs/check-features.mjs" ]; then
+  SCRIPT="$ROOT/scripts/docs/check-features.mjs"
+else
+  # 在 docs/ 内嵌子仓库里提交时，脚本在上一级。
+  SCRIPT="$ROOT/../scripts/docs/check-features.mjs"
+fi
+if ! node "$SCRIPT" >/tmp/yonder-features-check.log 2>&1; then
+  cat /tmp/yonder-features-check.log
+  echo ""
+  echo "❌ 功能状态校验未通过。修正 docs/features.yaml 后重试，或 git commit --no-verify 跳过。"
+  exit 1
+fi

@@ -46,20 +46,73 @@ tasks across devices and CLIs. No UI, no cloud lock-in, no agent modification.
 | `install.sh` or release / update flow | `site/guide/installation.md` |
 | Doc/code mismatch, or a TODO left behind | Open an issue; do not let it rot silently |
 
+### Dynamic-feature discipline (`docs/features.yaml` is the single source) — AGENTS MAINTAIN THIS AUTONOMOUSLY
+
+> **This is an instruction to every AI agent working in this repo.** You maintain `docs/features.yaml`
+> yourself as part of normal development. The human does **not** do it. The rule below is mandatory;
+> a pre-commit hook blocks your commit if you skip it.
+
+Feature **status** (`shipped` / `preview` / `building` / `planned` / `dropped`) and **stage** are *dynamic*. They live in **one place only**: [`docs/features.yaml`](../docs/features.yaml). BP / PRD / PPT **reference** it and never restate status.
+
+**You MUST update `docs/features.yaml` in the same change whenever any of these happens:**
+
+| Trigger | What you do in `features.yaml` |
+|---|---|
+| You add a new feature / capability | Add an entry with the right `status` (see decision rules), `stage`, and `code:` paths |
+| A feature now works end-to-end (you verified it, tests pass) | Set its `status: shipped` |
+| A feature is partially working but incomplete / not on main targets | Set its `status: preview` |
+| You start building a feature (code exists, not working end-to-end) | Set its `status: building` |
+| You move a feature's code to a different dir | Update its `code:` list |
+| A feature is abandoned / removed | Set `status: dropped` (or remove the entry) |
+
+**Status decision rules (decide yourself — don't ask the human):**
+
+- `shipped` — works end-to-end, verified (tests pass / five-axis green), usable now. A dir existing is **not** enough — `src/sync/` is a stub and stays `planned`.
+- `preview` — usable but partial: works on some targets, not main ones; or feature-flagged.
+- `building` — code exists, actively in progress, not yet working end-to-end.
+- `planned` — not started (scaffold/stub only, or nothing).
+- `dropped` — abandoned; keep the entry with this status so history is traceable.
+
+**Then confirm and commit:**
+
+```bash
+node scripts/docs/check-features.mjs   # must print "通过"
+```
+
+The **pre-commit hook** (`scripts/hooks/pre-commit`, auto-installed by `npm install` via `prepare`) runs this for you and **blocks the commit on drift** — so if you forget, you'll see the error and fix it before the commit lands. You never need the human to "check" anything. `git commit --no-verify` bypasses only in real emergencies.
+
+**Other notes:**
+
+- PPT reads status from the SSOT via `docs/business/pitch-deck/deck/features.py` → `node scripts/docs/features-json.mjs`, so it can't drift.
+- *Static* design (architecture, *why*, user stories) stays in normal docs/git — only *status* gets this single-source treatment.
+
 ### Hygiene gates (run before "done")
 
 ```bash
 # 1. regen + drift check
 node scripts/docs/check-drift.mjs
 
-# 2. internal link check
+# 2. feature-status check (also runs in the pre-commit hook)
+node scripts/docs/check-features.mjs
+
+# 3. internal link check
 node scripts/docs/verify-links.mjs
 
-# 3. full docs build
+# 4. full docs build
 npm run build --prefix site
 ```
 
-All three must pass.
+All must pass. (Feature-status drift is also blocked at commit time by the pre-commit hook, so this gate is a backstop.)
+
+## Loop 系统 (`tasks/loops/*.md`) — 迭代功能的标准循环
+
+要快速迭代派生/体验层（画像、汇总、蒸馏……），用 loop 系统。每个功能 = 一个 `tasks/loops/<id>.md`，含 YAML frontmatter（`status` / `verifier` / `feature` 关联）+ 四模块（目标/上下文/行动约束/观察反馈）+ Prompt 段。网页和文件系统都能编辑（AI 可直接改 md）。
+
+- **看板（人审 + GUI 编辑）**：`npm run loop:ui` → `http://localhost:5174` 。网页可建/改 loop、实时看状态、复制 Prompt。
+- **拿提示词（触发 agent）**：`npm run loop:run -- <id>` 打印该 loop 的 Prompt（agent 跑此命令即得提示词）。Prompt 必须要求**用 sub-agent 执行 + 自验证到通过才停、不许撒谎**。Prompt 段为空则从四模块自动生成。
+- **跑校验（判定完成）**：`npm run loop:scan -- <id|all>` 跑该 loop 的 `verifier` 命令，据 exit code 回写 `status`（passed/failed）。**draft 不跑**——必须先人工审改为 `approved`。
+- **联动 features.yaml**：loop passed 且有 `feature:` 关联 → scan 自动把该 feature 置 `shipped`，并跑 `check-features` 校验。
+- **铁律**：`verifier` 必须**可机器校验**（测试命令、typecheck）；禁用"works correctly / good UX"这类无法判定的标准。有代码的 loop，verifier 隐含 typecheck 必过。
 
 ## Code quality
 

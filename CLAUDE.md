@@ -20,3 +20,4 @@ Rules:
 - **Try it live:** `npx tsx src/bin/ymesh.ts <command>`
 - **Architecture:** `ARCHITECTURE.md` — "Where does X live?" check here first.
 - **Doc sync:** any change to `src/bin/ymesh.ts` commands or `src/<adapter>/` requires `npm run sync --prefix site` + commit the regenerated docs.
+- **Feature status (you maintain this yourself):** whenever you add / ship / move / drop a feature, update `docs/features.yaml` in the same change — do not ask the human. Trigger table + status decision rules live in `AGENTS.md` §"Dynamic-feature discipline". The pre-commit hook runs `scripts/docs/check-features.mjs` and blocks the commit if you skip it.
