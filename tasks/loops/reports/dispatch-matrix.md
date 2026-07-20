@@ -7,19 +7,19 @@
 | claude | cli-spawn | ✅已投递 | ✅有回复 |
 | codex | cli-spawn | ✅已投递 | ✅有回复 |
 | cass | — | 跳过：无 trigger 通道 | — |
-| opencode | ? | ❌ 失败 | spawnSync /bin/sh ETIMEDOUT |
+| opencode | http-api | ✅已投递 | ⚠️无回复/读不到 |
 | hermes | cli-spawn | ✅已投递 | ✅有回复 |
 | kimi | ? | ❌ 失败 | Command failed: ymesh send --cli kimi --mode new - |
 | cursor | — | 跳过：无 trigger 通道 | — |
 | cursor-ide | applescript | ✅已投递 | ⚠️无回复/读不到 |
 | copilot | ? | ❌ 失败 | Command failed: ymesh send --cli copilot --mode ne |
 | gemini | ? | ❌ 失败 | Command failed: ymesh send --cli gemini --mode new |
-| qwen | ? | ❌ 失败 | spawnSync /bin/sh ETIMEDOUT |
+| qwen | ? | ❌ 失败 | Command failed: ymesh send --cli qwen --mode new - |
 | openclaw | ? | ❌ 失败 | Command failed: ymesh send --cli openclaw --mode n |
 | aider | ? | ❌ 失败 | Command failed: ymesh send --cli aider --mode new  |
 | trae | — | 跳过：无 trigger 通道 | — |
 | trae-ide | applescript | ✅已投递 | ⚠️无回复/读不到 |
-| windsurf | applescript | ✅已投递 | ⚠️无回复/读不到 |
+| windsurf | ? | ❌ 失败 | Command failed: ymesh send --cli windsurf --mode n |
 | openhands | ? | ❌ 失败 | Command failed: ymesh send --cli openhands --mode  |
 | goose | cli-spawn | ✅已投递 | ✅有回复 |
 | antigravity | cli-spawn | ✅已投递 | ✅有回复 |
@@ -27,8 +27,8 @@
 | vibe | cli-spawn | ✅已投递 | ✅有回复 |
 | codebuddy | ? | ❌ 失败 | Command failed: ymesh send --cli codebuddy --mode  |
 | amp | cli-spawn | ✅已投递 | ⚠️无回复/读不到 |
-| chatgpt | applescript | ✅已投递 | ⚠️无回复/读不到 |
-| pi | ? | ❌ 失败 | spawnSync /bin/sh ETIMEDOUT |
+| chatgpt | ? | ❌ 失败 | Command failed: ymesh send --cli chatgpt --mode ne |
+| pi | ? | ❌ 失败 | Command failed: ymesh send --cli pi --mode new --m |
 | omp | — | 跳过：无 trigger 通道 | — |
 | gsd-pi | — | 跳过：无 trigger 通道 | — |
 | crush | ? | ❌ 失败 | Command failed: ymesh send --cli crush --mode new  |

@@ -5,9 +5,11 @@ status: passed
 feature: collect
 verifier: "bash -c 'DB=~/.yondermesh/yondermesh.db; test -f \"$DB\" && [ \"$(sqlite3 \"$DB\" \"SELECT COUNT(*) FROM sessions WHERE retention=\\\"live\\\";\")\" -gt 0 ] && [ \"$(sqlite3 \"$DB\" \"SELECT COUNT(*) FROM messages;\")\" -gt 0 ] && [ \"$(sqlite3 \"$DB\" \"SELECT COUNT(*) FROM scan_runs;\")\" -gt 0 ] && [ \"$(sqlite3 \"$DB\" \"SELECT COUNT(*) FROM sessions WHERE retention=\\\"live\\\" AND (current_revision_id IS NULL OR length(current_revision_id)=0);\")\" -eq 0 ] && [ \"$(sqlite3 \"$DB\" \"SELECT COUNT(*) FROM sessions WHERE retention=\\\"live\\\" AND length(id)!=64;\")\" -eq 0 ]'"
 created: 2026-07-21
-last_run: 2026-07-20 17:47:11
+last_run: 2026-07-20 17:53:15
 ---
 ## 1. 目标 (Goal)
+
+
 
 
 
@@ -27,9 +29,13 @@ last_run: 2026-07-20 17:47:11
 
 
 
+
+
 读 src/store/schema.ts（7 张表）、src/store/session-store.ts（ingestSession 入库逻辑）、src/daemon/config.ts（DB 落在 ~/.yondermesh/yondermesh.db）。
 
 ## 3. 行动约束 (Action)
+
+
 
 
 
@@ -49,10 +55,14 @@ last_run: 2026-07-20 17:47:11
 
 
 
+
+
 verifier 断言三件事：① DB 文件存在；② `sessions` 表 retention='live' 的行数 >0；③ `messages` 表 >0；④ `scan_runs` 表 >0（说明扫描真跑过）。
 不变式：`sessions.id` = sha256(JSON.stringify([device_id, source_instance_id, native_session_id]))，64 字符 hex；每条 session 在 `session_revisions` 至少 1 条，`current_revision_id` 非空。
 
 ## Prompt
+
+
 
 
 

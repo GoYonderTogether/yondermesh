@@ -5,9 +5,11 @@ status: passed
 feature: handoff
 verifier: "bash -c 'SID=$(sqlite3 ~/.yondermesh/yondermesh.db \"SELECT native_session_id FROM sessions WHERE retention=\\\"live\\\" AND source IN (\\\"claude\\\",\\\"claude-code\\\",\\\"codex\\\") ORDER BY last_seen_at DESC LIMIT 1;\"); [ -n \"$SID\" ] && TMP=$(mktemp) && ymesh handoff \"$SID\" --json > \"$TMP\" && jq -e \".recent_messages or .compacted_summaries\" \"$TMP\" && FP=$(jq -r \".file_path\" \"$TMP\") && [ -n \"$FP\" ] && [ -f \"$FP\" ] && rm -f \"$TMP\"'"
 created: 2026-07-21
-last_run: 2026-07-20 17:47:11
+last_run: 2026-07-20 17:54:13
 ---
 ## 1. 目标 (Goal)
+
+
 
 
 
@@ -19,9 +21,13 @@ last_run: 2026-07-20 17:47:11
 
 
 
+
+
 读 src/mcp/codex-handoff.ts（buildSessionHandoff）、src/bin/ymesh.ts cmdHandoff（位置参数取 session_id）。handoff 直读源文件，不依赖 DB。
 
 ## 3. 行动约束 (Action)
+
+
 
 
 
@@ -33,10 +39,14 @@ last_run: 2026-07-20 17:47:11
 
 
 
+
+
 verifier：取一条 claude/codex 的 live session，`ymesh handoff <id> --json` 必含 recent_messages 或 compacted_summaries。
 边界：源文件已删除的 session → exit 1（正常，记录为"源文件不在"）。
 
 ## Prompt
+
+
 
 
 
