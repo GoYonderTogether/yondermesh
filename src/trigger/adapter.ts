@@ -1157,6 +1157,15 @@ async function ensureServerRunning(cli: string, cfg: HttpApiServerConfig, baseUr
       detached: false,
       cwd: process.cwd(),
     });
+    // 二进制不在 PATH 时 spawn 异步抛 'error' event；不接住会令进程崩溃。
+    // 这里捕获并清理状态，由后续 pingServer 返回 false 让上层降级。
+    child.on('error', (err) => {
+      startedServers.delete(cli);
+      // 仅保留首行错误信息，避免噪声
+      const msg = err instanceof Error ? err.message.split('\n')[0] : String(err);
+      process.stderr.write(`[ymesh] ${cli} server spawn 失败: ${msg}\n`);
+      try { child.kill(); } catch { /* already gone */ }
+    });
     startedServers.set(cli, child);
     // 等待就绪：轮询 health endpoint
     for (let i = 0; i < 20; i++) {
