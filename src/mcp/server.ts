@@ -655,17 +655,23 @@ export class McpServer {
     };
   }
 
-  /** get_session: 合并 detail + relations */
+  /** get_session: 合并 detail + relations
+   *  refined 入口统一返回 { messages: [...] } 形态：
+   *  getSessionDetail 在 plain live / DB 模式返回裸数组、rich live 模式返回 {messages,...}。
+   *  这里把裸数组包成 {messages}，便于 include_relations 附加 relations 字段（否则
+   *  在数组上设 .relations 属性会被 JSON.stringify 丢弃）。 */
   private refinedGetSession(args: Record<string, unknown>): McpToolResult {
     const detail = this.getSessionDetail(args);
     if (detail.isError) return detail;
+    const parsed: unknown = JSON.parse(detail.content);
+    const result: Record<string, unknown> = Array.isArray(parsed)
+      ? { messages: parsed }
+      : (parsed as Record<string, unknown>);
     if (args.include_relations === true) {
       const rels = this.getSessionRelations({ session_id: args.session_id });
-      const merged = JSON.parse(detail.content) as Record<string, unknown>;
-      merged.relations = JSON.parse(rels.content);
-      return { content: JSON.stringify(merged) };
+      result.relations = JSON.parse(rels.content);
     }
-    return detail;
+    return { content: JSON.stringify(result) };
   }
 
   /** list_active: 合并 active sessions + waiting review */
@@ -1143,9 +1149,14 @@ function readLiveMessages(
   return [];
 }
 
-/** 递归查找包含指定 sessionId 的文件 */
+/** 递归查找包含指定 sessionId 的文件
+ *  sessionId 可能是 UUID（`rollout-<uuid>` 文件名一段），也可能是 codex 的
+ *  native_session_id 含路径（`2026/04/13/rollout-<uuid>`）。两种都按 basename 匹配。 */
 function findSessionFile(dir: string, sessionId: string, _source: string): string | null {
   if (!existsSync(dir)) return null;
+
+  // 取 basename（兼容含路径的 sessionId）；剥掉可能的 .jsonl 后缀，避免双重匹配
+  const needle = sessionId.split('/').pop()!.replace(/\.jsonl$/, '');
 
   let entries: Array<{ name: string; isDirectory: () => boolean }>;
   try {
@@ -1157,14 +1168,27 @@ function findSessionFile(dir: string, sessionId: string, _source: string): strin
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
-      const found = findSessionFile(fullPath, sessionId, _source);
+      const found = findSessionFile(fullPath, needle, _source);
       if (found) return found;
-    } else if (entry.name.includes(sessionId) && entry.name.endsWith('.jsonl')) {
+    } else if (entry.name.includes(needle) && entry.name.endsWith('.jsonl')) {
       return fullPath;
     }
   }
 
   return null;
+}
+
+/** 解析 ISO 字符串或数字时间戳为 number 毫秒；失败返回 undefined */
+function parseTimestampMs(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    // 秒级时间戳归一化为毫秒
+    return v < 1e12 ? v * 1000 : v;
+  }
+  if (typeof v === 'string') {
+    const t = Date.parse(v);
+    return Number.isNaN(t) ? undefined : t;
+  }
+  return undefined;
 }
 
 /** 解析 claude JSONL 消息 */
@@ -1196,10 +1220,13 @@ function parseClaudeMessages(
             }
             text = parts.join(' ');
           }
+          // claude JSONL 根级有 timestamp（ISO 字符串），message 内也可能有
+          const ts = parseTimestampMs(d.timestamp ?? msg.timestamp);
           messages.push({
             seq: messages.length,
             role: d.type,
             content: text,
+            ...(ts !== undefined ? { timestamp: ts } : {}),
           });
         }
       } catch { /* skip */ }
@@ -1243,10 +1270,13 @@ function parseCodexMessages(
               text = parts.join(' ');
             }
             if (text) {
+              // codex JSONL 根级有 timestamp（ISO 字符串）
+              const ts = parseTimestampMs(d.timestamp);
               messages.push({
                 seq: messages.length,
                 role,
                 content: text,
+                ...(ts !== undefined ? { timestamp: ts } : {}),
               });
             }
           }

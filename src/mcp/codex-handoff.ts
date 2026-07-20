@@ -110,9 +110,13 @@ function isSystemPreamble(text: string): boolean {
   );
 }
 
-/** 递归查找包含 sessionId 的 .jsonl 文件 */
+/** 递归查找包含 sessionId 的 .jsonl 文件
+ *  sessionId 可能是 UUID（文件名一段），也可能是 codex 的 native_session_id
+ *  含路径（`2026/04/13/rollout-<uuid>`）。两种都按 basename 匹配。 */
 function findSessionFile(dir: string, sessionId: string): string | null {
   if (!existsSync(dir)) return null;
+  // 取 basename（兼容含路径的 sessionId）；剥掉可能的 .jsonl 后缀，避免双重匹配
+  const needle = sessionId.split('/').pop()!.replace(/\.jsonl$/, '');
   let entries: Array<{ name: string; isDirectory: () => boolean }>;
   try {
     entries = readdirSync(dir, { withFileTypes: true }) as unknown as typeof entries;
@@ -122,9 +126,9 @@ function findSessionFile(dir: string, sessionId: string): string | null {
   for (const entry of entries) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      const found = findSessionFile(full, sessionId);
+      const found = findSessionFile(full, needle);
       if (found) return found;
-    } else if (entry.name.includes(sessionId) && entry.name.endsWith('.jsonl')) {
+    } else if (entry.name.includes(needle) && entry.name.endsWith('.jsonl')) {
       return full;
     }
   }
