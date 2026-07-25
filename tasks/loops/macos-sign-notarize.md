@@ -1,11 +1,11 @@
 ---
 id: macos-sign-notarize
 title: 构建·macOS 签名 + 公证脚本
-status: draft
+status: passed
 feature: ""
 verifier: "bash -c 'test -x scripts/notarize-mac.sh && bash -n scripts/notarize-mac.sh'"
 created: 2026-07-21
-last_run: 
+last_run: 2026-07-25 04:10:00
 ---
 
 ## 1. 目标 (Goal)
