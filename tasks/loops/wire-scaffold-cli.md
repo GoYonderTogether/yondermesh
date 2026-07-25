@@ -1,11 +1,11 @@
 ---
 id: wire-scaffold-cli
 title: 构建·接 ymesh scaffold 命令（adapter-sdk 收尾）
-status: draft
+status: passed
 feature: adapter-sdk
 verifier: "bash -c 'ymesh scaffold __probe --yes && test -f src/__probe/index.ts && rm -rf src/__probe'"
 created: 2026-07-21
-last_run: 
+last_run: 2026-07-25 04:24:41
 ---
 
 ## 1. 目标 (Goal)

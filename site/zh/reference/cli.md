@@ -57,6 +57,9 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh distill` | list        列出已蒸馏项目 |
 | `ymesh distill` | show        查看某项目蒸馏产物（--hash &lt;projectHash&gt;） |
 | `ymesh 选项:` | --project &lt;path&gt; [--json] |
+| `ymesh scaffold` | &lt;name&gt;     生成新 adapter 模板（importer/wrapper/inject/index）到 src/&lt;name&gt;/ |
+| `ymesh 选项:` | --config-dir &lt;dir&gt; --cli-binary &lt;bin&gt; |
+| `ymesh --session-format` | jsonl|sqlite|json|markdown --yes（覆盖已存在） |
 
 ## 通用选项
 
@@ -107,4 +110,5 @@ ymesh extract --cwd-prefix /Users/zoran/projects/yondermesh
 ymesh extract --requirements --id 3
 ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb
 ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb --json --tail 50
+ymesh scaffold mycli --yes
 ```

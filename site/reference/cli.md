@@ -57,6 +57,9 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh distill` | list        List distilled projects |
 | `ymesh distill` | show        Show a distilled project (--hash &lt;projectHash&gt;) |
 | `ymesh Options:` | --project &lt;path&gt; [--json] |
+| `ymesh scaffold` | &lt;name&gt;     Generate a new adapter template (importer/wrapper/inject/index) into src/&lt;name&gt;/ |
+| `ymesh Options:` | --config-dir &lt;dir&gt; --cli-binary &lt;bin&gt; |
+| `ymesh --session-format` | jsonl|sqlite|json|markdown --yes (overwrite existing) |
 
 ## Global Options
 
@@ -107,4 +110,5 @@ ymesh extract --cwd-prefix /Users/zoran/projects/yondermesh
 ymesh extract --requirements --id 3
 ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb
 ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb --json --tail 50
+ymesh scaffold mycli --yes
 ```

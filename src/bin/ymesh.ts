@@ -73,6 +73,8 @@ import type {
 } from '../mailbox/index.js';
 import { MAIL_KINDS, MAIL_PRIORITIES } from '../mailbox/index.js';
 import { loadWrapper as regLoadWrapper, listImporters } from '../adapters/registry.js';
+import { scaffoldAdapter } from '../sdk/scaffold.js';
+import type { ScaffoldOptions } from '../sdk/scaffold.js';
 
 // 读取 package.json 的版本号
 const projectRoot = dirname(dirname(dirname(new URL(import.meta.url).pathname)));
@@ -251,6 +253,9 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
     distill list        列出已蒸馏项目
     distill show        查看某项目蒸馏产物（--hash <projectHash>）
                       选项: --project <path> [--json]
+  scaffold <name>     生成新 adapter 模板（importer/wrapper/inject/index）到 src/<name>/
+                      选项: --config-dir <dir> --cli-binary <bin>
+                            --session-format jsonl|sqlite|json|markdown --yes（覆盖已存在）
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -299,6 +304,7 @@ handoff 选项:
   ymesh extract --requirements --id 3
   ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb
   ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb --json --tail 50
+  ymesh scaffold mycli --yes
 `;
 }
 
@@ -352,6 +358,9 @@ Commands:
     distill list        List distilled projects
     distill show        Show a distilled project (--hash <projectHash>)
                       Options: --project <path> [--json]
+  scaffold <name>     Generate a new adapter template (importer/wrapper/inject/index) into src/<name>/
+                      Options: --config-dir <dir> --cli-binary <bin>
+                               --session-format jsonl|sqlite|json|markdown --yes (overwrite existing)
 
 Install:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -400,6 +409,7 @@ Examples:
   ymesh extract --requirements --id 3
   ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb
   ymesh handoff 019f5fe4-b127-7de2-b8f1-efa45bee24cb --json --tail 50
+  ymesh scaffold mycli --yes
 `;
 }
 
@@ -2473,6 +2483,94 @@ function cmdDistill(flags: Record<string, string | boolean>): number {
   }
 }
 
+// ─── scaffold 命令（adapter-sdk 收尾） ─────────────────────────────────
+
+/**
+ * scaffold 命令：用 SDK 的 scaffoldAdapter() 生成新 adapter 模板文件到 src/<name>/。
+ *
+ * 用法：
+ *   ymesh scaffold <name> [--config-dir <dir>] [--cli-binary <bin>]
+ *                  [--session-format jsonl|sqlite|json|markdown] [--yes]
+ *
+ * --yes 跳过覆盖确认（CI / verifier 用）。文件落在 resolveProjectRoot()/src/<name>/ 下。
+ *
+ * 说明：SDK 的 scaffoldAdapter() 会对 name 做规范化（小写 + 非法字符→连字符）用于
+ * 内部标识（类名、source 字段）；但落盘目录用原始 name，保持「叫什么生成什么」的直觉。
+ */
+async function cmdScaffold(flags: Record<string, string | boolean>): Promise<number> {
+  // 从 process.argv 取 scaffold 后的位置参数（name），与 cmdHandoff 模式一致
+  const scaffoldIdx = process.argv.indexOf('scaffold');
+  const name = scaffoldIdx >= 0 ? (process.argv[scaffoldIdx + 1] ?? '') : '';
+  if (!name || name.startsWith('--')) {
+    console.error('用法: ymesh scaffold <name> [--config-dir <dir>] [--cli-binary <bin>] [--session-format jsonl|sqlite|json|markdown] [--yes]');
+    return 1;
+  }
+
+  // 收集 SDK 选项
+  const options: ScaffoldOptions = {};
+  if (typeof flags['config-dir'] === 'string') options.configDir = flags['config-dir'];
+  if (typeof flags['cli-binary'] === 'string') options.cliBinary = flags['cli-binary'];
+  if (typeof flags['session-format'] === 'string') {
+    const fmt = flags['session-format'];
+    if (fmt === 'jsonl' || fmt === 'sqlite' || fmt === 'json' || fmt === 'markdown') {
+      options.sessionFormat = fmt;
+    } else {
+      console.error(`[yondermesh] --session-format 仅支持 jsonl|sqlite|json|markdown，收到: ${fmt}`);
+      return 1;
+    }
+  }
+
+  // SDK 生成内容（含规范化 id 用于类名/source），但目录名用原始 name
+  const { files } = scaffoldAdapter(name, options);
+  const sdkId = files[0]!.path.split('/')[1]!; // SDK 规范化后的 id（如 '__probe' → '--probe'）
+  // 落盘路径：把 SDK 的 src/<id>/ 替换为 src/<name>/，保留文件名
+  const writeFiles = files.map((f) => ({
+    content: f.content,
+    path: f.path.replace(`src/${sdkId}/`, `src/${name}/`),
+  }));
+
+  // 目标根：当前工作目录（scaffold 是代码生成器，落盘到用户当前项目根）
+  // 不用 resolveProjectRoot()——从 release 跑时会指向 release 目录而非用户 cwd
+  const root = process.cwd();
+
+  // 检查是否已存在同名目录或文件
+  const existingPaths = writeFiles
+    .map((f) => join(root, f.path))
+    .filter((p) => existsSync(p));
+
+  if (existingPaths.length > 0 && flags.yes !== true) {
+    console.error(`[yondermesh] 以下文件已存在，加 --yes 覆盖：`);
+    for (const p of existingPaths) {
+      console.error(`  ${p}`);
+    }
+    return 1;
+  }
+
+  // 写盘
+  for (const f of writeFiles) {
+    const absPath = join(root, f.path);
+    mkdirSync(dirname(absPath), { recursive: true });
+    writeFileSync(absPath, f.content);
+  }
+
+  // 摘要输出
+  if (flags.json) {
+    console.log(JSON.stringify({
+      name,
+      id: sdkId,
+      dir: `src/${name}/`,
+      files: writeFiles.map((f) => f.path),
+    }, null, 2));
+  } else {
+    console.log(`[yondermesh] 已生成 adapter 模板：${name}`);
+    for (const f of writeFiles) {
+      console.log(`  ${f.path}`);
+    }
+    console.log(`\n下一步：编辑 src/${name}/importer.ts 实现 scan/parse，再在 src/adapters/registry.ts 注册。`);
+  }
+  return 0;
+}
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const { command, flags } = parseArgs(argv);
@@ -2562,6 +2660,9 @@ async function main(): Promise<number> {
 
     case 'distill':
       return cmdDistill(flags);
+
+    case 'scaffold':
+      return await cmdScaffold(flags);
 
     case 'rollback':
       {
