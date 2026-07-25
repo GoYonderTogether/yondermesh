@@ -1,0 +1,508 @@
+@import 'tailwindcss';
+
+/* 让 Tailwind 扫描本 UI 包的组件类名（相对本文件 packages/ui/src/theme/） */
+@source '../';
+
+/* 暗色用 .dark class 切换（非 media query），全量语义 token 双值。
+   规约见 docs/product/draft/design/00-design-system-spec.md 与 02-design-tokens.md。 */
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* 几何 */
+  --radius: 0.5rem;
+
+  /* primitive：alpha 叠加阶（统一低透明度来源，杜绝硬编码） */
+  --black-a-3: #00000008;
+  --black-a-4: #0000000f;
+  --black-a-6: #0000001f;
+  --white-a-3: #ffffff08;
+  --white-a-4: #ffffff0e;
+
+  /* 语义色（light）：工作区纯白，左栏浅灰 */
+  --background: #ffffff;
+  --foreground: #000000;
+  --text-secondary: #000000bf;
+  --text-tertiary: #00000073;
+  --text-quaternary: #0000004d;
+  --primary: #000000;
+  --primary-foreground: #ffffff;
+  --secondary: #f3f4f6;
+  --secondary-foreground: #404040;
+  --secondary-button: #00000008;
+  --secondary-button-hover: #0000000f;
+  --muted: #f3f4f6;
+  --muted-foreground: #737373;
+  --accent: #f3f4f6;
+  --accent-foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+  --border: #0000000f;
+  --border-strong: #0000001f;
+  --input: #0000000f;
+  --ring: #000000;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --success: #16a34a;
+  --success-foreground: #ffffff;
+  --warning: #d97706;
+  --warning-foreground: #ffffff;
+
+  /* 侧边栏（light：浅灰底 + 黑色图标/文字，较工作区纯白更深） */
+  --sidebar: #ececed;
+  --sidebar-foreground: #171717;
+  --sidebar-hover: #00000008;
+  --sidebar-selected: #3b82f61f;
+  --sidebar-border: #0000000f;
+
+  /* 聊天气泡（核心视觉资产） */
+  --bubble-own: #3b82f61f;
+  --bubble-own-hover: #3b82f62e;
+  --bubble-agent: #00000008;
+  --bubble-agent-border: #0000000f;
+  --search-input: #00000008;
+
+  /* @ 提及文字色（对标 Bloome text-mention，蓝色调） */
+  --mention: #2563eb;
+
+  /* 遮罩层（dialog/drawer 抽象 modal overlay，统一替代 bg-black/40） */
+  --overlay: #00000066;
+  --overlay-strong: #00000099;
+}
+
+.dark {
+  --background: #111318;
+  --foreground: #ffffff;
+  --text-secondary: #ffffffb3;
+  --text-tertiary: #ffffff73;
+  --text-quaternary: #ffffff40;
+  --primary: #ffffff;
+  --primary-foreground: #000000;
+  --secondary: #1f2128;
+  --secondary-foreground: #d4d4d4;
+  --secondary-button: #ffffff0f;
+  --secondary-button-hover: #ffffff1a;
+  --muted: #1f2128;
+  --muted-foreground: #737373;
+  --accent: #1f2128;
+  --accent-foreground: #e5e5e5;
+  --card: #1a1c24;
+  --card-foreground: #e5e5e5;
+  --popover: #1a1c24;
+  --popover-foreground: #e5e5e5;
+  --border: #ffffff0e;
+  --border-strong: #ffffff1f;
+  --input: #ffffff12;
+  --ring: #ffffff;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --success: #22c55e;
+  --success-foreground: #0a0a0a;
+  --warning: #f59e0b;
+  --warning-foreground: #0a0a0a;
+
+  --sidebar: #15171e;
+  --sidebar-foreground: #e5e5e5;
+  --sidebar-hover: #ffffff08;
+  --sidebar-selected: #ffffff1a;
+  --sidebar-border: #ffffff0e;
+
+  --bubble-own: #3b82f626;
+  --bubble-own-hover: #3b82f638;
+  --bubble-agent: #1a1c24;
+  --bubble-agent-border: #ffffff0e;
+  --search-input: #1f2128;
+
+  /* @ 提及文字色（暗色模式：浅蓝保证对比度） */
+  --mention: #60a5fa;
+
+  /* dark 模式遮罩更浓，确保 modal 在深色背景上仍可识别 */
+  --overlay: #00000099;
+  --overlay-strong: #000000cc;
+}
+
+/* 把语义 token 映射为 Tailwind 颜色工具类（bg-background / text-foreground …） */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-text-quaternary: var(--text-quaternary);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary-button: var(--secondary-button);
+  --color-secondary-button-hover: var(--secondary-button-hover);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-hover: var(--sidebar-hover);
+  --color-sidebar-selected: var(--sidebar-selected);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-bubble-own: var(--bubble-own);
+  --color-bubble-own-hover: var(--bubble-own-hover);
+  --color-bubble-agent: var(--bubble-agent);
+  --color-bubble-agent-border: var(--bubble-agent-border);
+  --color-search-input: var(--search-input);
+  --color-mention: var(--mention);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* z-index 阶梯（杜绝 z-[1300] 等魔法值，统一浮层层级） */
+  --z-index-base: 10;
+  --z-index-dropdown: 20;
+  --z-index-sticky: 30;
+  --z-index-popover: 40;
+  --z-index-modal: 50;
+  --z-index-overlay: 1300;
+  --z-index-menu: 1400;
+  --z-index-tooltip: 1500;
+
+  /* State Layers：交互态叠加不透明度（design/00 §5） */
+  --opacity-hover: 0.08;
+  --opacity-focus: 0.10;
+  --opacity-pressed: 0.12;
+  --opacity-selected: 0.12;
+  --opacity-dragged: 0.16;
+  --opacity-disabled: 0.38;
+
+  /* 遮罩层颜色（dialog/drawer 的 bg-black/40 改用语义 token） */
+  --color-overlay: var(--overlay);
+  --color-overlay-strong: var(--overlay-strong);
+
+  /* Sora Variable 已随 bundle 打包（拉丁）；中文回退系统字体 PingFang/微软雅黑/Noto */
+  --font-sans:
+    'Sora Variable', 'Sora', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+
+  --shadow-soft-1: 0 1px 2px #0f172a0a, 0 4px 10px #0f172a0a;
+  --shadow-soft-2: 0 6px 16px #0f172a14;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  /* 全站交互元素基础过渡兜底（对标 Bloome 顺滑感，调研 docs/research/bloome/05-animations-verify.md §5.4）：
+     仅给"未显式声明 transition"的交互元素挂默认过渡；Tailwind 的 transition-* utility 在
+     @layer utilities，优先级更高，会覆盖此默认值，故组件层显式声明仍生效。
+     transform/box-shadow 不纳入，避免布局/绘制抖动。 */
+  a,
+  button,
+  input,
+  textarea,
+  select,
+  [role='button'],
+  [role='menuitem'],
+  [role='tab'],
+  [role='option'] {
+    transition-property: color, background-color, border-color, opacity, fill, stroke;
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
+/* 毛玻璃表面：默认实色；可由 html.glass-translucent / html.glass-transparent 切换。
+   桌面端（Tauri）配合窗口 vibrancy 可呈现真实毛玻璃；网页端为半透明 + 背景模糊。 */
+.glass-surface {
+  background-color: var(--sidebar);
+}
+html.glass-translucent .glass-surface {
+  background-color: color-mix(in srgb, var(--sidebar) 72%, transparent);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+html.glass-transparent .glass-surface {
+  background-color: color-mix(in srgb, var(--sidebar) 36%, transparent);
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+}
+
+/* 快速动画 token */
+@keyframes yonder-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes yonder-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes yonder-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* 仅透明度（用于已有 transform 定位的元素，如居中弹窗，避免覆盖 translate） */
+@keyframes yonder-pop {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+/* 流式打字三点（对标 bloome loading-dot：错相 scale+opacity，1.2s 循环）。
+   用法：三个点配 animation-delay 0 / -0.4s / -0.8s 形成滚动波浪。 */
+@keyframes yonder-loading-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+/* 流式光标闪烁（对标 bloome caret-blink：1s 内淡出再淡入） */
+@keyframes yonder-caret-blink {
+  0%,
+  70%,
+  100% {
+    opacity: 1;
+  }
+  20%,
+  50% {
+    opacity: 0;
+  }
+}
+/* 连接 pill / 提示条入场（对标 bloome pillIn：opacity 0→1 + translateY 6px→0） */
+@keyframes yonder-pill-in {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-pop {
+  animation: yonder-pop 140ms ease-out both;
+}
+.animate-fade-in {
+  animation: yonder-fade-in 160ms ease-out both;
+}
+.animate-scale-in {
+  animation: yonder-scale-in 140ms ease-out both;
+}
+.animate-slide-up {
+  animation: yonder-slide-up 180ms ease-out both;
+}
+.animate-loading-dot {
+  animation: yonder-loading-dot 1.2s ease-in-out infinite;
+}
+.animate-caret-blink {
+  animation: yonder-caret-blink 1s infinite;
+}
+.animate-pill-in {
+  animation: yonder-pill-in 220ms ease-out both;
+}
+
+/* ===== Bloome 交互对齐动画（spec 221-bloome-interaction-parity） =====
+   原样抄录自 Bloome CSS bundle（docs/research/bloome/05-animations-verify.md §2）。
+   Yonder 已有 loading-dot/caret-blink/pill-in/fade-in/scale-in/slide-up/pop；
+   以下 7 个为缺失补齐。 */
+
+/* 消息入场：从下方 12px 淡入上移（Bloome msg-slide-up） */
+@keyframes yonder-msg-slide-up {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* 消息从右滑入：从右侧 16px 淡入（Bloome msg-slide-in-right） */
+@keyframes yonder-msg-slide-in-right {
+  0% {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+/* 消息淡出删除：opacity + max-height + margin/padding 联动归零（Bloome msg-fade-out） */
+@keyframes yonder-msg-fade-out {
+  0% {
+    opacity: 1;
+    max-height: 500px;
+  }
+  to {
+    opacity: 0;
+    max-height: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}
+/* 定位消息高亮闪烁：背景色从黄 18% 透明度渐变到透明（Bloome msg-highlight-flash，1.2s） */
+@keyframes yonder-msg-highlight-flash {
+  0% {
+    background-color: #ffdc502e;
+  }
+  to {
+    background-color: #0000;
+  }
+}
+/* 思考态呼吸：opacity 在 0.12 / 0.9 / 0.25 间循环（Bloome catchup-think，1.8s infinite） */
+@keyframes yonder-catchup-think {
+  0%,
+  to {
+    opacity: 0.12;
+  }
+  35% {
+    opacity: 0.9;
+  }
+  70% {
+    opacity: 0.25;
+  }
+}
+/* 移动端抽屉从底部滑入（Bloome slide-up-sheet，260ms iOS ease-out） */
+@keyframes yonder-slide-up-sheet {
+  0% {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+/* Radix Collapsible 折叠展开（Bloome collapsible-down/up，保留 --radix- 前缀） */
+@keyframes yonder-collapsible-down {
+  0% {
+    height: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height, auto);
+  }
+}
+@keyframes yonder-collapsible-up {
+  0% {
+    height: var(--radix-collapsible-content-height, auto);
+  }
+  to {
+    height: 0;
+  }
+}
+
+.animate-msg-slide-up {
+  animation: yonder-msg-slide-up 200ms ease-out both;
+}
+.animate-msg-slide-in-right {
+  animation: yonder-msg-slide-in-right 200ms ease-out both;
+}
+.animate-msg-fade-out {
+  animation: yonder-msg-fade-out 200ms ease-out both;
+}
+.animate-msg-highlight-flash {
+  animation: yonder-msg-highlight-flash 1.2s ease-out both;
+}
+.animate-catchup-think {
+  animation: yonder-catchup-think 1.8s ease-in-out infinite;
+}
+.animate-slide-up-sheet {
+  animation: yonder-slide-up-sheet 260ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.animate-collapsible-down {
+  animation: yonder-collapsible-down 0.2s ease-out both;
+}
+.animate-collapsible-up {
+  animation: yonder-collapsible-up 0.2s ease-out both;
+}
+/* 移动端导航栈:详情覆盖层 push/pop 过渡(列表→详情,左边缘跟手返回;design/01 §2.2)。
+   统一走 transition:进入滑入 / 跟手回弹 / 关闭移出。transform 由接入层 inline 写入。
+   选 transition 而非 keyframes 的原因:transition 不跑时元素停在「目标位置」(可见),
+   而 keyframes fill 会卡在「起点」(屏外);前者在弱机/不可见 tab 下更稳健。
+   cubic-bezier 为 iOS 经典 ease-out;reduced-motion 时降级为 none。 */
+.mobile-stack-transition {
+  transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in,
+  .animate-scale-in,
+  .animate-slide-up,
+  .animate-loading-dot,
+  .animate-caret-blink,
+  .animate-pill-in,
+  .animate-msg-slide-up,
+  .animate-msg-slide-in-right,
+  .animate-msg-fade-out,
+  .animate-msg-highlight-flash,
+  .animate-catchup-think,
+  .animate-slide-up-sheet,
+  .animate-collapsible-down,
+  .animate-collapsible-up {
+    animation: none;
+  }
+  .mobile-stack-transition {
+    transition: none;
+  }
+  /* 关闭全站基础过渡兜底，避免 hover/focus 仍有动作（无障碍） */
+  a,
+  button,
+  input,
+  textarea,
+  select,
+  [role='button'],
+  [role='menuitem'],
+  [role='tab'],
+  [role='option'] {
+    transition: none;
+  }
+}

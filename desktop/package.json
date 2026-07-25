@@ -1,0 +1,16 @@
+{
+  "name": "@ymesh/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/ui",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @ymesh/web",
+    "dev": "npm run dev --workspace @ymesh/web",
+    "typecheck": "tsc --noEmit -p web/tsconfig.json",
+    "test": "vitest run --workspace @ymesh/web"
+  }
+}

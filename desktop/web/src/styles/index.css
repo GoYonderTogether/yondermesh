@@ -1,0 +1,82 @@
+@import '@ymesh/ui/theme.css';
+/* 跨端平台条件样式（Windows 标题栏/字体栈/安全区 token/暗色模式/响应式断点） */
+@import './platform.css';
+
+/* 扫描本应用源码的类名（相对本文件 apps/web/src/styles/） */
+@source '../';
+
+/* ─────────────────────── 跨端适配（移动 webview / 桌面 Tauri） ─────────────────────── */
+
+/* 移动端：禁止文本自动放大、双击/捏合缩放、滚动回弹连带的缩放抖动。
+   viewport 已 user-scalable=no；这里补 webview 层面的硬化。 */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+body {
+  /* manipulation：去掉双击缩放与 300ms 点击延迟，仅保留滚动/点击。 */
+  touch-action: manipulation;
+  /* 阻止整页回弹（橡皮筋），避免被误判为缩放手势。 */
+  overscroll-behavior: none;
+}
+/* 触摸设备输入控件字号 ≥16px，双保险避免 iOS 聚焦自动放大（即便 user-scalable 失效时）。
+   仅限 coarse pointer，避免放大桌面端紧凑输入框。 */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1rem);
+  }
+}
+
+/* ─────────────────────── ProgressiveMirror 渐进式披露动画 ─────────────────────── */
+
+/* 页面切换：前进方向（从右侧滑入） */
+@keyframes pm-slide-in-forward {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+/* 页面切换：后退方向（从左侧滑入） */
+@keyframes pm-slide-in-backward {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.pm-slide-in-forward {
+  animation: pm-slide-in-forward 300ms ease-out both;
+}
+.pm-slide-in-backward {
+  animation: pm-slide-in-backward 300ms ease-out both;
+}
+
+/* 饼图绘制：strokeDasharray 从 0 增长到目标值 */
+@keyframes pm-draw-slice {
+  from {
+    stroke-dasharray: 0 1000;
+  }
+}
+.pm-chart-slice {
+  animation: pm-draw-slice 600ms ease-out both;
+}
+
+/* 尊重用户的减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .pm-slide-in-forward,
+  .pm-slide-in-backward,
+  .pm-chart-slice {
+    animation: none;
+  }
+}
+

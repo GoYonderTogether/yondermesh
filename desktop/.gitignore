@@ -1,0 +1,13 @@
+# Tauri / Rust 构建产物
+src-tauri/target/
+src-tauri/gen/
+
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+.vite/
+
+# OS
+.DS_Store

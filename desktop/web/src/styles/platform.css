@@ -1,0 +1,219 @@
+/* ──────────────────────────────────────────────────────────────────────────
+ * 跨端平台条件样式（specs/020-cross-platform-ui）
+ *
+ * 作用域：本文件收敛所有「与平台相关」的 CSS（Windows 标题栏、字体栈、
+ *        macOS 红绿灯让位、移动安全区 fallback）。组件层用 `.tauri-windows`
+ *        / `[data-platform="windows"]` 等选择器写条件样式，禁止再读 userAgent。
+ *
+ * 接入：由 `apps/web/src/styles/index.css` 用 `@import './platform.css'` 加载。
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/* ── 设计 token（Phase 8 T035-T037）：替代组件里的魔法值 ──
+ * 用 CSS 变量集中管理跨端间距，组件层用 `pt-[var(--spacing-header)]` 等。
+ * 值与现有魔法值对齐（AppShell pt-7=28px、NavRail h-4=16px）。 */
+:root {
+  /* 桌面端标题栏/红绿灯让位高度 */
+  --spacing-header: 28px;          /* macOS 红绿灯 + Windows 自定义标题栏 */
+  --spacing-traffic-light: 16px;   /* NavRail 顶部让位（macOS 红绿灯高度） */
+  --spacing-titlebar-windows: 32px; /* Windows 自定义标题栏高度 */
+
+  /* 移动端安全区 fallback（env() 无值时给默认 0，避免 web 端出现奇异留白） */
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+
+  /* 超宽屏主内容最大宽度（FR-010 待产品确认，先给 1400px 默认） */
+  --content-max-width: 1400px;
+}
+
+/* ── 平台字体栈（US4 T019） ──
+ * macOS 用 SF Pro（系统原生）；Windows 用 Segoe UI（系统原生）；
+ * Linux 用 system-ui；移动端用 -apple-system / Roboto。
+ * 中文统一走系统字体（不打包中文字体，体积过大）。 */
+:root {
+  --font-sans:
+    'Sora Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui,
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue',
+    Helvetica, Arial, sans-serif;
+}
+
+.tauri-macos {
+  --font-sans:
+    'Sora Variable', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Hiragino Sans GB', 'Helvetica Neue', sans-serif;
+}
+
+.tauri-windows {
+  /* Windows 系统字体：Segoe UI（西文）+ Microsoft YaHei（中文） */
+  --font-sans:
+    'Sora Variable', 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+}
+
+.tauri-linux {
+  --font-sans:
+    'Sora Variable', system-ui, 'Cantarell', 'Ubuntu', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+}
+
+.platform-ios,
+.platform-android {
+  --font-sans:
+    'Sora Variable', -apple-system, BlinkMacSystemFont, 'Roboto', sans-serif;
+}
+
+html,
+body {
+  font-family: var(--font-sans);
+}
+
+/* ── Windows 自定义标题栏区域（US4 T019/T020） ──
+ * Windows 无红绿灯，需在前端顶部预留窗口控制按钮区与拖拽区。
+ * 组件层（AppShell/自定义 TitleBar）通过 `[data-platform="windows"]`
+ * 选择器加 `padding-top: var(--spacing-titlebar-windows)` 让位。
+ *
+ * 拖拽区由组件层用 `data-tauri-drag-region` 属性实现（Tauri 2 原生支持），
+ * 此处仅声明间距 token，不绘制具体按钮（按钮由组件层 lucide-react 图标实现）。
+ */
+[data-platform='windows'] .app-shell-root,
+[data-platform='linux'] .app-shell-root {
+  /* Windows/Linux 桌面端主容器顶部留出标题栏空间。
+   * 注意：此规则不覆盖 macOS 的 pt-7（由 .tauri-macos 分支处理）。 */
+}
+
+/* Windows 圆角窗口边框（Tauri 2 decorations:false 时圆角由前端控制） */
+.tauri-windows .app-shell-root {
+  border-radius: 0;
+}
+
+/* Windows 焦点态边框（视觉一致性：Windows 11 圆角 + mica 背景配合） */
+.tauri-windows body {
+  /* Windows 11 推荐 mica 半透明背景，但 webview 层不直接控制，留给 Tauri windowEffects */
+}
+
+/* ── Linux 平台条件（与 Windows 共享自定义标题栏策略） ──
+ * GNOME/KDE 无红绿灯，复用 Windows 的标题栏间距 token。 */
+.tauri-linux .app-shell-root {
+  border-radius: 0;
+}
+
+/* ── 触摸目标最小尺寸（FR-003，与 index.css @media pointer:coarse 互补） ──
+ * 强制按钮/链接的可点击区域 ≥16px（iOS 聚焦放大阈值），但仅 coarse pointer。 */
+@media (pointer: coarse) {
+  button,
+  a[role='button'],
+  [data-clickable] {
+    min-height: 16px;
+    min-width: 16px;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Phase 7：响应式断点 / 横竖屏 / 超宽屏 / 键盘弹起
+ * 规约：specs/020-cross-platform-ui Phase 7（T031-T034）
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* ── 响应式断点 token（sm/md/lg/xl，与 Tailwind v4 默认对齐） ──
+ * 组件层用 `@media (min-width: var(--bp-md))` 等写断点；
+ * JS 侧用 `use-media-query.ts` 的 useMediaQuery('(min-width: 768px)')。 */
+:root {
+  --bp-sm: 640px;   /* sm：手机横屏 / 小平板 */
+  --bp-md: 768px;   /* md：桌面阈值（与 useIsDesktop 一致） */
+  --bp-lg: 1024px;  /* lg：笔记本 */
+  --bp-xl: 1280px;  /* xl：桌面宽屏 */
+  --bp-2xl: 1536px; /* 2xl：超宽屏 */
+}
+
+/* ── 横屏适配（T032）：移动端横屏 Tab Bar 高度收窄、安全区留白调整 ──
+ * 横屏时高度紧张，Tab Bar 从 56px 收到 44px；底部安全区从 34px 收到 24px。
+ * 仅移动端（coarse pointer + max-width:md）生效，不影响桌面。 */
+@media (orientation: landscape) and (pointer: coarse) and (max-width: 1023px) {
+  :root {
+    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --tab-bar-height: 44px;
+  }
+}
+
+@media (orientation: portrait) and (pointer: coarse) {
+  :root {
+    --tab-bar-height: 56px;
+  }
+}
+
+/* ── 超宽屏主内容最大宽度（T034 / FR-010） ──
+ * 屏宽 >1536px 时主内容区居中限宽 1400px，避免阅读行宽过长。
+ * 不限制 NavRail 与右抽屉，仅约束主内容区。 */
+@media (min-width: 1536px) {
+  /* 组件层在主内容容器加 .content-constrained 类即可生效 */
+  .content-constrained {
+    max-width: var(--content-max-width);
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+/* ── 键盘弹起适配（T033） ──
+ * use-keyboard-inset.ts 返回键盘高度后，组件层给 body 加 .keyboard-open
+ * class，这里统一禁用 overscroll-behavior（避免键盘弹起时页面被推），
+ * 并给底部固定栏（如 Tab Bar）加上键盘高度偏移。
+ * 实际偏移由组件用 inline style 设置 --keyboard-inset，CSS 仅提供钩子。 */
+.keyboard-open {
+  overscroll-behavior: contain;
+}
+.keyboard-open .keyboard-aware-bottom {
+  bottom: var(--keyboard-inset, 0px);
+  transition: bottom 0.2s ease;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Phase 8：设计 token 全量迁移（T035-T037）
+ * 已在 :root 定义 --spacing-header / --spacing-traffic-light /
+ * --spacing-titlebar-windows / --safe-area-* / --content-max-width。
+ *
+ * 组件层迁移指引（不在本次改动范围，留给组件 owner）：
+ *   - AppShell.tsx 的 `pt-7` → `pt-[var(--spacing-header)]`
+ *   - NavRail.tsx 的 `h-4` 让位 → `h-[var(--spacing-traffic-light)]`
+ *   - MobileTabBar.tsx 的 `pb-[env(safe-area-inset-bottom)]`
+ *     → `pb-[var(--safe-area-bottom)]`
+ *   - 超宽屏主内容容器加 .content-constrained 类
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 暗色模式适配（spec Edge Cases / Phase 9 验证）
+ * 用 prefers-color-scheme 自动切换；组件层用 Tailwind v4 dark: 变体
+ * 或 [data-theme="dark"] 选择器写暗色样式。
+ *
+ * 此处仅提供语义色 token 的暗色映射，具体组件颜色由 @ymesh/ui/theme.css
+ * 提供（本文件不重复定义，避免双源）。
+ * ════════════════════════════════════════════════════════════════════════ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* 暗色模式下标题栏区域保持透明（让 Tauri windowEffects 的 mica 透出） */
+    --titlebar-bg: transparent;
+    /* 暗色模式触摸高亮改为半透明白 */
+    --tap-highlight: rgba(255, 255, 255, 0.08);
+  }
+  html {
+    -webkit-tap-highlight-color: var(--tap-highlight, transparent);
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --titlebar-bg: transparent;
+    --tap-highlight: transparent;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Phase 9：平台检测降级（T040）
+ * detectPlatform 失败时返回 'web' 默认值（见 platform.ts safeDetectPlatform）。
+ * 此处确保 [data-platform="web"] 下所有平台专属样式不生效（默认即 web）。
+ * ════════════════════════════════════════════════════════════════════════ */
+[data-platform='web'] {
+  /* web 端不应用任何 Tauri 平台 class，安全区 fallback 为 0 */
+  --safe-area-top: 0px;
+  --safe-area-bottom: 0px;
+  --safe-area-left: 0px;
+  --safe-area-right: 0px;
+}
