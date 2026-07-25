@@ -11,12 +11,15 @@ export default defineConfig({
         external: [/^node:/],
       },
     },
-    // 独立脚本（用 `npx tsx` 直接跑，非 vitest 单元测试）与外部示例项目排除
+    // desktop/web 的 React 组件测试需要 jsdom + @testing-library/jest-dom，
+    // 由 desktop/web 自己的 vite.config.ts 驱动（`cd desktop/web && npm test`）。
+    // 根 vitest 仅跑 node 环境的核心测试，避免 document is not defined。
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
       '**/examples/**',
       'tests/trigger-e2e.test.ts',
+      'desktop/web/**',
     ],
   },
 });

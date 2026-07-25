@@ -8,7 +8,7 @@ outline: [2, 3]
 
 The `ymesh mcp` command starts a stdio JSON-RPC server that exposes yondermesh's session graph to any MCP-capable agent (Claude Code, Codex, Cursor, Gemini, Windsurf, Continue, ...). Deprecated forwarding aliases are omitted.
 
-**8 core orthogonal tools**, plus 4 auxiliary tools (project-history extraction / whoami).
+**8 core orthogonal tools**, plus 5 auxiliary tools (project-history extraction / whoami).
 
 ## How to call
 
@@ -191,3 +191,17 @@ Resolve your own session id via 3-layer fallback: (1) env YONDERMESH_SELF_SESSIO
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `self_session_id` | string | no | Explicitly pass your session id (fallback when env var is not set) |
+
+### yondermesh_check_prior_attempts
+
+Check whether other agents have encountered a similar task/error before and what they concluded. Input a task description or error message; returns ranked prior attempts with their conclusions (last assistant message preview). v0 uses deterministic matching on session messages (failure-marker regex + token overlap + same-project weighting) — zero LLM, no separate decision-extraction module. Useful before starting a new task to avoid re-stepping on a known landmine.
+
+#### Arguments
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | yes | Task description or error text to search for. Required. |
+| `project_path` | string | no | Caller's project path. Sessions with the same projectPath get a relevance boost. Optional. |
+| `cwd` | string | no | Caller's working directory. Sessions with the same cwd get a small relevance boost. Optional. |
+| `limit` | number | no | Max results (default 5, max 50). (default `5`) |
+| `min_score` | number | no | Minimum relevance score 0-1 (default 0.1). Lower = more results but noisier. (default `0.1`) |

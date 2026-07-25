@@ -5,9 +5,13 @@ status: passed
 feature: local-first
 verifier: "bash -c 'head -1 LICENSE | grep -qi mit && grep -qi \"no model proxy\" site/guide/sync.md && grep -qi \"enabled: false\\|sync.*默认.*关\\|opt-in\" site/guide/sync.md && ! grep -rE \"fetch\\(|http\\.request|https\\.request|axios|undici\" src/store src/adapters src/extract 2>/dev/null | grep -v \"^.*//\\|^.*\\*\"'"
 created: 2026-07-21
-last_run: 2026-07-25 03:06:21
+last_run: 2026-07-25 04:04:37
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -39,9 +43,17 @@ last_run: 2026-07-25 03:06:21
 
 
 
+
+
+
+
 读 ARCHITECTURE.md（invariant：no model proxy / no plaintext on relay / keys stay local）、site/guide/sync.md（sync.enabled 默认 false、relay 是 dumb ciphertext pipe）、LICENSE。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -73,10 +85,18 @@ last_run: 2026-07-25 03:06:21
 
 
 
+
+
+
+
 verifier 断言：① LICENSE 首行含 MIT；② sync 文档含 "no model proxy"；③ sync 默认 opt-in（enabled: false）。
 深入（loop 内）：grep src/store、src/adapters、src/extract 的采集路径，确认无 fetch/http 出站调用（采集只读本地文件）；确认 src/sync 默认 enabled=false。
 
 ## Prompt
+
+
+
+
 
 
 

@@ -8,7 +8,7 @@ outline: [2, 3]
 
 `ymesh mcp` 启动一个 stdio JSON-RPC server，把 yondermesh 的 session 图暴露给任何支持 MCP 的 agent（Claude Code、Codex、Cursor、Gemini、Windsurf、Continue 等）。已废弃的转发别名不在此列。
 
-**核心正交工具 8 个**，另有 4 个辅助工具（项目历史提取 / whoami）。
+**核心正交工具 8 个**，另有 5 个辅助工具（项目历史提取 / whoami）。
 
 ## 如何调用
 
@@ -191,3 +191,17 @@ Resolve your own session id via 3-layer fallback: (1) env YONDERMESH_SELF_SESSIO
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `self_session_id` | string | no | Explicitly pass your session id (fallback when env var is not set) |
+
+### yondermesh_check_prior_attempts
+
+Check whether other agents have encountered a similar task/error before and what they concluded. Input a task description or error message; returns ranked prior attempts with their conclusions (last assistant message preview). v0 uses deterministic matching on session messages (failure-marker regex + token overlap + same-project weighting) — zero LLM, no separate decision-extraction module. Useful before starting a new task to avoid re-stepping on a known landmine.
+
+#### 参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `query` | string | yes | Task description or error text to search for. Required. e.g. "TypeError: x is not a function" or "how to configure E2E sync". |
+| `project_path` | string | no | Caller's project path. Sessions with the same projectPath get a relevance boost. Optional. |
+| `cwd` | string | no | Caller's working directory. Sessions with the same cwd get a small relevance boost. Optional. |
+| `limit` | number | no | Max results (default 5, max 50). (default `5`) |
+| `min_score` | number | no | Minimum relevance score 0-1 (default 0.1). Lower = more results but noisier. (default `0.1`) |

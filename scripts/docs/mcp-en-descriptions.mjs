@@ -132,4 +132,15 @@ export const EN = {
       self_session_id: 'Explicitly pass your session id (fallback when env var is not set)',
     },
   },
+  yondermesh_check_prior_attempts: {
+    // Already English in source; keep for completeness so the assertion passes.
+    desc: 'Check whether other agents have encountered a similar task/error before and what they concluded. Input a task description or error message; returns ranked prior attempts with their conclusions (last assistant message preview). v0 uses deterministic matching on session messages (failure-marker regex + token overlap + same-project weighting) — zero LLM, no separate decision-extraction module. Useful before starting a new task to avoid re-stepping on a known landmine.',
+    params: {
+      query: 'Task description or error text to search for. Required.',
+      project_path: 'Caller\'s project path. Sessions with the same projectPath get a relevance boost. Optional.',
+      cwd: 'Caller\'s working directory. Sessions with the same cwd get a small relevance boost. Optional.',
+      limit: 'Max results (default 5, max 50).',
+      min_score: 'Minimum relevance score 0-1 (default 0.1). Lower = more results but noisier.',
+    },
+  },
 };
