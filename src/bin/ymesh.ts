@@ -258,6 +258,9 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
                             --session-format jsonl|sqlite|json|markdown --yes（覆盖已存在）
   sync fts            显式分批回填 messages_fts 全文索引（大库自动回填被跳过时用）
                       选项: --batch <n>（每批条数，默认 5000）[--json]
+  retain analyze      扫描数据库冗余（噪音/超长/老旧 session），报告可压缩量（只读）
+  retain apply        执行筛除（L0 删噪音 + L2 截断 + L3 归档），含去重备份
+                      选项: --dry-run（预演）--no-backup（跳过备份）[--db <path>] [--json]
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -365,6 +368,9 @@ Commands:
                                --session-format jsonl|sqlite|json|markdown --yes (overwrite existing)
   sync fts            Explicitly backfill messages_fts full-text index in batches (use when large-DB auto-backfill is skipped)
                       Options: --batch <n> (batch size, default 5000) [--json]
+  retain analyze      Scan database for redundancy (noise/oversized/stale sessions), report compressible volume (read-only)
+  retain apply        Execute retention (L0 drop noise + L2 truncate + L3 archive), with deduplicated backup
+                      Options: --dry-run (preview) --no-backup (skip backup) [--db <path>] [--json]
 
 Install:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -2568,6 +2574,153 @@ function cmdSync(flags: Record<string, string | boolean>): number {
   }
 }
 
+/** retain 命令：数据库压缩/筛除/归档（控制膨胀） */
+function cmdRetain(flags: Record<string, string | boolean>): number {
+  const positional = process.argv.slice(process.argv.indexOf('retain') + 1);
+  const action = positional[0] ?? '';
+
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  const backupDir = join(dataDir, 'retention-backups');
+
+  // 策略：默认策略 + 运行时 backupDir
+  const { DEFAULT_POLICY } = require('../retain/index.js') as typeof import('../retain/index.js');
+  const policy = { ...DEFAULT_POLICY, backupDir };
+
+  if (action === 'analyze' || action === '' || action === 'config') {
+    // analyze / config：扫描报告（config 兼容旧称，行为同 analyze）
+    const { analyze } = require('../retain/index.js') as typeof import('../retain/index.js');
+    let report;
+    try {
+      report = analyze(dbPath, policy);
+    } catch (err) {
+      console.error(`[yondermesh] retain analyze 失败: ${String(err)}`);
+      return 1;
+    }
+
+    if (flags.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return 0;
+    }
+
+    // 人类可读报告
+    const fmtBytes = (b: number) => {
+      if (b > 1_000_000_000) return `${(b / 1_000_000_000).toFixed(2)} GB`;
+      if (b > 1_000_000) return `${(b / 1_000_000).toFixed(1)} MB`;
+      if (b > 1_000) return `${(b / 1_000).toFixed(1)} KB`;
+      return `${b} B`;
+    };
+    const fmtPct = (n: number, total: number) =>
+      total > 0 ? `${((n / total) * 100).toFixed(1)}%` : '0%';
+
+    console.log('=== Retention 分析报告 ===');
+    console.log(`数据库: ${dbPath}`);
+    console.log(`总消息: ${report.totalMessages.toLocaleString()} (${fmtBytes(report.totalBytes)})`);
+    console.log();
+
+    console.log('--- L0 噪音筛除 ---');
+    if (report.noise.perRule.length === 0 && report.noise.shortHighFreq.length === 0) {
+      console.log('  无噪音可删');
+    } else {
+      for (const r of report.noise.perRule) {
+        console.log(`  [${r.name}] ${r.messages.toLocaleString()} 条 (${fmtBytes(r.bytes)})`);
+      }
+      for (const r of report.noise.shortHighFreq.slice(0, 10)) {
+        const preview = r.content.length > 50 ? r.content.slice(0, 50) + '...' : r.content;
+        console.log(`  [short-high-freq] "${preview}" ${r.occurrences.toLocaleString()} 次 (${fmtBytes(r.bytes)})`);
+      }
+      console.log(`  小计: ${report.noise.totalMessages.toLocaleString()} 条 (${fmtBytes(report.noise.totalBytes)}) - ${fmtPct(report.noise.totalMessages, report.totalMessages)} 消息`);
+    }
+    console.log();
+
+    console.log('--- L2 长内容截断 ---');
+    if (report.truncate.perRule.length === 0) {
+      console.log('  无超长消息');
+    } else {
+      for (const r of report.truncate.perRule) {
+        console.log(`  [${r.role}] > ${r.maxBytes}B 截断到 ${r.keepBytes}B: ${r.messages.toLocaleString()} 条，节省 ${fmtBytes(r.savedBytes)}`);
+      }
+      console.log(`  小计: ${report.truncate.totalMessages.toLocaleString()} 条，节省 ${fmtBytes(report.truncate.totalSavedBytes)}`);
+    }
+    console.log();
+
+    console.log('--- L3 老旧归档 ---');
+    if (report.archive.sessionsToArchive === 0) {
+      console.log('  无超 TTL session');
+    } else {
+      const cutoffDate = new Date(report.archive.cutoffTimestamp).toISOString().slice(0, 10);
+      console.log(`  TTL: ${policy.archive.olderThanDays} 天 (截止 ${cutoffDate})`);
+      console.log(`  待归档 session: ${report.archive.sessionsToArchive.toLocaleString()}`);
+      console.log(`  涉及消息: ${report.archive.messagesAffected.toLocaleString()} (${fmtBytes(report.archive.bytesAffected)})`);
+      console.log(`  ${policy.archive.keepSessionMetadata ? '保留 session 元数据' : '同时删 session 元数据'}`);
+    }
+    console.log();
+
+    console.log('=== 综合预期 ===');
+    const removedMsgs = report.totalMessages - report.projectedRemainingMessages;
+    const removedBytes = report.totalBytes - report.projectedRemainingBytes;
+    console.log(`可减少: ${removedMsgs.toLocaleString()} 消息 (${fmtPct(removedMsgs, report.totalMessages)})`);
+    console.log(`        ${fmtBytes(removedBytes)} 字节 (${fmtPct(removedBytes, report.totalBytes)})`);
+    console.log(`筛除后: ${report.projectedRemainingMessages.toLocaleString()} 消息 (${fmtBytes(report.projectedRemainingBytes)})`);
+    console.log();
+    console.log('执行: ymesh retain apply [--dry-run] [--no-backup]');
+    return 0;
+  }
+
+  if (action === 'apply') {
+    const dryRun = flags['dry-run'] === true || flags.dryRun === true;
+    const skipBackup = flags['no-backup'] === true || flags.noBackup === true;
+
+    if (dryRun) {
+      console.log('[yondermesh] dry-run 模式：只报告，不修改数据库');
+    }
+    if (skipBackup) {
+      console.log('[yondermesh] 跳过备份（被删数据不可恢复）');
+    } else {
+      console.log(`[yondermesh] 备份目录: ${backupDir}`);
+    }
+
+    const { apply: applyRetain } = require('../retain/index.js') as typeof import('../retain/index.js');
+    let result;
+    try {
+      result = applyRetain(dbPath, policy, { dryRun, skipBackup });
+    } catch (err) {
+      console.error(`[yondermesh] retain apply 失败: ${String(err)}`);
+      return 1;
+    }
+
+    if (flags.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return 0;
+    }
+
+    console.log('=== Retention 执行结果 ===');
+    console.log(`模式: ${result.dryRun ? 'dry-run' : '实际执行'}`);
+    console.log(`耗时: ${(result.elapsedMs / 1000).toFixed(1)}s`);
+    console.log();
+    console.log(`L0 噪音删除: ${result.noiseDeleted.toLocaleString()} 条`);
+    if (!skipBackup && result.noiseBackupUniqueContents > 0) {
+      console.log(`  备份唯一内容: ${result.noiseBackupUniqueContents.toLocaleString()} 条`);
+    }
+    console.log(`L2 长内容截断: ${result.truncated.toLocaleString()} 条`);
+    console.log(`L3 归档 session: ${result.sessionsArchived.toLocaleString()} 个 (${result.archiveMessagesDeleted.toLocaleString()} 消息)`);
+    if (result.backupFile) {
+      console.log(`备份文件: ${result.backupFile}`);
+    }
+    if (result.backupError) {
+      console.log(`备份错误: ${result.backupError}`);
+    }
+    return 0;
+  }
+
+  console.error('用法: ymesh retain <analyze|apply> [--db <path>] [--json]');
+  console.error('  analyze           扫描报告（只读）');
+  console.error('  apply             执行筛除（含备份）');
+  console.error('  apply --dry-run   预演，不修改数据库');
+  console.error('  apply --no-backup 跳过备份（不可恢复）');
+  return 1;
+}
+
 // ─── scaffold 命令（adapter-sdk 收尾） ─────────────────────────────────
 
 /**
@@ -2751,6 +2904,9 @@ async function main(): Promise<number> {
 
     case 'sync':
       return cmdSync(flags);
+
+    case 'retain':
+      return cmdRetain(flags);
 
     case 'rollback':
       {
