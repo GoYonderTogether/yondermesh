@@ -28,6 +28,12 @@ import { verifyAll } from '../mount/manager.js';
 import { MailboxCore } from '../mailbox/index.js';
 import type { PostMessageInput, SendMode, SendTarget } from '../mailbox/index.js';
 import { loadWrapper as regLoadWrapper } from '../adapters/registry.js';
+import {
+  findPriorAttempts,
+  DEFAULT_PRIOR_ATTEMPTS_LIMIT,
+  DEFAULT_PRIOR_ATTEMPTS_MIN_SCORE,
+} from '../derive/prior-attempts.js';
+import type { PriorAttemptSession } from '../derive/prior-attempts.js';
 
 // detectAgents 可能尚未创建（src/detect/agents.ts），用动态 import 兜底；
 // 若加载失败则回退到 mount/registry 的 detectInstalledClis。
@@ -888,6 +894,76 @@ const sendHandler: McpToolHandler = async (args) => {
 };
 
 // ---------------------------------------------------------------------------
+// 13. yondermesh_check_prior_attempts
+//
+// 旗舰第四问（product-vision US-7）：输入一个任务/报错，返回「别的 agent
+// 之前踩过没、结论是什么」。L4 派生层，deterministic，零 LLM。
+// v0 直接基于 session messages 做确定性匹配（不依赖独立的决策提取模块）。
+//
+// 辅助工具：追加而非正交工具，不影响现有 8 正交 + 4 辅助的语义与名称。
+// ---------------------------------------------------------------------------
+
+const checkPriorAttemptsHandler: McpToolHandler = async (args) => {
+  const query = typeof args.query === 'string' ? args.query.trim() : '';
+  if (!query) {
+    return errorContent('缺少必填参数 query（任务描述或报错文本）');
+  }
+
+  const limit =
+    typeof args.limit === 'number' && args.limit > 0
+      ? Math.min(args.limit, 50)
+      : DEFAULT_PRIOR_ATTEMPTS_LIMIT;
+  const minScore =
+    typeof args.min_score === 'number' && args.min_score >= 0 && args.min_score <= 1
+      ? args.min_score
+      : DEFAULT_PRIOR_ATTEMPTS_MIN_SCORE;
+  const projectPath =
+    typeof args.project_path === 'string' && args.project_path ? args.project_path : null;
+  const cwd = typeof args.cwd === 'string' && args.cwd ? args.cwd : null;
+
+  const store = openStore();
+  try {
+    // 拉取近期 session（含 subagent，因为别的 agent 的尝试可能在 subagent 里）。
+    // 用较大 limit 覆盖足够历史；MCP handler 层再做消息匹配。
+    const records = store.querySessions({ limit: 500, includeArchived: false });
+
+    const sessions: PriorAttemptSession[] = [];
+    for (const r of records) {
+      const messages = store.getMessages(r.id);
+      if (messages.length === 0) continue;
+      sessions.push({
+        id: r.id,
+        source: r.source,
+        cwd: r.cwd,
+        projectPath: r.projectPath,
+        startedAt: r.startedAt,
+        lastSeenAt: r.lastSeenAt,
+        messages: messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          timestamp: m.timestamp,
+        })),
+      });
+    }
+
+    const results = findPriorAttempts({ query, projectPath, cwd, limit, minScore }, sessions);
+
+    return jsonContent({
+      query,
+      searchedSessions: sessions.length,
+      count: results.length,
+      results,
+      hint:
+        results.length > 0
+          ? `📌 找到 ${results.length} 个之前踩过类似坑的 session。看 results[].conclusion 拿当时结论。`
+          : '📭 没找到别的 agent 踩过类似的坑。可以直接开新 session 探索，或换更具体的报错文本重试。',
+    });
+  } finally {
+    store.close();
+  }
+};
+
+// ---------------------------------------------------------------------------
 // 工具注册表
 // ---------------------------------------------------------------------------
 
@@ -1210,6 +1286,44 @@ export const MCP_TOOLS: McpToolDef[] = [
       required: ['cli', 'message'],
     },
     handler: sendHandler,
+  },
+  {
+    name: 'yondermesh_check_prior_attempts',
+    description:
+      'Check whether other agents have encountered a similar task/error before and what they concluded. Input a task description or error message; returns ranked prior attempts with their conclusions (last assistant message preview). v0 uses deterministic matching on session messages (failure-marker regex + token overlap + same-project weighting) — zero LLM, no separate decision-extraction module. Useful before starting a new task to avoid re-stepping on a known landmine.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'Task description or error text to search for. Required. e.g. "TypeError: x is not a function" or "how to configure E2E sync".',
+        },
+        project_path: {
+          type: 'string',
+          description:
+            'Caller\'s project path. Sessions with the same projectPath get a relevance boost. Optional.',
+        },
+        cwd: {
+          type: 'string',
+          description:
+            'Caller\'s working directory. Sessions with the same cwd get a small relevance boost. Optional.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max results (default 5, max 50).',
+          default: 5,
+        },
+        min_score: {
+          type: 'number',
+          description:
+            'Minimum relevance score 0-1 (default 0.1). Lower = more results but noisier.',
+          default: 0.1,
+        },
+      },
+      required: ['query'],
+    },
+    handler: checkPriorAttemptsHandler,
   },
 ];
 

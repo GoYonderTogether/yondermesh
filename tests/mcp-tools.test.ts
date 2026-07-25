@@ -103,7 +103,7 @@ describe('MCP 工具定义（src/mcp/tools.ts）', () => {
     expect(MCP_TOOLS.length).toBeGreaterThanOrEqual(7);
   });
 
-  it('恰好有 12 个工具（yondermesh_* 命名空间，含 4 个 mailbox 工具）', () => {
+  it('恰好有 13 个工具（yondermesh_* 命名空间，含 4 个 mailbox 工具 + check_prior_attempts 辅助）', () => {
     const names = MCP_TOOLS.map((t) => t.name);
     expect(names).toContain('yondermesh_list_agents');
     expect(names).toContain('yondermesh_query_sessions');
@@ -117,7 +117,8 @@ describe('MCP 工具定义（src/mcp/tools.ts）', () => {
     expect(names).toContain('yondermesh_mailbox_reply');
     expect(names).toContain('yondermesh_whoami');
     expect(names).toContain('yondermesh_send');
-    expect(MCP_TOOLS.length).toBe(12);
+    expect(names).toContain('yondermesh_check_prior_attempts');
+    expect(MCP_TOOLS.length).toBe(13);
   });
 
   it('每个工具有 name / description / inputSchema / handler', () => {
