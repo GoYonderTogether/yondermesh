@@ -33,6 +33,10 @@ export interface DaemonConfig {
    * 默认 true。设为 false 可关闭 auto-mount 行为（仅手动 `ymesh mount all`）。
    */
   autoMount?: boolean;
+  /** 是否启用 briefing 定时生成（每小时）。默认 true。 */
+  briefingEnabled?: boolean;
+  /** briefing 定时生成间隔（毫秒），默认 1 小时 */
+  briefingIntervalMs?: number;
 }
 
 /** 默认数据目录（支持 YONDERMESH_HOME 环境变量覆盖） */
@@ -50,5 +54,7 @@ export function defaultDaemonConfig(): DaemonConfig {
     reconcileIntervalMs: 60 * 1000, // 1 分钟
     debounceMs: 1_000, // 1 秒
     autoMount: true,
+    briefingEnabled: true,
+    briefingIntervalMs: 60 * 60 * 1000, // 1 小时
   };
 }

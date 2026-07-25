@@ -49,6 +49,8 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh inject` | Inject a message into a running session (--cli &lt;agent&gt; --session &lt;id&gt; --message "text") |
 | `ymesh transfer` | Transfer a session across agents (--cli &lt;src&gt; --session &lt;id&gt; --target &lt;dst&gt; [--output &lt;path&gt;]) |
 | `ymesh send` | Sync injection v3: send a message to a target agent and get the reply synchronously (--cli &lt;agent&gt; [--session &lt;id&gt;] [--mode stopped|running|new] --message "text" [--model &lt;m&gt;] [--effort &lt;e&gt;] [--cwd &lt;path&gt;] [--timeout &lt;ms&gt;] [--json]) |
+| `ymesh briefing` | generate   Generate a daily briefing (multi-dim slices: agent/project/device/hour + completed/success-rate/stuck) |
+| `ymesh Options:` | [--date &lt;YYYY-MM-DD&gt;] [--output &lt;dir&gt;] [--json] |
 
 ## Global Options
 

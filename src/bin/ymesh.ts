@@ -48,6 +48,7 @@ import {
   listExtracts,
 } from '../extract/index.js';
 import type { ExtractKind } from '../extract/index.js';
+import { BriefingGenerator } from '../briefing/generator.js';
 
 import { McpServer } from '../mcp/server.js';
 import {
@@ -240,6 +241,8 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   inject              向运行中 session 注入消息（--cli <agent> --session <id> --message "text"）
   transfer            跨 agent 转交 session（--cli <src> --session <id> --target <dst> [--output <path>]）
   send                同步注入 v3：发送消息到目标 agent 并同步拿回复（--cli <agent> [--session <id>] [--mode stopped|running|new] --message "text" [--model <m>] [--effort <e>] [--cwd <path>] [--timeout <ms>] [--json]）
+  briefing generate   生成每日晨报（多维切分：agent/项目/设备/时段 + 完成数/完成率/卡住待办）
+                      选项: [--date <YYYY-MM-DD>] [--output <dir>] [--json]
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -333,6 +336,8 @@ Commands:
   inject              Inject a message into a running session (--cli <agent> --session <id> --message "text")
   transfer            Transfer a session across agents (--cli <src> --session <id> --target <dst> [--output <path>])
   send                Sync injection v3: send a message to a target agent and get the reply synchronously (--cli <agent> [--session <id>] [--mode stopped|running|new] --message "text" [--model <m>] [--effort <e>] [--cwd <path>] [--timeout <ms>] [--json])
+  briefing generate   Generate a daily briefing (multi-dim slices: agent/project/device/hour + completed/success-rate/stuck)
+                      Options: [--date <YYYY-MM-DD>] [--output <dir>] [--json]
 
 Install:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -2285,6 +2290,39 @@ async function cmdSend(flags: Record<string, string | boolean>): Promise<number>
   }
 }
 
+/** briefing 命令：生成晨报（基于 SessionStore 多维切分，deterministic） */
+async function cmdBriefing(flags: Record<string, string | boolean>): Promise<number> {
+  const positional = process.argv.slice(process.argv.indexOf('briefing') + 1);
+  const action = positional[0] ?? '';
+  if (action !== 'generate') {
+    console.error('用法: ymesh briefing generate [--date <YYYY-MM-DD>] [--output <dir>] [--json] [--data-dir <dir>] [--db <path>]');
+    return 1;
+  }
+
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  const outputDir = typeof flags.output === 'string' ? flags.output : join(dataDir, 'briefings');
+  const date = typeof flags.date === 'string' ? flags.date : undefined;
+
+  const store = openStore(dbPath);
+  try {
+    const generator = new BriefingGenerator(store, { enabled: true, output: outputDir });
+    const briefing = await generator.generate({ date });
+    if (flags.json) {
+      console.log(JSON.stringify(briefing, null, 2));
+      return 0;
+    }
+    console.log(briefing.markdown);
+    console.log(`\n[ymesh] 晨报已写入 ${join(outputDir, `${briefing.date}.md`)}`);
+    return 0;
+  } catch (err) {
+    console.error(`[yondermesh] briefing 生成失败: ${String(err)}`);
+    return 1;
+  } finally {
+    store.close();
+  }
+}
+
 // ─── 主入口 ──────────────────────────────────────────────────────────────
 
 async function main(): Promise<number> {
@@ -2367,6 +2405,9 @@ async function main(): Promise<number> {
 
     case 'send':
       return await cmdSend(flags);
+
+    case 'briefing':
+      return await cmdBriefing(flags);
 
     case 'rollback':
       {

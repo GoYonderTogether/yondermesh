@@ -49,6 +49,8 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh inject` | 向运行中 session 注入消息（--cli &lt;agent&gt; --session &lt;id&gt; --message "text"） |
 | `ymesh transfer` | 跨 agent 转交 session（--cli &lt;src&gt; --session &lt;id&gt; --target &lt;dst&gt; [--output &lt;path&gt;]） |
 | `ymesh send` | 同步注入 v3：发送消息到目标 agent 并同步拿回复（--cli &lt;agent&gt; [--session &lt;id&gt;] [--mode stopped|running|new] --message "text" [--model &lt;m&gt;] [--effort &lt;e&gt;] [--cwd &lt;path&gt;] [--timeout &lt;ms&gt;] [--json]） |
+| `ymesh briefing` | generate   生成每日晨报（多维切分：agent/项目/设备/时段 + 完成数/完成率/卡住待办） |
+| `ymesh 选项:` | [--date &lt;YYYY-MM-DD&gt;] [--output &lt;dir&gt;] [--json] |
 
 ## 通用选项
 

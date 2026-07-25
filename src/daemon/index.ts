@@ -21,6 +21,7 @@ import { CassImporter, resolveCassDbPath } from '../cass/index.js';
 import { ClaudeCodeImporter, resolveClaudeProjectsPath } from '../claude/index.js';
 import { CodexImporter, resolveCodexSessionsPath } from '../codex/index.js';
 import { mountAll } from '../mount/index.js';
+import { BriefingScheduler } from './briefing-scheduler.js';
 import type { DaemonConfig } from './config.js';
 import { defaultDaemonConfig } from './config.js';
 
@@ -75,6 +76,7 @@ export class YondermeshDaemon {
   private watchers: fs.FSWatcher[] = [];
   private reconcileTimer?: ReturnType<typeof setInterval>;
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private briefingScheduler?: BriefingScheduler;
 
   constructor(config?: Partial<DaemonConfig>) {
     this.config = { ...defaultDaemonConfig(), ...config };
@@ -126,6 +128,16 @@ export class YondermeshDaemon {
         });
     }, this.config.reconcileIntervalMs);
 
+    // 启动 briefing 定时生成（每小时，可配置关闭）
+    if (this.config.briefingEnabled) {
+      this.briefingScheduler = new BriefingScheduler(
+        this.store,
+        this.config.dataDir,
+        this.config.briefingIntervalMs,
+      );
+      this.briefingScheduler.start();
+    }
+
     // 确保进程不会因为 watcher 保持存活（调用方自己决定是否 hold）
   }
 
@@ -158,6 +170,12 @@ export class YondermeshDaemon {
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = undefined;
+    }
+
+    // 清理 briefing scheduler
+    if (this.briefingScheduler) {
+      this.briefingScheduler.stop();
+      this.briefingScheduler = undefined;
     }
 
     // 释放锁
