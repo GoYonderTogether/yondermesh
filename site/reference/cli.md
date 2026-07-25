@@ -53,6 +53,10 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh Options:` | [--date &lt;YYYY-MM-DD&gt;] [--output &lt;dir&gt;] [--json] |
 | `ymesh stats` | Work statistics (multi-dim slices: by day/project/model) |
 | `ymesh Options:` | [--by day|project|model] [--from &lt;time&gt;] [--to &lt;time&gt;] [--json] |
+| `ymesh distill` | run         Distill tags/themes/preferences from extract products (rule-based, zero LLM) |
+| `ymesh distill` | list        List distilled projects |
+| `ymesh distill` | show        Show a distilled project (--hash &lt;projectHash&gt;) |
+| `ymesh Options:` | --project &lt;path&gt; [--json] |
 
 ## Global Options
 

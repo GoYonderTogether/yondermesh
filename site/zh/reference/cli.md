@@ -53,6 +53,10 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh 选项:` | [--date &lt;YYYY-MM-DD&gt;] [--output &lt;dir&gt;] [--json] |
 | `ymesh stats` | 工作统计（多维切片：按天/项目/模型） |
 | `ymesh 选项:` | [--by day|project|model] [--from &lt;time&gt;] [--to &lt;time&gt;] [--json] |
+| `ymesh distill` | run         从 extract 产物蒸馏标签/主题/偏好（规则启发式，零 LLM） |
+| `ymesh distill` | list        列出已蒸馏项目 |
+| `ymesh distill` | show        查看某项目蒸馏产物（--hash &lt;projectHash&gt;） |
+| `ymesh 选项:` | --project &lt;path&gt; [--json] |
 
 ## 通用选项
 

@@ -50,6 +50,7 @@ import {
 import type { ExtractKind } from '../extract/index.js';
 import { BriefingGenerator } from '../briefing/generator.js';
 import { StatsGenerator, sortedDays } from '../briefing/stats.js';
+import { distillProject, listDistilled, getDistilled } from '../distill/index.js';
 
 import { McpServer } from '../mcp/server.js';
 import {
@@ -246,6 +247,10 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
                       选项: [--date <YYYY-MM-DD>] [--output <dir>] [--json]
   stats               工作统计（多维切片：按天/项目/模型）
                       选项: [--by day|project|model] [--from <time>] [--to <time>] [--json]
+  distill run         从 extract 产物蒸馏标签/主题/偏好（规则启发式，零 LLM）
+    distill list        列出已蒸馏项目
+    distill show        查看某项目蒸馏产物（--hash <projectHash>）
+                      选项: --project <path> [--json]
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -343,6 +348,10 @@ Commands:
                       Options: [--date <YYYY-MM-DD>] [--output <dir>] [--json]
   stats               Work statistics (multi-dim slices: by day/project/model)
                       Options: [--by day|project|model] [--from <time>] [--to <time>] [--json]
+  distill run         Distill tags/themes/preferences from extract products (rule-based, zero LLM)
+    distill list        List distilled projects
+    distill show        Show a distilled project (--hash <projectHash>)
+                      Options: --project <path> [--json]
 
 Install:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -2390,6 +2399,80 @@ function cmdStats(flags: Record<string, string | boolean>): number {
   }
 }
 
+/** distill 命令：从 extract 产物蒸馏标签/主题/偏好 */
+function cmdDistill(flags: Record<string, string | boolean>): number {
+  const positional = process.argv.slice(process.argv.indexOf('distill') + 1);
+  const action = positional[0] ?? '';
+
+  if (action === 'list') {
+    const list = listDistilled();
+    if (flags.json) {
+      console.log(JSON.stringify(list, null, 2));
+      return 0;
+    }
+    if (list.length === 0) {
+      console.log('(无蒸馏产物)');
+      return 0;
+    }
+    for (const d of list) {
+      console.log(`${d.projectHash}  ${d.projectPath}  tags=${d.tags.length} themes=${d.themes.length} prefs=${d.preferences.length}`);
+    }
+    return 0;
+  }
+
+  if (action === 'show') {
+    const hash = typeof flags.hash === 'string' ? flags.hash : positional[1] ?? '';
+    if (!hash) {
+      console.error('用法: ymesh distill show --hash <projectHash>');
+      return 1;
+    }
+    const d = getDistilled(hash);
+    if (!d) {
+      console.error(`[yondermesh] 未找到蒸馏产物: ${hash}`);
+      return 1;
+    }
+    console.log(JSON.stringify(d, null, 2));
+    return 0;
+  }
+
+  if (action !== 'run') {
+    console.error('用法: ymesh distill run --project <path> [--json] | list | show --hash <hash>');
+    return 1;
+  }
+
+  const projectPath = typeof flags.project === 'string' ? flags.project : '';
+  if (!projectPath) {
+    console.error('用法: ymesh distill run --project <path> [--json]');
+    return 1;
+  }
+
+  try {
+    const result = distillProject({ projectPath });
+    if (flags.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return 0;
+    }
+    console.log(`项目: ${result.projectPath} (${result.projectHash})`);
+    console.log(`标签 (${result.tags.length}):`);
+    for (const t of result.tags.slice(0, 20)) {
+      console.log(`  ${t.tag}: ${t.count}`);
+    }
+    console.log(`主题 (${result.themes.length}):`);
+    for (const t of result.themes) {
+      console.log(`  ${t.theme}: ${t.count}`);
+    }
+    console.log(`偏好 (${result.preferences.length}):`);
+    for (const p of result.preferences.slice(0, 20)) {
+      console.log(`  [${p.source}] ${p.text}`);
+    }
+    console.log(`覆盖率: ${(result.stats.tagCoverage * 100).toFixed(1)}%`);
+    return 0;
+  } catch (err) {
+    console.error(`[yondermesh] distill 失败: ${String(err)}`);
+    return 1;
+  }
+}
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const { command, flags } = parseArgs(argv);
@@ -2476,6 +2559,9 @@ async function main(): Promise<number> {
 
     case 'stats':
       return cmdStats(flags);
+
+    case 'distill':
+      return cmdDistill(flags);
 
     case 'rollback':
       {
