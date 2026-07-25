@@ -680,12 +680,16 @@ async function wsRpcNewSession(req: TriggerRequest, start: number, timeoutMs: nu
       timeout: timeoutMs,
       cwd: req.cwd,
     });
+    const stdout = r.stdout ?? '';
+    const stderr = r.stderr ?? '';
+    const errTail = (stderr.trim() || stdout.trim()).slice(0, 200);
     return {
       delivered: r.status === 0,
-      response: r.stdout || r.stderr || '',
+      response: stdout || stderr,
       exitCode: r.status ?? -1,
       channel: 'ws-rpc',
       latencyMs: Date.now() - start,
+      error: r.status === 0 ? undefined : (errTail || `exit ${r.status ?? -1}`),
     };
   } catch (err) {
     return { delivered: false, response: '', channel: 'ws-rpc', latencyMs: Date.now() - start, error: String(err) };
@@ -1670,13 +1674,19 @@ export class TriggerAdapter {
               cwd: req.cwd,
               env: { ...process.env, ...(cmd.env ?? {}) },
             });
-            const response = r.stdout || r.stderr || '';
+            const stdout = r.stdout ?? '';
+            const stderr = r.stderr ?? '';
+            // 失败时优先把 stderr 作为 error（更短、更聚焦），response 仍保留 stdout
+            // 供 ReplyAdapter 在 delivered=true 时清洗；delivered=false 时 ReplyAdapter
+            // 会丢弃 response，所以 error 是失败时唯一对外的诊断通道。
+            const errTail = (stderr.trim() || stdout.trim()).slice(0, 200);
             return {
               delivered: r.status === 0,
-              response,
+              response: stdout || stderr,
               exitCode: r.status ?? -1,
               channel: 'cli-spawn',
               latencyMs: Date.now() - start,
+              error: r.status === 0 ? undefined : (errTail || `exit ${r.status ?? -1}`),
             };
           } catch (err) {
             return { delivered: false, response: '', channel: 'cli-spawn', latencyMs: Date.now() - start, error: String(err) };
@@ -1729,12 +1739,16 @@ export class TriggerAdapter {
         timeout: req.timeoutMs ?? 60000,
         cwd: req.cwd,
       });
+      const stdout = r.stdout ?? '';
+      const stderr = r.stderr ?? '';
+      const errTail = (stderr.trim() || stdout.trim()).slice(0, 200);
       return {
         delivered: r.status === 0,
-        response: r.stdout || r.stderr || '',
+        response: stdout || stderr,
         exitCode: r.status ?? -1,
         channel: 'cli-spawn',
         latencyMs: Date.now() - start,
+        error: r.status === 0 ? undefined : (errTail || `exit ${r.status ?? -1}`),
       };
     } catch (err) {
       return { delivered: false, response: '', channel: 'cli-spawn', latencyMs: Date.now() - start, error: String(err) };

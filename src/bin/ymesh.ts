@@ -2276,6 +2276,14 @@ async function cmdSend(flags: Record<string, string | boolean>): Promise<number>
   };
 
   const mailbox = openMailbox(flags);
+  // 设 busy_timeout=5s：在并发 ymesh mcp / 多个 send 进程同时写审计时，
+  // SQLite 默认 busy_timeout=0 会立即抛 SQLITE_BUSY。设 5s 让写操作短暂等待
+  // 锁释放，绝大多数情况下一次就能成功。MailboxCore 未暴露 busy_timeout
+  // 配置，这里通过运行时访问私有 db 字段设置（TS private 仅编译期检查）。
+  try {
+    (mailbox as unknown as { db: { exec: (sql: string) => void } })
+      .db.exec('PRAGMA busy_timeout = 5000');
+  } catch { /* 忽略——最坏情况退回立即失败 + verifier 重试兜底 */ }
   try {
     const result = await mailbox.send(target);
     if (flags.json) {
