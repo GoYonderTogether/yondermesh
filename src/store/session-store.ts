@@ -83,6 +83,10 @@ export class SessionStore {
     this.db = new DatabaseSync(location);
     // 启用外键约束，保证 source_instance / session / revision 引用完整
     this.db.exec('PRAGMA foreign_keys = ON');
+    // 并发安全：busy_timeout 让短时锁竞争自动重试，避免立即抛 SQLITE_BUSY；
+    // WAL 模式允许读写并发（subagent 并行跑 verifier 时不再互相阻塞）
+    this.db.exec('PRAGMA busy_timeout = 5000');
+    this.db.exec('PRAGMA journal_mode = WAL');
     this.ensureSchema();
   }
 
@@ -103,6 +107,8 @@ export class SessionStore {
    * 历史 messages 需要一次性回填。幂等（NOT IN 防重复）。
    *
    * 快速路径：FTS 行数 >= messages 行数 → 已同步，跳过。
+   * 大库保护：messages > 50000 且 FTS 空 → 跳过自动回填（避免阻塞所有命令），
+   *           由 `ymesh sync fts` 显式触发（分批回填）。
    */
   private syncFtsIfStale(): void {
     const row = this.db
@@ -115,6 +121,15 @@ export class SessionStore {
     const msgTotal = (row.m as number) ?? 0;
     const ftsTotal = (row.f as number) ?? 0;
     if (ftsTotal >= msgTotal) return; // 已同步
+    // 大库保护：超过 5 万条且 FTS 空，自动回填会阻塞数分钟~数小时，
+    // 跳过避免拖死所有 store 构造（stats/sessions/send 等）。
+    if (msgTotal > 50_000 && ftsTotal === 0) {
+      console.warn(
+        `[yondermesh] messages 表 ${msgTotal} 条，FTS 未回填。跳过自动回填以避免阻塞。` +
+          ` 如需全文搜索，请跑 \`ymesh sync fts\` 显式分批回填。`,
+      );
+      return;
+    }
     this.db.exec(`
       INSERT INTO messages_fts(content, session_id, message_id, revision_id)
       SELECT content, session_id, id, revision_id FROM messages
