@@ -4,6 +4,7 @@ import { AppShell } from './shell/AppShell'
 
 const BoardPage = lazy(() => import('@/features/board/Board').then((m) => ({ default: m.Board })))
 const StewardPage = lazy(() => import('@/features/steward/StewardChat').then((m) => ({ default: m.StewardChat })))
+const ToolsPage = lazy(() => import('@/features/tools/ToolsRail').then((m) => ({ default: m.ToolsRail })))
 const LoopsPage = lazy(() => import('@/features/loops/LoopsDashboard').then((m) => ({ default: m.LoopsDashboard })))
 const SettingsLayout = lazy(() => import('@/features/settings/SettingsLayout').then((m) => ({ default: m.SettingsLayout })))
 const DevicesPage = lazy(() => import('@/features/settings/pages').then((m) => ({ default: m.DevicesPage })))
@@ -23,6 +24,7 @@ export function AppRouter() {
       <Route element={<AppShell />}>
         <Route index element={<BoardPage />} />
         <Route path="steward" element={<StewardPage />} />
+        <Route path="tools" element={<ToolsPage />} />
         <Route path="loops" element={<LoopsPage />} />
         <Route path="settings" element={<SettingsLayout />}>
           <Route index element={<DevicesPage />} />

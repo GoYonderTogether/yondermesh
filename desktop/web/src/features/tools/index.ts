@@ -1,0 +1,6 @@
+export { ToolsRail } from './ToolsRail'
+export { CollapsibleSection } from './CollapsibleSection'
+export { TerminalPanel } from './TerminalPanel'
+export { TaskListPanel } from './TaskListPanel'
+export { FileBrowserPanel } from './FileBrowserPanel'
+export type { ToolKind, FileNode, TerminalLine } from './types'
