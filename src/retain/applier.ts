@@ -285,10 +285,10 @@ function applyArchive(
 ): { sessionsArchived: number; messagesDeleted: number } {
   const cutoff = Date.now() - policy.archive.olderThanDays * 24 * 60 * 60 * 1000;
 
-  // 找出要归档的 session 列表
+  // 用 started_at 判断老旧（last_seen_at 被采集器持续刷新）
   const sessions = db
     .prepare(
-      `SELECT id FROM sessions WHERE last_seen_at < ?`,
+      `SELECT id FROM sessions WHERE started_at < ?`,
     )
     .all(cutoff) as Array<{ id: string }>;
 
@@ -297,11 +297,10 @@ function applyArchive(
   }
 
   // 备份这些 session 的消息（去重）
-  // 大库优化：只备份唯一 content，避免备份几百万条重复消息
   const uniqueContents = db
     .prepare(
       `SELECT DISTINCT content FROM messages
-       WHERE session_id IN (SELECT id FROM sessions WHERE last_seen_at < ?)`,
+       WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)`,
     )
     .all(cutoff) as Array<{ content: string }>;
 
@@ -309,28 +308,23 @@ function applyArchive(
     writeBackup(content, { reason: 'archive', originalLength: content.length });
   }
 
-  // 删除这些 session 的 messages
-  // 注意：不删 sessions 表行（keepSessionMetadata: true），保留元数据用于检索
-  // 如果 keepSessionMetadata: false，则同时删 sessions 行
   const deleteMsgs = db.prepare(
-    'DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE last_seen_at < ?)',
+    'DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE started_at < ?)',
   );
 
   db.exec('BEGIN');
   try {
     const result = deleteMsgs.run(cutoff);
-    let sessionsArchived = sessions.length;
+    const sessionsArchived = sessions.length;
 
     if (!policy.archive.keepSessionMetadata) {
-      // 同时删 sessions 行（注意：source_instances 不删，保留来源信息）
       const deleteSessions = db.prepare(
-        'DELETE FROM sessions WHERE last_seen_at < ?',
+        'DELETE FROM sessions WHERE started_at < ?',
       );
       deleteSessions.run(cutoff);
     } else {
-      // 标记 retention = 'archived'
       const markArchived = db.prepare(
-        "UPDATE sessions SET retention = 'archived' WHERE last_seen_at < ?",
+        "UPDATE sessions SET retention = 'archived' WHERE started_at < ?",
       );
       markArchived.run(cutoff);
     }

@@ -283,6 +283,7 @@ function scanArchive(
 ): ArchiveReport {
   const cutoff = Date.now() - policy.archive.olderThanDays * 24 * 60 * 60 * 1000;
 
+  // 用 started_at 判断老旧（last_seen_at 被采集器持续刷新，不能反映真实年龄）
   const row = db
     .prepare(
       `SELECT
@@ -292,7 +293,7 @@ function scanArchive(
          MIN(s.started_at) AS oldest
        FROM sessions s
        LEFT JOIN messages m ON m.session_id = s.id
-       WHERE s.last_seen_at < ? AND m.id IS NOT NULL`,
+       WHERE s.started_at < ? AND m.id IS NOT NULL`,
     )
     .get(cutoff) as {
     sessions: number;
