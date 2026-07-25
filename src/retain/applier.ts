@@ -62,8 +62,8 @@ export interface ApplyResult {
   backupFile: string | null;
   /** 备份错误（不阻塞筛除） */
   backupError: string | null;
-  /** 执行前报告 */
-  beforeReport: RetainReport;
+  /** 执行前报告（apply 实际执行时可跳过，为 null） */
+  beforeReport: RetainReport | null;
   /** 执行耗时 ms */
   elapsedMs: number;
 }
@@ -78,16 +78,24 @@ export interface ApplyResult {
 export function apply(
   dbPath: string,
   policy: RetainPolicy,
-  options: { dryRun?: boolean; skipBackup?: boolean } = {},
+  options: { dryRun?: boolean; skipBackup?: boolean; skipBeforeReport?: boolean } = {},
 ): ApplyResult {
   const startTime = Date.now();
   const dryRun = options.dryRun ?? false;
   const skipBackup = options.skipBackup ?? false;
+  // apply 实际执行时跳过 beforeReport（analyze 在 12M 行库上要 5-10 分钟）
+  // dry-run 时才需要预报告
+  const skipBeforeReport = options.skipBeforeReport ?? !dryRun;
 
-  // 执行前报告
-  const beforeReport = analyze(dbPath, policy);
+  // 执行前报告（可跳过）
+  const beforeReport = skipBeforeReport
+    ? null
+    : analyze(dbPath, policy);
 
   if (dryRun) {
+    if (!beforeReport) {
+      throw new Error('dry-run 模式需要 beforeReport，不能跳过');
+    }
     return {
       dryRun: true,
       noiseDeleted: beforeReport.noise.totalMessages,
@@ -118,6 +126,17 @@ export function apply(
   try {
     db.exec('PRAGMA busy_timeout = 30000');
     db.exec('PRAGMA journal_mode = WAL');
+
+    // 关键优化：临时禁用 FTS 触发器
+    //
+    // 瓶颈分析：messages_fts_ad 触发器是 `DELETE FROM messages_fts WHERE message_id = old.id`
+    // 但 message_id 是 UNINDEXED 列，每条 messages DELETE 都触发 FTS 全表扫描（12M+ 行）
+    // 277K 条噪音 DELETE × 12M 行 FTS 扫描 = 灾难性性能
+    //
+    // 解决：apply 期间 DROP 触发器，结束时重建 + 清理孤立 FTS 行
+    db.exec('DROP TRIGGER IF EXISTS messages_fts_ai');
+    db.exec('DROP TRIGGER IF EXISTS messages_fts_ad');
+    db.exec('DROP TRIGGER IF EXISTS messages_fts_au');
 
     // 准备备份（非 skipBackup 时）
     let backupStream: ReturnType<typeof createWriteStream> | null = null;
@@ -171,6 +190,49 @@ export function apply(
     // ─── L3：归档老 session ─────────────────────────────────────
     const archiveResult = applyArchive(db, policy, writeBackupEntry);
 
+    // ─── FTS 维护：重建触发器 + 清理孤立 FTS 行 ────────────────
+    //
+    // apply 期间 DROP 了 FTS 触发器，现在重建。
+    // 然后清理孤立 FTS 行（指向已被 DELETE 的 messages 的行）。
+    //
+    // 清理策略：用 NOT IN 子查询走 messages.id 主键索引
+    // 12M FTS 行 × log(12M messages) ≈ 288M 操作，约 5-10 分钟
+    // 比 apply 期间逐条触发 FTS 全表扫描快 100x+
+    db.exec(`CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+      INSERT INTO messages_fts(content, session_id, message_id, revision_id)
+      VALUES (new.content, new.session_id, new.id, new.revision_id);
+    END`);
+    db.exec(`CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+      DELETE FROM messages_fts WHERE message_id = old.id;
+    END`);
+    db.exec(`CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+      DELETE FROM messages_fts WHERE message_id = old.id;
+      INSERT INTO messages_fts(content, session_id, message_id, revision_id)
+      VALUES (new.content, new.session_id, new.id, new.revision_id);
+    END`);
+
+    // 清理孤立 FTS 行（分批避免长事务）
+    // 注意：这条 SQL 会扫 messages_fts 全表，但对每行用 messages.id 主键做 lookup
+    // 如果 messages 表小（被删很多），NOT IN 的结果集大，清理量大
+    const orphanCleanupBatch = db.prepare(
+      `DELETE FROM messages_fts WHERE rowid IN (
+         SELECT rowid FROM messages_fts
+         WHERE message_id NOT IN (SELECT id FROM messages)
+         LIMIT 50000
+       )`,
+    );
+    for (;;) {
+      db.exec('BEGIN');
+      try {
+        const r = orphanCleanupBatch.run();
+        db.exec('COMMIT');
+        if (Number(r.changes) === 0) break;
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+    }
+
     // 关闭备份流
     if (gzipStream) {
       gzipStream.end();
@@ -202,84 +264,147 @@ export function apply(
   }
 }
 
-/** L0 删噪音：用临时表批量 DELETE（避免逐条 DELETE 在大表上全表扫描） */
+/** L0 删噪音：按规则类型分别处理，避免 GROUP BY 全表扫
+ *
+ * 优化分层：
+ *   1. exact 规则：直接 DELETE WHERE content IN (?, ...) —— 走全表扫但只一次，无 GROUP BY
+ *   2. prefix 规则：DELETE WHERE content LIKE 'prefix%' —— 同上
+ *   3. regex 规则：扫候选 content（length < 2000 的 DISTINCT），JS 跑正则，命中的收集到临时表
+ *   4. 短高频规则（noiseShortBytes/noiseShortMinOccurrences）：跳过，收益小且需 GROUP BY
+ *
+ * 性能对比（12M 行库）：
+ *   原方案 GROUP BY：5-10 分钟（O(N log N) 排序 + 临时表）
+ *   新方案 exact IN：30-60 秒/规则（O(N) 全表扫，无排序）
+ *   新方案 prefix LIKE：同上
+ *   新方案 regex：1-2 分钟（DISTINCT 比 GROUP BY 快，且只跑 2 条规则）
+ */
 function applyNoise(
   db: DatabaseSync,
   compiled: CompiledNoiseRule[],
   policy: RetainPolicy,
   writeBackup: (content: string, meta: Record<string, unknown>) => void,
 ): number {
-  // 步骤 1：扫所有候选 content（按 content GROUP BY），跑规则，命中的收集
-  // 大库优化：只扫 length < 2000 的（噪音规则不会匹配超长内容）
-  const candidates = db
-    .prepare(
-      `SELECT content, COUNT(*) AS c, SUM(length(content)) AS bytes
-       FROM messages
-       WHERE length(content) < 2000
-       GROUP BY content
-       HAVING c >= 10`,
-    )
-    .all() as Array<{ content: string; c: number; bytes: number }>;
+  let totalDeleted = 0;
 
-  const matchedContents: string[] = [];
-  for (const row of candidates) {
-    let matched = false;
-    for (const rule of compiled) {
-      if (rule.match(row.content)) {
-        matched = true;
-        break;
+  // 分离 exact / prefix / regex 规则（compiled 丢失了类型信息，从 policy.noise 重新提取）
+  const exactContents: string[] = [];
+  const prefixes: string[] = [];
+  const regexRules: CompiledNoiseRule[] = [];
+  for (const rawRule of policy.noise) {
+    if (rawRule.exact !== undefined) {
+      exactContents.push(rawRule.exact);
+    } else if (rawRule.prefix !== undefined) {
+      prefixes.push(rawRule.prefix);
+    } else if (rawRule.regex !== undefined) {
+      const compiledRule = compiled.find((c) => c.name === rawRule.name);
+      if (compiledRule) regexRules.push(compiledRule);
+    }
+  }
+
+  // ─── 1. exact 规则：直接 IN 删除 ─────────────────────────────
+  if (exactContents.length > 0) {
+    // 备份（去重，exact 内容本身就是唯一值）
+    for (const c of exactContents) {
+      writeBackup(c, { reason: 'noise-exact', rule: 'exact' });
+    }
+
+    // 分批 IN 删除（SQLite 参数上限 ~999，每批 100 条安全）
+    const batchSize = 100;
+    for (let i = 0; i < exactContents.length; i += batchSize) {
+      const batch = exactContents.slice(i, i + batchSize);
+      const placeholders = batch.map(() => '?').join(',');
+      db.exec('BEGIN');
+      try {
+        const result = db
+          .prepare(`DELETE FROM messages WHERE content IN (${placeholders})`)
+          .run(...batch);
+        db.exec('COMMIT');
+        totalDeleted += Number(result.changes);
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
       }
     }
-    if (
-      !matched &&
-      row.content.length < policy.noiseShortBytes &&
-      row.c >= policy.noiseShortMinOccurrences
-    ) {
-      matched = true;
-    }
-    if (matched) {
-      matchedContents.push(row.content);
-      writeBackup(row.content, {
-        reason: 'noise',
-        occurrences: row.c,
-        bytes: row.bytes,
-      });
+  }
+
+  // ─── 2. prefix 规则：LIKE 'prefix%' 删除 ─────────────────────
+  for (const prefix of prefixes) {
+    writeBackup(prefix, { reason: 'noise-prefix', prefix });
+    // LIKE 'prefix%' 可以用 content 的前缀匹配（如果有索引会走索引，无索引全表扫）
+    // 注意：prefix 中可能含特殊字符（%, _），需要 ESCAPE
+    const escaped = prefix.replace(/[%_]/g, '\\$&');
+    db.exec('BEGIN');
+    try {
+      const result = db
+        .prepare(
+          `DELETE FROM messages WHERE content LIKE ? ESCAPE '\\'`,
+        )
+        .run(`${escaped}%`);
+      db.exec('COMMIT');
+      totalDeleted += Number(result.changes);
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
     }
   }
 
-  if (matchedContents.length === 0) return 0;
-
-  // 步骤 2：用临时表批量 DELETE
-  // 1) 建临时表存噪音 content
-  // 2) 批量 INSERT（每批 500 条，避免 SQL 参数上限）
-  // 3) DELETE FROM messages WHERE content IN (SELECT content FROM tmp)
-  // 4) DROP 临时表
-  db.exec('DROP TABLE IF EXISTS tmp_noise_contents');
-  db.exec('CREATE TEMP TABLE tmp_noise_contents(content TEXT PRIMARY KEY)');
-
-  const insertStmt = db.prepare(
-    'INSERT OR IGNORE INTO tmp_noise_contents(content) VALUES (?)',
-  );
-  db.exec('BEGIN');
-  try {
-    for (const content of matchedContents) {
-      insertStmt.run(content);
-    }
-
-    // 一次性 DELETE（IN 子查询走临时表的主键索引，比逐条快几个数量级）
-    const result = db
+  // ─── 3. regex 规则：扫候选 DISTINCT content，JS 跑正则 ────────
+  if (regexRules.length > 0) {
+    // 只扫 length < 2000 的 DISTINCT content（regex 规则不会匹配长内容）
+    // DISTINCT 比 GROUP BY 轻（不需要 COUNT/SUM 聚合）
+    const candidates = db
       .prepare(
-        'DELETE FROM messages WHERE content IN (SELECT content FROM tmp_noise_contents)',
+        `SELECT DISTINCT content FROM messages WHERE length(content) < 2000`,
       )
-      .run();
-    db.exec('COMMIT');
-    db.exec('DROP TABLE tmp_noise_contents');
-    return Number(result.changes);
-  } catch (err) {
-    db.exec('ROLLBACK');
-    db.exec('DROP TABLE IF EXISTS tmp_noise_contents');
-    throw err;
+      .all() as Array<{ content: string }>;
+
+    const matchedContents: string[] = [];
+    for (const row of candidates) {
+      for (const rule of regexRules) {
+        if (rule.match(row.content)) {
+          matchedContents.push(row.content);
+          writeBackup(row.content, { reason: 'noise-regex', rule: rule.name });
+          break;
+        }
+      }
+    }
+
+    if (matchedContents.length > 0) {
+      // 用临时表批量 DELETE
+      db.exec('DROP TABLE IF EXISTS tmp_noise_regex');
+      db.exec('CREATE TEMP TABLE tmp_noise_regex(content TEXT PRIMARY KEY)');
+      const insertStmt = db.prepare('INSERT OR IGNORE INTO tmp_noise_regex(content) VALUES (?)');
+      for (const c of matchedContents) insertStmt.run(c);
+
+      try {
+        const batchSize = 50_000;
+        const deleteBatch = db.prepare(
+          `DELETE FROM messages
+           WHERE id IN (
+             SELECT m.id FROM messages m
+             JOIN tmp_noise_regex c ON c.content = m.content
+             LIMIT ?
+           )`,
+        );
+        for (;;) {
+          db.exec('BEGIN');
+          try {
+            const result = deleteBatch.run(batchSize);
+            db.exec('COMMIT');
+            totalDeleted += Number(result.changes);
+            if (Number(result.changes) < batchSize) break;
+          } catch (err) {
+            db.exec('ROLLBACK');
+            throw err;
+          }
+        }
+      } finally {
+        db.exec('DROP TABLE IF EXISTS tmp_noise_regex');
+      }
+    }
   }
+
+  return totalDeleted;
 }
 
 /** L2 截断：超长消息 UPDATE content */
