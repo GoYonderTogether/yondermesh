@@ -62,8 +62,8 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh --session-format` | jsonl|sqlite|json|markdown --yes（覆盖已存在） |
 | `ymesh sync` | fts            显式分批回填 messages_fts 全文索引（大库自动回填被跳过时用） |
 | `ymesh 选项:` | --batch &lt;n&gt;（每批条数，默认 5000）[--json] |
-| `ymesh retain` | analyze      扫描数据库冗余（噪音/超长/老旧 session），报告可压缩量（只读） |
-| `ymesh retain` | apply        执行筛除（L0 删噪音 + L2 截断 + L3 归档），含去重备份 |
+| `ymesh retain` | analyze      扫描数据库冗余（噪音/超长/老旧 session + session 级分类），报告可压缩量（只读） |
+| `ymesh retain` | apply        执行筛除（L0 删噪音 + L2 截断 + SL0/SL1/SL2 session 级 + L3 归档），含去重备份 |
 | `ymesh 选项:` | --dry-run（预演）--no-backup（跳过备份）[--db &lt;path&gt;] [--json] |
 
 ## 通用选项

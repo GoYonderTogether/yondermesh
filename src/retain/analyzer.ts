@@ -17,6 +17,8 @@ import type {
   CompiledNoiseRule,
   RetainPolicy,
 } from './policy.js';
+import { classifySessions } from './session-classifier.js';
+import type { SessionClassification } from './session-classifier.js';
 
 /** L0 噪音报告 */
 export interface NoiseReport {
@@ -67,6 +69,8 @@ export interface RetainReport {
   noise: NoiseReport;
   truncate: TruncateReport;
   archive: ArchiveReport;
+  /** Session 级分类报告（SL0/SL1/SL2） */
+  session: SessionClassification;
   /** 综合预期：筛除后剩余消息数 */
   projectedRemainingMessages: number;
   /** 综合预期：筛除后剩余字节数 */
@@ -109,15 +113,41 @@ export function analyze(
     const truncateReport = scanTruncate(db, policy);
     const archiveReport = scanArchive(db, policy);
 
-    // 综合预期（注意：L0 和 L2 可能重叠——同一消息既是噪音又超长，
-    // 这里保守估计：先删 L0，再对剩余跑 L2，避免重复计数）
+    // Session 级分类（SL0/SL1/SL2）—— 只读，但需要读写模式以建临时表
+    // 改用 readOnly: false 重新打开（analyze 主连接是只读的）
+    let sessionClassification: SessionClassification;
+    const dbRw = new DatabaseSync(dbPath);
+    try {
+      dbRw.exec('PRAGMA busy_timeout = 5000');
+      dbRw.exec('PRAGMA journal_mode = WAL');
+      sessionClassification = classifySessions(dbRw, policy, compiledRules);
+    } finally {
+      dbRw.close();
+    }
+
+    // 综合预期（保守估计：各层独立累加，实际有重叠会少删一些）
+    // 顺序：L0 删噪音 → L2 截断 → SL0 整场删 → SL1 删短 session 消息 → SL2 删重复 → L3 归档
     const afterNoiseMessages =
       totalRow.msg_count - noiseReport.totalMessages;
     const afterNoiseBytes = totalRow.msg_bytes - noiseReport.totalBytes;
-    // L2 节省的字节是相对于"剩余消息"的，但 truncateReport 是基于全库扫的，
-    // 这里用 truncateReport.totalSavedBytes 作为上界估计（实际略小，可接受）
-    const projectedRemainingMessages = afterNoiseMessages - truncateReport.totalMessages;
-    const projectedRemainingBytes = afterNoiseBytes - truncateReport.totalSavedBytes;
+    const projectedRemainingMessages = Math.max(
+      0,
+      afterNoiseMessages -
+        truncateReport.totalMessages -
+        sessionClassification.totalNoiseMessages -
+        sessionClassification.totalShortMessages -
+        sessionClassification.totalDuplicateMessages -
+        archiveReport.messagesAffected,
+    );
+    const projectedRemainingBytes = Math.max(
+      0,
+      afterNoiseBytes -
+        truncateReport.totalSavedBytes -
+        sessionClassification.totalNoiseBytes -
+        sessionClassification.totalShortBytes -
+        sessionClassification.totalDuplicateBytes -
+        archiveReport.bytesAffected,
+    );
 
     return {
       databasePath: dbPath,
@@ -127,8 +157,9 @@ export function analyze(
       noise: noiseReport,
       truncate: truncateReport,
       archive: archiveReport,
-      projectedRemainingMessages: Math.max(0, projectedRemainingMessages),
-      projectedRemainingBytes: Math.max(0, projectedRemainingBytes),
+      session: sessionClassification,
+      projectedRemainingMessages,
+      projectedRemainingBytes,
     };
   } finally {
     db.close();

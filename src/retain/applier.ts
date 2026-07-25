@@ -30,6 +30,8 @@ import type {
 } from './policy.js';
 import { analyze } from './analyzer.js';
 import type { RetainReport } from './analyzer.js';
+import { classifySessions } from './session-classifier.js';
+import type { SessionClassification } from './session-classifier.js';
 
 /** 执行结果 */
 export interface ApplyResult {
@@ -40,6 +42,18 @@ export interface ApplyResult {
   noiseBackupUniqueContents: number;
   /** L2 实际截断的消息数 */
   truncated: number;
+  /** SL0 实际删除的 session 数（整场删） */
+  sessionNoiseDeleted: number;
+  /** SL0 实际删除的消息数 */
+  sessionNoiseMessagesDeleted: number;
+  /** SL1 实际处理的 session 数（保留 metadata，删 messages） */
+  sessionShortCompacted: number;
+  /** SL1 实际删除的消息数 */
+  sessionShortMessagesDeleted: number;
+  /** SL2 实际处理的 session 数（保留最新，删其余 messages） */
+  sessionDuplicateCompacted: number;
+  /** SL2 实际删除的消息数 */
+  sessionDuplicateMessagesDeleted: number;
   /** L3 实际归档的 session 数 */
   sessionsArchived: number;
   /** L3 实际删除的消息数 */
@@ -79,6 +93,12 @@ export function apply(
       noiseDeleted: beforeReport.noise.totalMessages,
       noiseBackupUniqueContents: 0,
       truncated: beforeReport.truncate.totalMessages,
+      sessionNoiseDeleted: beforeReport.session.noiseSessions.length,
+      sessionNoiseMessagesDeleted: beforeReport.session.totalNoiseMessages,
+      sessionShortCompacted: beforeReport.session.shortSessions.length,
+      sessionShortMessagesDeleted: beforeReport.session.totalShortMessages,
+      sessionDuplicateCompacted: beforeReport.session.duplicateSessions.length,
+      sessionDuplicateMessagesDeleted: beforeReport.session.totalDuplicateMessages,
       sessionsArchived: beforeReport.archive.sessionsToArchive,
       archiveMessagesDeleted: beforeReport.archive.messagesAffected,
       backupFile: null,
@@ -135,6 +155,19 @@ export function apply(
     // ─── L2：截断长内容 ─────────────────────────────────────────
     const truncated = applyTruncate(db, policy, writeBackupEntry);
 
+    // ─── Session 级分类（SL0/SL1/SL2） ─────────────────────────
+    // L0 已删噪音消息后，重新跑分类（基于最新数据库状态）
+    const classification = classifySessions(db, policy, compiled);
+
+    // ─── SL0：删纯噪音 session（整场删） ────────────────────────
+    const sl0Result = applySessionNoise(db, classification, writeBackupEntry);
+
+    // ─── SL1：压缩短问答 session（保留 metadata，删 messages） ──
+    const sl1Result = applyShortSessions(db, classification, writeBackupEntry);
+
+    // ─── SL2：删重复 session 消息（保留最新一场） ───────────────
+    const sl2Result = applyDuplicateSessions(db, classification, writeBackupEntry);
+
     // ─── L3：归档老 session ─────────────────────────────────────
     const archiveResult = applyArchive(db, policy, writeBackupEntry);
 
@@ -151,6 +184,12 @@ export function apply(
       noiseDeleted,
       noiseBackupUniqueContents,
       truncated,
+      sessionNoiseDeleted: sl0Result.sessionsDeleted,
+      sessionNoiseMessagesDeleted: sl0Result.messagesDeleted,
+      sessionShortCompacted: sl1Result.sessionsCompacted,
+      sessionShortMessagesDeleted: sl1Result.messagesDeleted,
+      sessionDuplicateCompacted: sl2Result.sessionsCompacted,
+      sessionDuplicateMessagesDeleted: sl2Result.messagesDeleted,
       sessionsArchived: archiveResult.sessionsArchived,
       archiveMessagesDeleted: archiveResult.messagesDeleted,
       backupFile,
@@ -163,16 +202,14 @@ export function apply(
   }
 }
 
-/** L0 删噪音：分两步（短内容 + 长内容） */
+/** L0 删噪音：用临时表批量 DELETE（避免逐条 DELETE 在大表上全表扫描） */
 function applyNoise(
   db: DatabaseSync,
   compiled: CompiledNoiseRule[],
   policy: RetainPolicy,
   writeBackup: (content: string, meta: Record<string, unknown>) => void,
 ): number {
-  let totalDeleted = 0;
-
-  // 步骤 1：扫所有候选 content（按 content GROUP BY），跑规则，命中的全删
+  // 步骤 1：扫所有候选 content（按 content GROUP BY），跑规则，命中的收集
   // 大库优化：只扫 length < 2000 的（噪音规则不会匹配超长内容）
   const candidates = db
     .prepare(
@@ -186,7 +223,6 @@ function applyNoise(
 
   const matchedContents: string[] = [];
   for (const row of candidates) {
-    // 跑显式规则
     let matched = false;
     for (const rule of compiled) {
       if (rule.match(row.content)) {
@@ -194,7 +230,6 @@ function applyNoise(
         break;
       }
     }
-    // 极短高频也算噪音（未匹配显式规则但 < noiseShortBytes 且 > noiseShortMinOccurrences）
     if (
       !matched &&
       row.content.length < policy.noiseShortBytes &&
@@ -204,7 +239,6 @@ function applyNoise(
     }
     if (matched) {
       matchedContents.push(row.content);
-      // 备份（去重）
       writeBackup(row.content, {
         reason: 'noise',
         occurrences: row.c,
@@ -213,24 +247,39 @@ function applyNoise(
     }
   }
 
-  // 批量删除：每个唯一 content 一次 DELETE
-  // 用参数化查询避免 SQL 注入
-  const deleteStmt = db.prepare(
-    'DELETE FROM messages WHERE content = ?',
+  if (matchedContents.length === 0) return 0;
+
+  // 步骤 2：用临时表批量 DELETE
+  // 1) 建临时表存噪音 content
+  // 2) 批量 INSERT（每批 500 条，避免 SQL 参数上限）
+  // 3) DELETE FROM messages WHERE content IN (SELECT content FROM tmp)
+  // 4) DROP 临时表
+  db.exec('DROP TABLE IF EXISTS tmp_noise_contents');
+  db.exec('CREATE TEMP TABLE tmp_noise_contents(content TEXT PRIMARY KEY)');
+
+  const insertStmt = db.prepare(
+    'INSERT OR IGNORE INTO tmp_noise_contents(content) VALUES (?)',
   );
   db.exec('BEGIN');
   try {
     for (const content of matchedContents) {
-      const result = deleteStmt.run(content);
-      totalDeleted += Number(result.changes);
+      insertStmt.run(content);
     }
+
+    // 一次性 DELETE（IN 子查询走临时表的主键索引，比逐条快几个数量级）
+    const result = db
+      .prepare(
+        'DELETE FROM messages WHERE content IN (SELECT content FROM tmp_noise_contents)',
+      )
+      .run();
     db.exec('COMMIT');
+    db.exec('DROP TABLE tmp_noise_contents');
+    return Number(result.changes);
   } catch (err) {
     db.exec('ROLLBACK');
+    db.exec('DROP TABLE IF EXISTS tmp_noise_contents');
     throw err;
   }
-
-  return totalDeleted;
 }
 
 /** L2 截断：超长消息 UPDATE content */
@@ -334,5 +383,174 @@ function applyArchive(
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
+  }
+}
+
+// ─── Session 级 apply（SL0/SL1/SL2） ────────────────────────────
+
+/** 备份 + 删除的通用辅助：用临时表批量 DELETE messages */
+function backupAndDeleteSessionsMessages(
+  db: DatabaseSync,
+  sessionIds: string[],
+  writeBackup: (content: string, meta: Record<string, unknown>) => void,
+  backupReason: string,
+): number {
+  if (sessionIds.length === 0) return 0;
+
+  // 步骤 1：备份这些 session 的消息内容（去重）
+  // 用临时表存 session_id 列表，避免 IN (?, ?, ...) 参数上限
+  db.exec('DROP TABLE IF EXISTS tmp_sl_session_ids');
+  db.exec('CREATE TEMP TABLE tmp_sl_session_ids(id TEXT PRIMARY KEY)');
+  const insertStmt = db.prepare('INSERT OR IGNORE INTO tmp_sl_session_ids(id) VALUES (?)');
+  for (const id of sessionIds) insertStmt.run(id);
+
+  try {
+    // 取所有唯一 content 备份
+    const uniqueContents = db
+      .prepare(
+        `SELECT DISTINCT content FROM messages
+         WHERE session_id IN (SELECT id FROM tmp_sl_session_ids)`,
+      )
+      .all() as Array<{ content: string }>;
+
+    for (const { content } of uniqueContents) {
+      writeBackup(content, { reason: backupReason, originalLength: content.length });
+    }
+
+    // 步骤 2：批量 DELETE messages
+    db.exec('BEGIN');
+    try {
+      const result = db
+        .prepare(
+          'DELETE FROM messages WHERE session_id IN (SELECT id FROM tmp_sl_session_ids)',
+        )
+        .run();
+      db.exec('COMMIT');
+      return Number(result.changes);
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  } finally {
+    db.exec('DROP TABLE IF EXISTS tmp_sl_session_ids');
+  }
+}
+
+/** SL0：纯噪音 session 整场删（messages + sessions） */
+function applySessionNoise(
+  db: DatabaseSync,
+  classification: SessionClassification,
+  writeBackup: (content: string, meta: Record<string, unknown>) => void,
+): { sessionsDeleted: number; messagesDeleted: number } {
+  const ids = classification.noiseSessions.map((s) => s.id);
+  if (ids.length === 0) return { sessionsDeleted: 0, messagesDeleted: 0 };
+
+  const messagesDeleted = backupAndDeleteSessionsMessages(db, ids, writeBackup, 'session-noise');
+
+  // 整场删 sessions 行（含 metadata）
+  db.exec('DROP TABLE IF EXISTS tmp_sl_session_ids');
+  db.exec('CREATE TEMP TABLE tmp_sl_session_ids(id TEXT PRIMARY KEY)');
+  const insertStmt = db.prepare('INSERT OR IGNORE INTO tmp_sl_session_ids(id) VALUES (?)');
+  for (const id of ids) insertStmt.run(id);
+
+  try {
+    db.exec('BEGIN');
+    try {
+      const result = db
+        .prepare('DELETE FROM sessions WHERE id IN (SELECT id FROM tmp_sl_session_ids)')
+        .run();
+      db.exec('COMMIT');
+      return {
+        sessionsDeleted: Number(result.changes),
+        messagesDeleted,
+      };
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  } finally {
+    db.exec('DROP TABLE IF EXISTS tmp_sl_session_ids');
+  }
+}
+
+/** SL1：短问答 session 保留 metadata，删 messages + 标 retention='compact' */
+function applyShortSessions(
+  db: DatabaseSync,
+  classification: SessionClassification,
+  writeBackup: (content: string, meta: Record<string, unknown>) => void,
+): { sessionsCompacted: number; messagesDeleted: number } {
+  const ids = classification.shortSessions.map((s) => s.id);
+  if (ids.length === 0) return { sessionsCompacted: 0, messagesDeleted: 0 };
+
+  const messagesDeleted = backupAndDeleteSessionsMessages(db, ids, writeBackup, 'session-short');
+
+  // 标记 sessions.retention = 'compact'，清零 message_count
+  db.exec('DROP TABLE IF EXISTS tmp_sl_session_ids');
+  db.exec('CREATE TEMP TABLE tmp_sl_session_ids(id TEXT PRIMARY KEY)');
+  const insertStmt = db.prepare('INSERT OR IGNORE INTO tmp_sl_session_ids(id) VALUES (?)');
+  for (const id of ids) insertStmt.run(id);
+
+  try {
+    db.exec('BEGIN');
+    try {
+      const result = db
+        .prepare(
+          `UPDATE sessions
+           SET retention = 'compact', message_count = 0
+           WHERE id IN (SELECT id FROM tmp_sl_session_ids)`,
+        )
+        .run();
+      db.exec('COMMIT');
+      return {
+        sessionsCompacted: Number(result.changes),
+        messagesDeleted,
+      };
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  } finally {
+    db.exec('DROP TABLE IF EXISTS tmp_sl_session_ids');
+  }
+}
+
+/** SL2：重复 session 删 messages + 标 retention='duplicate'（保留最新一场） */
+function applyDuplicateSessions(
+  db: DatabaseSync,
+  classification: SessionClassification,
+  writeBackup: (content: string, meta: Record<string, unknown>) => void,
+): { sessionsCompacted: number; messagesDeleted: number } {
+  const ids = classification.duplicateSessions.map((s) => s.id);
+  if (ids.length === 0) return { sessionsCompacted: 0, messagesDeleted: 0 };
+
+  const messagesDeleted = backupAndDeleteSessionsMessages(db, ids, writeBackup, 'session-duplicate');
+
+  // 标记 retention='duplicate'，清零 message_count
+  db.exec('DROP TABLE IF EXISTS tmp_sl_session_ids');
+  db.exec('CREATE TEMP TABLE tmp_sl_session_ids(id TEXT PRIMARY KEY)');
+  const insertStmt = db.prepare('INSERT OR IGNORE INTO tmp_sl_session_ids(id) VALUES (?)');
+  for (const id of ids) insertStmt.run(id);
+
+  try {
+    db.exec('BEGIN');
+    try {
+      const result = db
+        .prepare(
+          `UPDATE sessions
+           SET retention = 'duplicate', message_count = 0
+           WHERE id IN (SELECT id FROM tmp_sl_session_ids)`,
+        )
+        .run();
+      db.exec('COMMIT');
+      return {
+        sessionsCompacted: Number(result.changes),
+        messagesDeleted,
+      };
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  } finally {
+    db.exec('DROP TABLE IF EXISTS tmp_sl_session_ids');
   }
 }

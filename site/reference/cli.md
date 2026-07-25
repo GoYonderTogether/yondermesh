@@ -62,8 +62,8 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh --session-format` | jsonl|sqlite|json|markdown --yes (overwrite existing) |
 | `ymesh sync` | fts            Explicitly backfill messages_fts full-text index in batches (use when large-DB auto-backfill is skipped) |
 | `ymesh Options:` | --batch &lt;n&gt; (batch size, default 5000) [--json] |
-| `ymesh retain` | analyze      Scan database for redundancy (noise/oversized/stale sessions), report compressible volume (read-only) |
-| `ymesh retain` | apply        Execute retention (L0 drop noise + L2 truncate + L3 archive), with deduplicated backup |
+| `ymesh retain` | analyze      Scan database for redundancy (noise/oversized/stale sessions + session-level classification), report compressible volume (read-only) |
+| `ymesh retain` | apply        Execute retention (L0 drop noise + L2 truncate + SL0/SL1/SL2 session-level + L3 archive), with deduplicated backup |
 | `ymesh Options:` | --dry-run (preview) --no-backup (skip backup) [--db &lt;path&gt;] [--json] |
 
 ## Global Options

@@ -39,6 +39,20 @@ export interface ArchiveRule {
   keepSessionMetadata: boolean;
 }
 
+/** Session 级分类策略（在消息级 L0/L2/L3 之上的 session 级筛除） */
+export interface SessionClassifyRule {
+  /** SL0 纯噪音 session：噪音消息占比超过此阈值（0-1）→ 整 session 删 */
+  noiseRatio: number;
+  /** SL0 触发最小消息数（< 此值的 session 不算噪音 session，避免误删短会话） */
+  noiseMinMessages: number;
+  /** SL1 短问答 session：消息数 < 此值 且 时长 < shortMaxDurationMs → 删 messages 保留 metadata */
+  shortMaxMessages: number;
+  /** SL1 短问答 session：时长上限（ms） */
+  shortMaxDurationMs: number;
+  /** SL2 重复 session：同 cwd + 同 source + 首条 user 消息相同 + 此时间窗内的 session 算重复（ms） */
+  duplicateWindowMs: number;
+}
+
 /** 完整策略 */
 export interface RetainPolicy {
   /** L0 噪音规则列表 */
@@ -50,6 +64,8 @@ export interface RetainPolicy {
   truncate: TruncateRule[];
   /** L3 归档规则 */
   archive: ArchiveRule;
+  /** Session 级分类策略（SL0/SL1/SL2） */
+  sessionClassify: SessionClassifyRule;
   /** 备份目录（被删消息去重导出到此目录，jsonl.gz） */
   backupDir: string;
 }
@@ -114,6 +130,18 @@ export const DEFAULT_TRUNCATE_RULES: TruncateRule[] = [
   { role: 'assistant', maxBytes: 50_000, keepBytes: 5_000 },
 ];
 
+/** 默认 session 级分类策略 */
+export const DEFAULT_SESSION_CLASSIFY: SessionClassifyRule = {
+  // 噪音占比 > 80% 且消息数 >= 5 才算纯噪音 session（避免误删短问答）
+  noiseRatio: 0.8,
+  noiseMinMessages: 5,
+  // < 10 条消息 且 < 5 分钟的算短问答
+  shortMaxMessages: 10,
+  shortMaxDurationMs: 5 * 60 * 1000,
+  // 同 cwd + 同 source + 首条 user 消息相同 + 30 分钟内 → 重复
+  duplicateWindowMs: 30 * 60 * 1000,
+};
+
 /** 默认策略 */
 export const DEFAULT_POLICY: RetainPolicy = {
   noise: DEFAULT_NOISE_RULES,
@@ -124,6 +152,7 @@ export const DEFAULT_POLICY: RetainPolicy = {
     olderThanDays: 90,
     keepSessionMetadata: true,
   },
+  sessionClassify: DEFAULT_SESSION_CLASSIFY,
   backupDir: '', // 运行时填：~/.yondermesh/retention-backups/
 };
 

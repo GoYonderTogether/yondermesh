@@ -258,8 +258,8 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
                             --session-format jsonl|sqlite|json|markdown --yes（覆盖已存在）
   sync fts            显式分批回填 messages_fts 全文索引（大库自动回填被跳过时用）
                       选项: --batch <n>（每批条数，默认 5000）[--json]
-  retain analyze      扫描数据库冗余（噪音/超长/老旧 session），报告可压缩量（只读）
-  retain apply        执行筛除（L0 删噪音 + L2 截断 + L3 归档），含去重备份
+  retain analyze      扫描数据库冗余（噪音/超长/老旧 session + session 级分类），报告可压缩量（只读）
+  retain apply        执行筛除（L0 删噪音 + L2 截断 + SL0/SL1/SL2 session 级 + L3 归档），含去重备份
                       选项: --dry-run（预演）--no-backup（跳过备份）[--db <path>] [--json]
 
 安装方式:
@@ -368,8 +368,8 @@ Commands:
                                --session-format jsonl|sqlite|json|markdown --yes (overwrite existing)
   sync fts            Explicitly backfill messages_fts full-text index in batches (use when large-DB auto-backfill is skipped)
                       Options: --batch <n> (batch size, default 5000) [--json]
-  retain analyze      Scan database for redundancy (noise/oversized/stale sessions), report compressible volume (read-only)
-  retain apply        Execute retention (L0 drop noise + L2 truncate + L3 archive), with deduplicated backup
+  retain analyze      Scan database for redundancy (noise/oversized/stale sessions + session-level classification), report compressible volume (read-only)
+  retain apply        Execute retention (L0 drop noise + L2 truncate + SL0/SL1/SL2 session-level + L3 archive), with deduplicated backup
                       Options: --dry-run (preview) --no-backup (skip backup) [--db <path>] [--json]
 
 Install:
@@ -2575,7 +2575,7 @@ function cmdSync(flags: Record<string, string | boolean>): number {
 }
 
 /** retain 命令：数据库压缩/筛除/归档（控制膨胀） */
-function cmdRetain(flags: Record<string, string | boolean>): number {
+async function cmdRetain(flags: Record<string, string | boolean>): Promise<number> {
   const positional = process.argv.slice(process.argv.indexOf('retain') + 1);
   const action = positional[0] ?? '';
 
@@ -2583,16 +2583,14 @@ function cmdRetain(flags: Record<string, string | boolean>): number {
   const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
   const backupDir = join(dataDir, 'retention-backups');
 
-  // 策略：默认策略 + 运行时 backupDir
-  const { DEFAULT_POLICY } = require('../retain/index.js') as typeof import('../retain/index.js');
-  const policy = { ...DEFAULT_POLICY, backupDir };
+  // 动态 import（ESM 环境，require 不可用）
+  const retainMod = await import('../retain/index.js');
+  const policy = { ...retainMod.DEFAULT_POLICY, backupDir };
 
   if (action === 'analyze' || action === '' || action === 'config') {
-    // analyze / config：扫描报告（config 兼容旧称，行为同 analyze）
-    const { analyze } = require('../retain/index.js') as typeof import('../retain/index.js');
     let report;
     try {
-      report = analyze(dbPath, policy);
+      report = retainMod.analyze(dbPath, policy);
     } catch (err) {
       console.error(`[yondermesh] retain analyze 失败: ${String(err)}`);
       return 1;
@@ -2644,6 +2642,25 @@ function cmdRetain(flags: Record<string, string | boolean>): number {
     }
     console.log();
 
+    console.log('--- Session 级分类（SL0/SL1/SL2） ---');
+    const sess = report.session;
+    if (sess.noiseSessions.length === 0 && sess.shortSessions.length === 0 && sess.duplicateSessions.length === 0) {
+      console.log('  无 session 级冗余');
+    } else {
+      console.log(`  SL0 纯噪音 session: ${sess.noiseSessions.length.toLocaleString()} 个 (${sess.totalNoiseMessages.toLocaleString()} 消息 / ${fmtBytes(sess.totalNoiseBytes)})`);
+      console.log(`  SL1 短问答 session: ${sess.shortSessions.length.toLocaleString()} 个 (${sess.totalShortMessages.toLocaleString()} 消息 / ${fmtBytes(sess.totalShortBytes)})`);
+      console.log(`  SL2 重复 session:    ${sess.duplicateSessions.length.toLocaleString()} 个 (${sess.totalDuplicateMessages.toLocaleString()} 消息 / ${fmtBytes(sess.totalDuplicateBytes)})`);
+      // 展示前 3 个 SL0 样例
+      for (const s of sess.noiseSessions.slice(0, 3)) {
+        console.log(`    [SL0 样例] ${s.id} — ${s.reason}`);
+      }
+      // 展示前 3 个 SL2 重复样例
+      for (const s of sess.duplicateSessions.slice(0, 3)) {
+        console.log(`    [SL2 样例] ${s.id} — ${s.reason}`);
+      }
+    }
+    console.log();
+
     console.log('--- L3 老旧归档 ---');
     if (report.archive.sessionsToArchive === 0) {
       console.log('  无超 TTL session');
@@ -2680,10 +2697,9 @@ function cmdRetain(flags: Record<string, string | boolean>): number {
       console.log(`[yondermesh] 备份目录: ${backupDir}`);
     }
 
-    const { apply: applyRetain } = require('../retain/index.js') as typeof import('../retain/index.js');
     let result;
     try {
-      result = applyRetain(dbPath, policy, { dryRun, skipBackup });
+      result = retainMod.apply(dbPath, policy, { dryRun, skipBackup });
     } catch (err) {
       console.error(`[yondermesh] retain apply 失败: ${String(err)}`);
       return 1;
@@ -2703,6 +2719,9 @@ function cmdRetain(flags: Record<string, string | boolean>): number {
       console.log(`  备份唯一内容: ${result.noiseBackupUniqueContents.toLocaleString()} 条`);
     }
     console.log(`L2 长内容截断: ${result.truncated.toLocaleString()} 条`);
+    console.log(`SL0 纯噪音 session 整场删: ${result.sessionNoiseDeleted.toLocaleString()} 个 (${result.sessionNoiseMessagesDeleted.toLocaleString()} 消息)`);
+    console.log(`SL1 短问答 session 压缩: ${result.sessionShortCompacted.toLocaleString()} 个 (${result.sessionShortMessagesDeleted.toLocaleString()} 消息)`);
+    console.log(`SL2 重复 session 压缩:    ${result.sessionDuplicateCompacted.toLocaleString()} 个 (${result.sessionDuplicateMessagesDeleted.toLocaleString()} 消息)`);
     console.log(`L3 归档 session: ${result.sessionsArchived.toLocaleString()} 个 (${result.archiveMessagesDeleted.toLocaleString()} 消息)`);
     if (result.backupFile) {
       console.log(`备份文件: ${result.backupFile}`);
@@ -2906,7 +2925,7 @@ async function main(): Promise<number> {
       return cmdSync(flags);
 
     case 'retain':
-      return cmdRetain(flags);
+      return await cmdRetain(flags);
 
     case 'rollback':
       {
