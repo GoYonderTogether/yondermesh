@@ -49,6 +49,7 @@ import {
 } from '../extract/index.js';
 import type { ExtractKind } from '../extract/index.js';
 import { BriefingGenerator } from '../briefing/generator.js';
+import { StatsGenerator, sortedDays } from '../briefing/stats.js';
 
 import { McpServer } from '../mcp/server.js';
 import {
@@ -243,6 +244,8 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   send                同步注入 v3：发送消息到目标 agent 并同步拿回复（--cli <agent> [--session <id>] [--mode stopped|running|new] --message "text" [--model <m>] [--effort <e>] [--cwd <path>] [--timeout <ms>] [--json]）
   briefing generate   生成每日晨报（多维切分：agent/项目/设备/时段 + 完成数/完成率/卡住待办）
                       选项: [--date <YYYY-MM-DD>] [--output <dir>] [--json]
+  stats               工作统计（多维切片：按天/项目/模型）
+                      选项: [--by day|project|model] [--from <time>] [--to <time>] [--json]
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -338,6 +341,8 @@ Commands:
   send                Sync injection v3: send a message to a target agent and get the reply synchronously (--cli <agent> [--session <id>] [--mode stopped|running|new] --message "text" [--model <m>] [--effort <e>] [--cwd <path>] [--timeout <ms>] [--json])
   briefing generate   Generate a daily briefing (multi-dim slices: agent/project/device/hour + completed/success-rate/stuck)
                       Options: [--date <YYYY-MM-DD>] [--output <dir>] [--json]
+  stats               Work statistics (multi-dim slices: by day/project/model)
+                      Options: [--by day|project|model] [--from <time>] [--to <time>] [--json]
 
 Install:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -2325,6 +2330,66 @@ async function cmdBriefing(flags: Record<string, string | boolean>): Promise<num
 
 // ─── 主入口 ──────────────────────────────────────────────────────────────
 
+/** stats 命令：工作统计（多维切片：按天/项目/模型） */
+function cmdStats(flags: Record<string, string | boolean>): number {
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  const from = parseTime(flags.from);
+  const to = parseTime(flags.to);
+  const byDim = typeof flags.by === 'string' ? flags.by : '';
+
+  const store = openStore(dbPath);
+  try {
+    const gen = new StatsGenerator(store);
+    const stats = gen.compute({ from, to });
+
+    if (flags.json) {
+      console.log(JSON.stringify(stats, null, 2));
+      return 0;
+    }
+
+    // 人类可读输出
+    console.log(`总 session: ${stats.totalSessions}`);
+    console.log(`总消息数: ${stats.totalMessages}`);
+    console.log(`root / subagent: ${stats.rootSessions} / ${stats.subagentSessions}`);
+    console.log(`agents: ${stats.agents.join(', ') || '(无)'}`);
+    console.log(`devices: ${stats.devices.join(', ') || '(无)'}`);
+
+    const printSlice = (title: string, rec: Record<string, { sessions: number; messages: number }>, keys: string[]) => {
+      console.log(`\n## ${title}`);
+      if (keys.length === 0) {
+        console.log('(无数据)');
+        return;
+      }
+      console.log('| key | sessions | messages |');
+      console.log('|---|---|---|');
+      for (const k of keys) {
+        const v = rec[k]!;
+        console.log(`| ${k} | ${v.sessions} | ${v.messages} |`);
+      }
+    };
+
+    if (byDim === 'day') {
+      printSlice('按天', stats.byDay, sortedDays(stats.byDay));
+    } else if (byDim === 'project') {
+      printSlice('按项目', stats.byProject, Object.keys(stats.byProject).sort());
+    } else if (byDim === 'model') {
+      printSlice('按模型', stats.byModel, Object.keys(stats.byModel).sort());
+    } else {
+      // 默认输出全部切片
+      printSlice('按天', stats.byDay, sortedDays(stats.byDay));
+      printSlice('按项目', stats.byProject, Object.keys(stats.byProject).sort());
+      printSlice('按模型', stats.byModel, Object.keys(stats.byModel).sort());
+    }
+    return 0;
+  } catch (err) {
+    console.error(`[yondermesh] stats 失败: ${String(err)}`);
+    return 1;
+  } finally {
+    store.close();
+  }
+}
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const { command, flags } = parseArgs(argv);
@@ -2408,6 +2473,9 @@ async function main(): Promise<number> {
 
     case 'briefing':
       return await cmdBriefing(flags);
+
+    case 'stats':
+      return cmdStats(flags);
 
     case 'rollback':
       {

@@ -51,6 +51,8 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh send` | Sync injection v3: send a message to a target agent and get the reply synchronously (--cli &lt;agent&gt; [--session &lt;id&gt;] [--mode stopped|running|new] --message "text" [--model &lt;m&gt;] [--effort &lt;e&gt;] [--cwd &lt;path&gt;] [--timeout &lt;ms&gt;] [--json]) |
 | `ymesh briefing` | generate   Generate a daily briefing (multi-dim slices: agent/project/device/hour + completed/success-rate/stuck) |
 | `ymesh Options:` | [--date &lt;YYYY-MM-DD&gt;] [--output &lt;dir&gt;] [--json] |
+| `ymesh stats` | Work statistics (multi-dim slices: by day/project/model) |
+| `ymesh Options:` | [--by day|project|model] [--from &lt;time&gt;] [--to &lt;time&gt;] [--json] |
 
 ## Global Options
 
