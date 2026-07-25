@@ -5,9 +5,13 @@ status: passed
 feature: dispatch
 verifier: "node scripts/loop/verify/dispatch-matrix.mjs"
 created: 2026-07-21
-last_run: 2026-07-20 18:20:11
+last_run: 2026-07-25 03:05:54
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -25,9 +29,17 @@ last_run: 2026-07-20 18:20:11
 
 
 
+
+
+
+
 读 src/trigger/adapter.ts（IDE_CLIS/HTTP_API_CLIS/WS_RPC_CLIS/CLI_LAUNCH_COMMANDS + getCapability）、src/trigger/types.ts（6 通道）。脚本 `scripts/loop/verify/dispatch-matrix.mjs` 对每个已装可 trigger CLI 跑一次 send。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -45,10 +57,18 @@ last_run: 2026-07-20 18:20:11
 
 
 
+
+
+
+
 verifier 产出 `tasks/loops/reports/dispatch-matrix.md`，每 CLI 记：通道 / 投递✅❌ / 回话✅⚠。exit 0 = 矩阵覆盖所有可 trigger CLI。
 预期分类：cli-spawn(http/ws)-类 22 个能拿完整 response；IDE 类 4 个（trae-ide/windsurf/cursor-ide/chatgpt）delivered 但回话依赖辅助功能权限。
 
 ## Prompt
+
+
+
+
 
 
 

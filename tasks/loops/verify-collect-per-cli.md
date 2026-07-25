@@ -5,9 +5,13 @@ status: passed
 feature: collect
 verifier: "node scripts/loop/verify/collect-per-cli.mjs"
 created: 2026-07-21
-last_run: 2026-07-20 17:54:18
+last_run: 2026-07-25 03:04:54
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-20 17:54:18
 
 
 
+
+
+
+
 读 src/detect/agents.ts（检测规则）、src/adapters/registry.ts（32 CLI + coverage）、specs/adapter-spec.md §6（D1–D10，D1=能否采集）。脚本 `scripts/loop/verify/collect-per-cli.mjs` 用 `ymesh mcp call agents` 拿已装清单，逐个查询。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,10 +41,18 @@ last_run: 2026-07-20 17:54:18
 
 
 
+
+
+
+
 verifier 产出 `tasks/loops/reports/collect-per-cli.md` 矩阵。exit 0 = 所有可采 CLI 都能查询（返回合法 JSON）；exit 1 = 有 CLI 查询报错（暴露采集 bug）。
 边界情况必须在矩阵里体现：有数据✅ / 无数据⚠ / 需登录⚠ / 不采集—。aider 与 crush 是 per-project 无全局目录（resolveSessionDir=undefined），属正常"无全局 session"。
 
 ## Prompt
+
+
+
+
 
 
 

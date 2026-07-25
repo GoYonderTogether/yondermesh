@@ -5,9 +5,13 @@ status: passed
 feature: search
 verifier: "bash -c 'TS=$(ymesh mcp call overview \"{}\" 2>/dev/null | jq \".totalSessions\"); [ \"$TS\" -gt 0 ] && ymesh mcp call list_active \"{}\" 2>/dev/null | jq -e \".totalActive != null\" && ymesh mcp call search_sessions \"{\\\"limit\\\":5}\" 2>/dev/null | jq -e \"length > 0\" && [ \"$TS\" -eq \"$(sqlite3 ~/.yondermesh/yondermesh.db \"SELECT COUNT(*) FROM sessions WHERE retention=\\\"live\\\";\")\" ]'"
 created: 2026-07-21
-last_run: 2026-07-20 17:52:53
+last_run: 2026-07-25 03:06:21
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -31,9 +35,17 @@ last_run: 2026-07-20 17:52:53
 
 
 
+
+
+
+
 读 specs/mcp-spec.md、src/mcp/server.ts（核心 8 工具）、src/store/types.ts（SessionStats/ActiveSummary 结构）。三个工具：overview→总数、list_active→活跃、search_sessions→按条件检索。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -57,10 +69,18 @@ last_run: 2026-07-20 17:52:53
 
 
 
+
+
+
+
 verifier 断言：① overview.totalSessions >0；② list_active 返回 totalActive 字段；③ search_sessions 返回非空数组。
 交叉校验（loop 内执行）：`overview.totalSessions` 应与 `sqlite3 ... "SELECT COUNT(*) FROM sessions;"` 一致（或仅差 live/archived 口径）；search_sessions 按 `source`/`project_path`/`topology`/`since` 过滤应返回正确子集。
 
 ## Prompt
+
+
+
+
 
 
 
