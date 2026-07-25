@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "desktop",
+  "description": "桌面端专属权限（仅 macOS）：对话框/自启/自动更新/进程重启。iOS 不编译这些插件，必须 platforms 限定，否则 iOS 构建报 Permission xxx:default not found。",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": [
+    "dialog:default",
+    "autostart:default",
+    "updater:allow-check",
+    "updater:allow-download",
+    "updater:allow-install",
+    "updater:allow-download-and-install",
+    "process:allow-restart"
+  ]
+}

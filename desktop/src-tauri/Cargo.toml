@@ -1,0 +1,35 @@
+[package]
+name = "yondermesh-desktop"
+version = "0.1.0"
+description = "Yondermesh 桌面端（Tauri 2 壳层）"
+authors = ["Yondermesh"]
+edition = "2021"
+# Rust 工具链版本（与 rust-toolchain.toml 的 stable 对齐）
+rust-version = "1.77.2"
+
+# main.rs 与 lib.rs 共用：lib 暴露 run() 供 main 调用
+[lib]
+name = "yondermesh_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# tray-icon：后台常驻所需的系统状态栏（托盘）图标 + 菜单
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 桌面端自动更新/进程重启/对话框/开机自启。
+# capabilities/desktop.json 引用了这些插件的权限，故按平台门控保留。
+# macOS 自启走 LaunchAgent（非 AppleScript，零 TCC）。
+[target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-autostart = "2"
+
+[features]
+# 由 tauri 在 `tauri build` 时按需启用，剥离开发期 devtools 等
+custom-protocol = ["tauri/custom-protocol"]

@@ -1,11 +1,11 @@
 ---
 id: macos-tray-autostart-caffeinate
 title: 构建·macOS 状态栏 + 自启 + 防休眠（零-TCC）
-status: draft
+status: passed
 feature: ""
 verifier: "bash -c 'cd desktop/src-tauri && cargo build 2>&1 | grep -q Finished && plutil -lint entitlements.macos.plist'"
 created: 2026-07-21
-last_run: 
+last_run: 2026-07-25 04:35:00
 ---
 
 ## 1. 目标 (Goal)

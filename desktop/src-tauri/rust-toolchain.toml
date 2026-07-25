@@ -1,0 +1,3 @@
+# 与 stack-versions.json 的 rust: stable 对齐
+[toolchain]
+channel = "stable"
