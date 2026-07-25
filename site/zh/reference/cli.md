@@ -60,6 +60,8 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh scaffold` | &lt;name&gt;     生成新 adapter 模板（importer/wrapper/inject/index）到 src/&lt;name&gt;/ |
 | `ymesh 选项:` | --config-dir &lt;dir&gt; --cli-binary &lt;bin&gt; |
 | `ymesh --session-format` | jsonl|sqlite|json|markdown --yes（覆盖已存在） |
+| `ymesh sync` | fts            显式分批回填 messages_fts 全文索引（大库自动回填被跳过时用） |
+| `ymesh 选项:` | --batch &lt;n&gt;（每批条数，默认 5000）[--json] |
 
 ## 通用选项
 

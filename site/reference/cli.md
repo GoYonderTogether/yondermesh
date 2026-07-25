@@ -60,6 +60,8 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh scaffold` | &lt;name&gt;     Generate a new adapter template (importer/wrapper/inject/index) into src/&lt;name&gt;/ |
 | `ymesh Options:` | --config-dir &lt;dir&gt; --cli-binary &lt;bin&gt; |
 | `ymesh --session-format` | jsonl|sqlite|json|markdown --yes (overwrite existing) |
+| `ymesh sync` | fts            Explicitly backfill messages_fts full-text index in batches (use when large-DB auto-backfill is skipped) |
+| `ymesh Options:` | --batch &lt;n&gt; (batch size, default 5000) [--json] |
 
 ## Global Options
 

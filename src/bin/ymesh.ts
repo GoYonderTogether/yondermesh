@@ -256,6 +256,8 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   scaffold <name>     生成新 adapter 模板（importer/wrapper/inject/index）到 src/<name>/
                       选项: --config-dir <dir> --cli-binary <bin>
                             --session-format jsonl|sqlite|json|markdown --yes（覆盖已存在）
+  sync fts            显式分批回填 messages_fts 全文索引（大库自动回填被跳过时用）
+                      选项: --batch <n>（每批条数，默认 5000）[--json]
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -361,6 +363,8 @@ Commands:
   scaffold <name>     Generate a new adapter template (importer/wrapper/inject/index) into src/<name>/
                       Options: --config-dir <dir> --cli-binary <bin>
                                --session-format jsonl|sqlite|json|markdown --yes (overwrite existing)
+  sync fts            Explicitly backfill messages_fts full-text index in batches (use when large-DB auto-backfill is skipped)
+                      Options: --batch <n> (batch size, default 5000) [--json]
 
 Install:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -2491,6 +2495,79 @@ function cmdDistill(flags: Record<string, string | boolean>): number {
   }
 }
 
+/** sync 命令：显式触发数据维护任务（目前支持 fts 回填） */
+function cmdSync(flags: Record<string, string | boolean>): number {
+  const positional = process.argv.slice(process.argv.indexOf('sync') + 1);
+  const action = positional[0] ?? '';
+
+  if (action !== 'fts') {
+    console.error('用法: ymesh sync fts [--batch <n>] [--json]');
+    console.error('  fts  显式分批回填 messages_fts 全文索引（大库自动回填被跳过时用）');
+    return 1;
+  }
+
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  const batchSize = typeof flags.batch === 'string' ? Math.max(100, parseInt(flags.batch, 10) || 5000) : 5000;
+
+  const store = openStore(dbPath);
+  try {
+    // 循环回填直到 remaining=0。每批打印进度到 stderr（不污染 --json stdout）。
+    // 大库可能跑数十分钟，进度条让用户知道没卡死。
+    let progress = store.syncFtsBatch(batchSize);
+    const startDone = progress.done;
+    const startTime = Date.now();
+
+    if (progress.remaining === 0) {
+      if (flags.json) {
+        console.log(JSON.stringify({ total: progress.total, done: progress.done, remaining: 0, message: 'FTS 已同步，无需回填' }, null, 2));
+      } else {
+        console.log(`[yondermesh] FTS 已同步：${progress.done}/${progress.total}，无需回填`);
+      }
+      return 0;
+    }
+
+    if (!flags.json) {
+      console.error(`[yondermesh] 开始回填 FTS：${progress.done}/${progress.total}（剩余 ${progress.remaining}），批大小 ${batchSize}`);
+    }
+
+    let lastReportAt = Date.now();
+    while (progress.remaining > 0) {
+      progress = store.syncFtsBatch(batchSize);
+      const now = Date.now();
+      // 每 3 秒或完成时打印进度，避免日志爆炸
+      if (!flags.json && (now - lastReportAt > 3000 || progress.remaining === 0)) {
+        const elapsedSec = ((now - startTime) / 1000).toFixed(1);
+        const processed = progress.done - startDone;
+        const rate = processed > 0 ? (processed / ((now - startTime) / 1000)).toFixed(0) : '0';
+        const etaSec = progress.remaining > 0 && Number(rate) > 0
+          ? (progress.remaining / Number(rate)).toFixed(0)
+          : '?';
+        console.error(`[yondermesh] 进度 ${progress.done}/${progress.total}（${processed} 条已回填，${rate} 条/秒，ETA ${etaSec}s）已用 ${elapsedSec}s`);
+        lastReportAt = now;
+      }
+    }
+
+    if (flags.json) {
+      console.log(JSON.stringify({
+        total: progress.total,
+        done: progress.done,
+        remaining: 0,
+        elapsedMs: Date.now() - startTime,
+      }, null, 2));
+    } else {
+      const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[yondermesh] FTS 回填完成：${progress.done}/${progress.total}，用时 ${elapsedSec}s`);
+    }
+    return 0;
+  } catch (err) {
+    console.error(`[yondermesh] sync fts 失败: ${String(err)}`);
+    return 1;
+  } finally {
+    store.close();
+  }
+}
+
 // ─── scaffold 命令（adapter-sdk 收尾） ─────────────────────────────────
 
 /**
@@ -2671,6 +2748,9 @@ async function main(): Promise<number> {
 
     case 'scaffold':
       return await cmdScaffold(flags);
+
+    case 'sync':
+      return cmdSync(flags);
 
     case 'rollback':
       {

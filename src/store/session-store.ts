@@ -121,12 +121,13 @@ export class SessionStore {
     const msgTotal = (row.m as number) ?? 0;
     const ftsTotal = (row.f as number) ?? 0;
     if (ftsTotal >= msgTotal) return; // 已同步
-    // 大库保护：超过 5 万条且 FTS 空，自动回填会阻塞数分钟~数小时，
-    // 跳过避免拖死所有 store 构造（stats/sessions/send 等）。
-    if (msgTotal > 50_000 && ftsTotal === 0) {
+    // 大库保护：messages > 50000 且 FTS 未完全同步（差距 > 1000）时跳过自动回填。
+    // 自动回填是单事务全量 INSERT，大表上会阻塞数分钟~数小时，拖死所有 store 构造。
+    // 由 `ymesh sync fts` 显式分批回填（游标法，不阻塞其他命令）。
+    if (msgTotal > 50_000 && msgTotal - ftsTotal > 1000) {
       console.warn(
-        `[yondermesh] messages 表 ${msgTotal} 条，FTS 未回填。跳过自动回填以避免阻塞。` +
-          ` 如需全文搜索，请跑 \`ymesh sync fts\` 显式分批回填。`,
+        `[yondermesh] messages 表 ${msgTotal} 条，FTS 已回填 ${ftsTotal} 条（未同步）。` +
+          ` 跳过自动回填以避免阻塞。如需全文搜索，请跑 \`ymesh sync fts\` 显式分批回填。`,
       );
       return;
     }
@@ -135,6 +136,73 @@ export class SessionStore {
       SELECT content, session_id, id, revision_id FROM messages
       WHERE id NOT IN (SELECT message_id FROM messages_fts)
     `);
+  }
+
+  /**
+   * 显式分批回填 messages_fts（供 `ymesh sync fts` 调用）。
+   *
+   * 与 syncFtsIfStale 的区别：
+   *   - 公开方法，不跳过大库
+   *   - 用游标法（id > MAX(message_id)）走索引，O(batchSize) 而非 O(n) 全表扫描
+   *   - 单事务提交每批，避免事务过大
+   *   - 返回进度 { total, done, remaining }，调用方可循环或打印进度
+   *
+   * 游标法安全性：
+   *   - messages.id 单调递增（INTEGER PRIMARY KEY）
+   *   - 按 id 升序连续回填，MAX(message_id) 即回填进度
+   *   - 中断后重启从 MAX 继续，事务原子保证无部分写入
+   *   - id 间隙（DELETE 留下）不影响——间隙里的 id 本就不存在
+   */
+  syncFtsBatch(batchSize: number = 5000): { total: number; done: number; remaining: number } {
+    const row = this.db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM messages) AS m,
+           (SELECT COUNT(*) FROM messages_fts) AS f`,
+      )
+      .get() as Row;
+    const total = (row.m as number) ?? 0;
+    const done = (row.f as number) ?? 0;
+    const remaining = Math.max(0, total - done);
+    if (remaining === 0) return { total, done, remaining: 0 };
+
+    // 游标：已回填区间的最大 message_id。首次回填时为 0，从 messages 最小 id 开始。
+    const cursorRow = this.db
+      .prepare('SELECT COALESCE(MAX(message_id), 0) AS cur FROM messages_fts')
+      .get() as Row;
+    const cursor = (cursorRow.cur as number) ?? 0;
+
+    // 取游标之后的下一批（id > cursor 走主键索引，O(batchSize)）
+    const batch = this.db
+      .prepare(
+        `SELECT id, content, session_id, revision_id FROM messages
+         WHERE id > ? ORDER BY id ASC LIMIT ?`,
+      )
+      .all(cursor, batchSize) as Array<{
+        id: number;
+        content: string;
+        session_id: string;
+        revision_id: number;
+      }>;
+
+    if (batch.length === 0) return { total, done, remaining: 0 };
+
+    const insert = this.db.prepare(
+      'INSERT INTO messages_fts(content, session_id, message_id, revision_id) VALUES (?, ?, ?, ?)',
+    );
+    this.db.exec('BEGIN');
+    try {
+      for (const m of batch) {
+        insert.run(m.content, m.session_id, m.id, m.revision_id);
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+
+    const newDone = done + batch.length;
+    return { total, done: newDone, remaining: Math.max(0, total - newDone) };
   }
 
   /** 幂等列迁移：检测列是否存在，缺失才 ALTER TABLE ADD COLUMN */
