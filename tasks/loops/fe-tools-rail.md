@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'cd desktop/web && npm run build'"
 created: 2026-07-21
-last_run: 2026-07-25 03:36:34
+last_run: 2026-07-25 09:34:48
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-25 03:36:34
 
 
 
+
+
+
+
 读 docs/product-frontend.md §3/§5（工具栏）、desktop/web 的 ui（Tabs/ScrollArea/Drawer）。终端首版接本地 shell（Tauri 进程能力，后续接远端设备）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ last_run: 2026-07-25 03:36:34
 
 
 
+
+
+
+
 verifier：`cd desktop/web && npm run build` 成功。三个分区渲染、可折叠、文件浏览限定工作目录（人工核验记入报告）。
 
 ## Prompt
+
+
+
+
 
 
 

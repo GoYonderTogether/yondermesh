@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'cd desktop/web && npx vitest run src/features/board && npm run build'"
 created: 2026-07-21
-last_run: 2026-07-25 03:25:53
+last_run: 2026-07-25 09:34:40
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-25 03:25:53
 
 
 
+
+
+
+
 读 docs/product-frontend.md §3/§4/§5（布局 + 颠覆原则 + 卡片字段）、desktop/web 的 ui 组件（Card/DataTable/Badge）、/api/tasks 返回结构（src/tasks/）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ last_run: 2026-07-25 03:25:53
 
 
 
+
+
+
+
 verifier：`cd desktop/web && npx vitest run src/features/board && npm run build` 全绿。断言：按项目分组、状态色正确、悬停摘要显示、空态处理。
 
 ## Prompt
+
+
+
+
 
 
 

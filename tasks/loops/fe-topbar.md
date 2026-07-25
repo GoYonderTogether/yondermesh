@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'cd desktop/web && npm run build'"
 created: 2026-07-21
-last_run: 2026-07-25 03:39:37
+last_run: 2026-07-25 09:34:50
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-25 03:39:37
 
 
 
+
+
+
+
 读 docs/product-frontend.md §3/§5（顶栏）、desktop/web 的 ui（Select/DropdownMenu/Badge）、/api/state（设备/状态数据）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ last_run: 2026-07-25 03:39:37
 
 
 
+
+
+
+
 verifier：`cd desktop/web && npm run build` 成功。项目/设备/模型切换可交互、状态指示正确（人工核验记入报告）。
 
 ## Prompt
+
+
+
+
 
 
 

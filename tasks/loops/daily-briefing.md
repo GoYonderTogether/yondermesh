@@ -5,9 +5,13 @@ status: passed
 feature: briefing
 verifier: "npm test -- run src/briefing"
 created: 2026-07-21
-last_run: 2026-07-25 03:56:15
+last_run: 2026-07-25 09:34:37
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-25 03:56:15
 
 
 
+
+
+
+
 每次循环先读：ARCHITECTURE.md（briefing 该放哪）、docs/features.yaml（briefing 的 status）、src/briefing/ 现状、src/extract/（已有哪些提取能力可复用）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ last_run: 2026-07-25 03:56:15
 
 
 
+
+
+
+
 跑 verifier 全绿；再加一个"检查者" sub-agent 拿汇总去对原始 session 抽样核对，是否漏了失败任务。失败则把漏报内容当新上下文继续修，直到通过。
 
 ## Prompt
+
+
+
+
 
 
 

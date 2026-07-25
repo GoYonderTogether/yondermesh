@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'npx vitest run src/web && npm run typecheck'"
 created: 2026-07-21
-last_run: 2026-07-25 03:52:37
+last_run: 2026-07-25 09:34:37
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-25 03:52:37
 
 
 
+
+
+
+
 读 docs/product-frontend.md §2/§8、scripts/loop/server.mjs（同模式先例）、src/bin/ymesh.ts 的 cmdStateSync（1801-1833，数据组装）、src/store/session-store.ts（现成查询方法）、src/daemon/config.ts（DaemonConfig 加 webServer 字段）、ARCHITECTURE.md（src/<name>/ 分层约定）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ last_run: 2026-07-25 03:52:37
 
 
 
+
+
+
+
 verifier：`npx vitest run src/web` 全绿 + typecheck 过。测试断言各端点返回结构正确、计数与 SessionStore 一致、只绑 127.0.0.1。
 
 ## Prompt
+
+
+
+
 
 
 

@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'npx vitest run src/tasks && npm run typecheck'"
 created: 2026-07-21
-last_run: 2026-07-25 03:48:26
+last_run: 2026-07-25 09:34:35
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-25 03:48:26
 
 
 
+
+
+
+
 读 docs/product-frontend.md §3/§4/§5（看板颠覆原则 + 卡片字段）、src/store/session-store.ts（按 project_path 聚类）、src/extract/（摘要来源）、src/briefing/portrait（摘要复用）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ last_run: 2026-07-25 03:48:26
 
 
 
+
+
+
+
 verifier：`npx vitest run src/tasks` 全绿 + typecheck。断言：任务卡片结构正确（项目/类别/状态/Agent/摘要/设备）、跨设备标记、无重复、覆盖所有 live session。
 
 ## Prompt
+
+
+
+
 
 
 

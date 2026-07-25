@@ -5,9 +5,13 @@ status: passed
 feature: distill
 verifier: "bash -c 'npx vitest run src/distill && npm run typecheck'"
 created: 2026-07-21
-last_run: 2026-07-25 03:42:38
+last_run: 2026-07-25 09:29:28
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -21,9 +25,17 @@ last_run: 2026-07-25 03:42:38
 
 
 
+
+
+
+
 读 docs/product-frontend.md §8（distill 窄版定义）、src/extract/extractor.ts（NDJSONL 产物 + queryExtracts）、src/store/schema.ts（可能的 distilled 表）、docs/features.yaml（distill=零代码）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -37,9 +49,17 @@ last_run: 2026-07-25 03:42:38
 
 
 
+
+
+
+
 verifier：`npx vitest run src/distill` 全绿 + typecheck。断言：给定 extract 产物，能抽出 ≥N 个标签/主题、覆盖率达标、幂等（重复跑不重复入库）。
 
 ## Prompt
+
+
+
+
 
 
 

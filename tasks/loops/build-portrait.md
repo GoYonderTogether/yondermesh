@@ -5,9 +5,13 @@ status: passed
 feature: portrait
 verifier: "bash -c 'npx vitest run src/briefing && npm run typecheck'"
 created: 2026-07-21
-last_run: 2026-07-25 03:35:05
+last_run: 2026-07-25 09:29:29
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-25 03:35:05
 
 
 
+
+
+
+
 读 docs/product-frontend.md §5（画像字段）、src/briefing/generator.ts（同目录）、src/store/session-store.ts（按 source/cwd/时段聚合）、src/store/schema.ts（message_count/started_at/last_seen_at/model 等字段）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ last_run: 2026-07-25 03:35:05
 
 
 
+
+
+
+
 verifier：`npx vitest run src/briefing` 全绿 + typecheck。断言：portrait JSON 含 topAgent/topProject/peakHour/workBreakdown，数值与 store 交叉一致。
 
 ## Prompt
+
+
+
+
 
 
 

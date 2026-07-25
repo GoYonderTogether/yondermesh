@@ -5,9 +5,11 @@ status: passed
 feature: adapter-sdk
 verifier: "bash -c 'ymesh scaffold __probe --yes && test -f src/__probe/index.ts && rm -rf src/__probe'"
 created: 2026-07-21
-last_run: 2026-07-25 04:32:01
+last_run: 2026-07-25 05:29:48
 ---
 ## 1. 目标 (Goal)
+
+
 
 
 
@@ -17,9 +19,13 @@ last_run: 2026-07-25 04:32:01
 
 
 
+
+
 读 src/sdk/scaffold.ts（scaffoldAdapter，已实现）、src/sdk/template.ts、src/bin/ymesh.ts（加 case + help）、specs/adapter-spec.md（生成物契约）。
 
 ## 3. 行动约束 (Action)
+
+
 
 
 
@@ -29,9 +35,13 @@ last_run: 2026-07-25 04:32:01
 
 
 
+
+
 verifier：`ymesh scaffold __probe --yes && test -f src/__probe/index.ts && rm -rf src/__probe` —— 真能生成 importer/wrapper/inject/index 四件套并清理探针。
 
 ## Prompt
+
+
 
 
 

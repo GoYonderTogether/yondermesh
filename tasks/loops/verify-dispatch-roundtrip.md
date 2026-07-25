@@ -5,9 +5,17 @@ status: passed
 feature: dispatch
 verifier: "node scripts/loop/verify/dispatch-roundtrip.mjs"
 created: 2026-07-21
-last_run: 2026-07-25 03:06:16
+last_run: 2026-07-25 09:50:11
 ---
 ## 1. 目标 (Goal)
+
+
+
+
+
+
+
+
 
 
 
@@ -25,9 +33,25 @@ last_run: 2026-07-25 03:06:16
 
 
 
+
+
+
+
+
+
+
+
 读 specs/mailbox-v3-spec.md、src/mailbox/core.ts（MailboxCore.send 四步：审计写→TriggerAdapter 投递→ReplyAdapter 清洗→审计写回复）、src/trigger/adapter.ts（6 通道）。脚本 `scripts/loop/verify/dispatch-roundtrip.mjs` 按 DISPATCH_CLI（默认 codex,claude,hermes）依次试。
 
 ## 3. 行动约束 (Action)
+
+
+
+
+
+
+
+
 
 
 
@@ -45,10 +69,26 @@ last_run: 2026-07-25 03:06:16
 
 
 
+
+
+
+
+
+
+
+
 verifier 断言三件：① delivered=true；② 探针文件真被创建且非空；③ agent_messages 表能按探针路径查到 ≥1 条审计。
 通过 = 至少一个已认证 CLI 端到端跑通。失败 = 派发链路有断点或所有候选 CLI 都未认证（暴露真实状态）。
 
 ## Prompt
+
+
+
+
+
+
+
+
 
 
 

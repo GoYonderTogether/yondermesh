@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'cd desktop/web && npm run build'"
 created: 2026-07-21
-last_run: 2026-07-25 03:28:40
+last_run: 2026-07-25 09:34:44
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-25 03:28:40
 
 
 
+
+
+
+
 读 docs/product-frontend.md §3/§5（页式设置）、desktop/web 的路由（router.tsx）、ui（Tabs/Label/Input/Switch）。前端基建两用：服务器端管理 UI + 用户本机设置同代码库切模式。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ last_run: 2026-07-25 03:28:40
 
 
 
+
+
+
+
 verifier：`cd desktop/web && npm run build` 成功。各设置页独立路由可达、表单可填（人工核验记入报告）。
 
 ## Prompt
+
+
+
+
 
 
 

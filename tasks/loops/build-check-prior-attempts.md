@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'npx vitest run prior-attempts && npm run typecheck'"
 created: 2026-07-21
-last_run: 2026-07-25 03:41:22
+last_run: 2026-07-25 09:29:25
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -21,9 +25,17 @@ L4 旗舰：输入一个任务/报错，返回“别的 agent 之前踩过没、
 
 
 
+
+
+
+
 每次循环先读：`docs/product-vision-agent-bus-v0.1.md`（US-7 check_prior_attempts 定位与“记忆的一生”）、`ARCHITECTURE.md` §II MCP（`ORTHOGONAL_TOOL_NAMES` + 辅助工具）+ §III.6、`src/store/index.ts`（查询接口，复用正文搜索若 content-search loop 已落地）、`src/mcp/tools.ts`（现有 handler 注册模式 + 新工具作**辅助工具追加**，不进正交 8）、`src/mcp/server.ts`（`listTools` 路由）、`src/derive/stuck.ts`（若已存在，参考其确定性判定写法）、`tasks/roadmap.md` T2.4.5。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -37,9 +49,17 @@ L4 旗舰：输入一个任务/报错，返回“别的 agent 之前踩过没、
 
 
 
+
+
+
+
 verifier：`npx vitest run prior-attempts` 全绿（fixture：多个 session 含相同报错 / 同类失败任务 → `findPriorAttempts` 返回历史尝试 + 结论；无历史时返回空数组而非崩；命中按相关性排序）+ typecheck。检查者 sub-agent：用本机真实 store 输入一个真实踩过的报错，核对返回的 prior attempts 是否合理（命中相关、不硬凑、不漏明显同类）；**误匹配举一例**分析并标注口径改进方向。
 
 ## Prompt
+
+
+
+
 
 
 

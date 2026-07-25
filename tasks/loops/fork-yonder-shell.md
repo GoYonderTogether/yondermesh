@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'cd desktop/web && npm run build'"
 created: 2026-07-21
-last_run: 2026-07-25 03:23:41
+last_run: 2026-07-25 09:34:51
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-25 03:23:41
 
 
 
+
+
+
+
 读 docs/product-frontend.md §2/§6/§7（架构 + 复用清单 + 零-TCC）。源在 /Users/zoran/Documents/projects/yonder/（apps/web、apps/desktop/src-tauri、packages/ui、scripts/notarize-mac.sh）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ last_run: 2026-07-25 03:23:41
 
 
 
+
+
+
+
 verifier：`cd desktop/web && npm run build` 成功。dev 起来后 tray 图标出现、无系统授权弹窗（人工核验记入报告）。
 
 ## Prompt
+
+
+
+
 
 
 

@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'cd desktop/web && npx vitest run src/features/steward && npm run build'"
 created: 2026-07-21
-last_run: 2026-07-25 03:32:50
+last_run: 2026-07-25 09:34:47
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-25 03:32:50
 
 
 
+
+
+
+
 读 docs/product-frontend.md §3/§5（管家窗口 + 多模态）、desktop/web 的 ui 组件（可参考 yonder messages feature 骨架但剥离业务）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ last_run: 2026-07-25 03:32:50
 
 
 
+
+
+
+
 verifier：`cd desktop/web && npx vitest run src/features/steward && npm run build` 全绿。断言：md 代码块渲染、png/svg 预览、消息流正确、输入提交。
 
 ## Prompt
+
+
+
+
 
 
 

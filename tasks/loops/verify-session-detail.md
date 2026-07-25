@@ -5,9 +5,17 @@ status: passed
 feature: search
 verifier: "node scripts/loop/verify/session-detail.mjs"
 created: 2026-07-21
-last_run: 2026-07-25 03:06:21
+last_run: 2026-07-25 09:50:18
 ---
 ## 1. 目标 (Goal)
+
+
+
+
+
+
+
+
 
 
 
@@ -39,9 +47,25 @@ last_run: 2026-07-25 03:06:21
 
 
 
+
+
+
+
+
+
+
+
 读 src/mcp/server.ts（refinedGetSession：DB 模式默认、live=true 直读源文件）、src/store/schema.ts（messages.revision_id ↔ sessions.current_revision_id）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
+
+
+
+
 
 
 
@@ -73,10 +97,26 @@ last_run: 2026-07-25 03:06:21
 
 
 
+
+
+
+
+
+
+
+
 verifier：取一条 live session id，`get_session` 返回 messages.length>0。
 不变式：messages.revision_id == sessions.current_revision_id；messages.session_id == sessions.id；live=true 模式应直读 `~/.claude/projects/**` 或 `~/.codex/sessions/**` 源文件，返回带 timestamp 的消息。
 
 ## Prompt
+
+
+
+
+
+
+
+
 
 
 

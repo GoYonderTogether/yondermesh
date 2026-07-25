@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'cd desktop/web && npx vitest run src/features/loops && npm run build'"
 created: 2026-07-21
-last_run: 2026-07-25 03:27:42
+last_run: 2026-07-25 09:34:43
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ last_run: 2026-07-25 03:27:42
 
 
 
+
+
+
+
 读 scripts/loop/dashboard.html（现有实现，迁移源）、scripts/loop/server.mjs（API）、docs/product-frontend.md。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ last_run: 2026-07-25 03:27:42
 
 
 
+
+
+
+
 verifier：`cd desktop/web && npx vitest run src/features/loops && npm run build` 全绿。断言：loop 列表渲染、状态色、新建/保存/扫描交互（mock API）。
 
 ## Prompt
+
+
+
+
 
 
 

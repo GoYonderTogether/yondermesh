@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'npx vitest run content-search && npm run typecheck'"
 created: 2026-07-21
-last_run: 2026-07-25 04:10:10
+last_run: 2026-07-25 09:29:26
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -21,9 +25,17 @@ last_run: 2026-07-25 04:10:10
 
 
 
+
+
+
+
 每次循环先读：`ARCHITECTURE.md` §II Session storage + §III.6、`src/store/schema.ts`（`messages` 表 `content` 列，确认当前**无 FTS5 虚拟表**）、`src/store/session-store.ts`（消息写入路径，FTS 同步触发点）、`src/store/index.ts`（`querySessions` 加 keyword 参数）、`src/store/types.ts`（`SessionQuery`）、`src/mcp/tools.ts`（`search_sessions` handler 是否已透传 search）、`tasks/roadmap.md` T2.4.1。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -37,9 +49,17 @@ last_run: 2026-07-25 04:10:10
 
 
 
+
+
+
+
 verifier：`npx vitest run content-search` 全绿（fixture：写入含特定正文的 messages → `querySessions({ keyword })` 命中、不含的不命中、中文 / 大小写 / 前缀匹配口径在测试里写明）+ typecheck。检查者 sub-agent：① 确认 FTS 不影响现有采集回归（跑等价于 verify-collect-db 的断言：总 session / message 数不回退）；② 确认元数据过滤（source/project/since）与 keyword 正文搜索**可组合 AND**；③ 确认旧库（无 FTS 表）启动时能自动补建而不崩。
 
 ## Prompt
+
+
+
+
 
 
 

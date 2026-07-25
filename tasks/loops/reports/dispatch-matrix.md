@@ -10,38 +10,32 @@
 
 | CLI | 通道 | 投递 | 回话 | 分类/原因 |
 |---|---|---|---|---|
-| claude-code | cli-spawn | ⏭️能力缺失 | — | 不支持 new 模式 |
-| claude | cli-spawn | ✅已投递 | ✅有回复 | ✅双向 |
-| codex | cli-spawn | ✅已投递 | ✅有回复 | ✅双向 |
-| hermes | cli-spawn | ✅已投递 | ✅有回复 | ✅双向 |
+| claude-code | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli claude- |
+| claude | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli claude  |
+| codex | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli codex - |
+| hermes | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli hermes  |
 | gemini | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli gemini  |
-| goose | cli-spawn | ✅已投递 | ✅有回复 | ✅双向 |
-| aider | cli-spawn | ❌失败 | — | Warning: Input is not a terminal (fd=0).
-Error in sys.excepthook:
-Traceback (most recent call last): |
-| amp | cli-spawn | 🔒需登录/配置 | — | Error: Out of credits |
-| factory | cli-spawn | 🔒需登录/配置 | — | Error during droid execution: Authentication failed. Please log in using /login or set a valid FACTO |
-| vibe | cli-spawn | ❌失败 | — | Warning: /Users/zoran/Documents/projects/yondermesh is not trusted; project 
-configuration (AGENTS.m |
+| goose | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli goose - |
+| aider | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli aider - |
+| amp | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli amp --m |
+| factory | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli factory |
+| vibe | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli vibe -- |
 | codebuddy | — | 跳过：未安装（跳过） | — | — |
-| trae-cli | cli-spawn | ⏭️能力缺失 | — | 不支持 new 模式 |
-| trae-ide | applescript | ✅已投递 | ⚠️无回复/读不到 | ⚠️单向 |
-| opencode | http-api | ✅已投递 | ⚠️无回复/读不到 | ⚠️单向 |
-| qwen | cli-spawn | 🔒需登录/配置 | — | Warning: MCP server(s) failed to start: yondermesh. Continuing with built-in tools and any servers t |
+| trae-cli | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli trae-cl |
+| trae-ide | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli trae-id |
+| opencode | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli opencod |
+| qwen | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli qwen -- |
 | openhands | — | 跳过：未安装（跳过） | — | — |
-| kimi | ws-rpc | 🔒需登录/配置 | — | kimi 未返回回复（可能认证失败或模型未配置） |
+| kimi | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli kimi -- |
 | openclaw | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli opencla |
-| pi | ws-rpc | ✅已投递 | ✅有回复 | ✅双向 |
-| copilot | ws-rpc | 🔒需登录/配置 | — | Third-party MCP servers are disabled by your organization's Copilot policy. Only built-in servers ar |
-| crush | cli-spawn | 🔒需登录/配置 | — | ERROR  
-          
-  No providers configured - please run 'crush' to set up a provider interactively |
-| cline | cli-spawn | ❌失败 | — | [31merror:[0m hook dispatch failed: session.hook requires a valid hook event payload
-[31merror:[ |
-| continue | cli-spawn | 🔒需登录/配置 | — | {"status":"error","message":"Failed to parse config: Expected object, received null"} |
+| pi | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli pi --mo |
+| copilot | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli copilot |
+| crush | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli crush - |
+| cline | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli cline - |
+| continue | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli continu |
 | antigravity | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli antigra |
-| windsurf | applescript | ✅已投递 | ⚠️无回复/读不到 | ⚠️单向 |
-| cursor-ide | applescript | ✅已投递 | ⚠️无回复/读不到 | ⚠️单向 |
-| chatgpt | applescript | ✅已投递 | ⚠️无回复/读不到 | ⚠️单向 |
+| windsurf | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli windsur |
+| cursor-ide | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli cursor- |
+| chatgpt | ? | ❌ 失败 | — | Command failed: node /Users/zoran/Documents/projects/yondermesh/dist/bin/ymesh.js send --cli chatgpt |
 
-覆盖：25 个可 trigger CLI（双向 5 / 单向 5 / 需登录 7 / 失败 6）+ 跳过 4
+覆盖：25 个可 trigger CLI（双向 0 / 单向 0 / 需登录 0 / 失败 25）+ 跳过 2

@@ -5,9 +5,21 @@ status: passed
 feature: stats
 verifier: "bash -c 'ymesh stats --json | jq -e \".totalSessions > 0\"'"
 created: 2026-07-21
-last_run: 2026-07-25 03:39:27
+last_run: 2026-07-25 09:49:43
 ---
 ## 1. 目标 (Goal)
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -17,9 +29,33 @@ last_run: 2026-07-25 03:39:27
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 读 src/store/session-store.ts（getSessionStats）、src/bin/ymesh.ts cmdState/cmdStateSync（852-951、1801-1833，现有统计输出）、docs/features.yaml（stats 现状）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -29,9 +65,33 @@ last_run: 2026-07-25 03:39:27
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 verifier：`ymesh stats --json | jq -e '.totalSessions>0'` exit 0。多维切片（--by day/project/model）计数与 store 一致。
 
 ## Prompt
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

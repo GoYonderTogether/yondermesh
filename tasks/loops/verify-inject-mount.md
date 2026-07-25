@@ -5,9 +5,17 @@ status: passed
 feature: inject
 verifier: "node scripts/loop/verify/inject-mount.mjs"
 created: 2026-07-21
-last_run: 2026-07-25 03:06:21
+last_run: 2026-07-25 09:50:16
 ---
 ## 1. 目标 (Goal)
+
+
+
+
+
+
+
+
 
 
 
@@ -31,9 +39,25 @@ last_run: 2026-07-25 03:06:21
 
 
 
+
+
+
+
+
+
+
+
 读 src/mount/（manager/strategies/registry）、specs/mcp-spec.md 的 agents 工具、src/bin/ymesh.ts 的 mount 命令。挂载三类型：mcp-server / skill / always-on。
 
 ## 3. 行动约束 (Action)
+
+
+
+
+
+
+
+
 
 
 
@@ -57,10 +81,26 @@ last_run: 2026-07-25 03:06:21
 
 
 
+
+
+
+
+
+
+
+
 verifier：① `agents {include_mounts:true}` 返回非空且每条含 mountStrategies；② `ymesh mount status` exit 0。
 深入（loop 内）：对至少一个已挂载 CLI，确认其 MCP server 入口被写进它的配置目录（如 ~/.claude/claude_mcp_config.json），且 `ymesh mcp call` 能经该挂载被调用。
 
 ## Prompt
+
+
+
+
+
+
+
+
 
 
 

@@ -5,9 +5,13 @@ status: passed
 feature: 
 verifier: "bash -c 'npx vitest run stuck && npm run typecheck'"
 created: 2026-07-21
-last_run: 2026-07-25 03:32:49
+last_run: 2026-07-25 09:34:31
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -17,9 +21,17 @@ L4 派生层第一块：可确定性判定“哪些 session 卡住了”，供 b
 
 
 
+
+
+
+
 每次循环先读：`ARCHITECTURE.md` §III.6（内核零 LLM）+ §II、`docs/product-vision-agent-bus-v0.1.md`（US-4/US-7 卡住主动告知）、`src/store/index.ts`（`querySessions` / `getSessionStats` / `getActiveSessionsSummary` 现成查询）、`src/store/types.ts`（`SessionRecord` / `SessionMessage` 结构，含 `updated_at` / `last_seen_at` / topology）、`tasks/roadmap.md` T2.4（新建 `src/derive/`）、`src/briefing/generator.ts`（briefing 后续将消费本能力，本 loop 不接入）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -29,9 +41,17 @@ L4 派生层第一块：可确定性判定“哪些 session 卡住了”，供 b
 
 
 
+
+
+
+
 verifier：`npx vitest run stuck` 全绿（fixture sessions 断言：有“卡住”特征的被标出、活跃的不被标、阈值边界——刚好 staleHours 处——判定正确）+ typecheck。检查者 sub-agent：用本机真实 store 跑 `detectStuckSessions`，抽样核对被标“卡住”的 session 是否真的 last-updated 久远 + 最后消息形态吻合；**误报 / 漏报各举一例**分析。
 
 ## Prompt
+
+
+
+
 
 
 

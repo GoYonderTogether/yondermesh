@@ -5,9 +5,13 @@ status: passed
 feature: briefing
 verifier: "bash -c 'npx vitest run src/briefing && npm run typecheck'"
 created: 2026-07-21
-last_run: 2026-07-25 03:32:20
+last_run: 2026-07-25 09:29:24
 ---
 ## 1. 目标 (Goal)
+
+
+
+
 
 
 
@@ -25,9 +29,17 @@ last_run: 2026-07-25 03:32:20
 
 
 
+
+
+
+
 读 src/briefing/generator.ts（现有 stub）、src/store/session-store.ts（getSessionStats/querySessions/getActiveSessionsSummary）、src/daemon/index.ts（调度接入点）、src/bin/ymesh.ts cmdStateSync（数据组装参考）、docs/features.yaml（briefing 现状）。
 
 ## 3. 行动约束 (Action)
+
+
+
+
 
 
 
@@ -45,9 +57,17 @@ last_run: 2026-07-25 03:32:20
 
 
 
+
+
+
+
 verifier：`npx vitest run src/briefing` 全绿 + typecheck 过。断言：晨报含完成数/成功率/待办，数字 = store 实际值；不漏报失败 session。
 
 ## Prompt
+
+
+
+
 
 
 

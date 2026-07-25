@@ -5,9 +5,11 @@ status: passed
 feature: 
 verifier: "bash -c 'npx vitest run reply-adapter && npm run typecheck'"
 created: 2026-07-21
-last_run: 2026-07-25 03:23:43
+last_run: 2026-07-25 05:29:48
 ---
 ## 1. 目标 (Goal)
+
+
 
 
 
@@ -21,9 +23,13 @@ trigger 层体量大却几乎零断言（roadmap T3.2 记约 1748 行）。`Repl
 
 
 
+
+
 每次循环先读：`ARCHITECTURE.md` §II Trigger 段（ReplyAdapter 四步管线 + `ReplyResult.source` 派生规则）、`src/trigger/reply-adapter.ts`（`extractReply` / `stripAnsi` / `applyCliSpecificFilter` / `applyGenericFilter` / `collapseBlankLines`）、`src/trigger/types.ts`（`ReplyResult { text, source, latencyMs }`）、`src/trigger/adapter.ts`（3 模式路由 stopped/running/new，用 `FakeTriggerAdapter` 可测）、`tasks/roadmap.md` T3.2、`tests/`（确认当前无 reply-adapter / trigger 测试）。
 
 ## 3. 行动约束 (Action)
+
+
 
 
 
@@ -37,9 +43,13 @@ trigger 层体量大却几乎零断言（roadmap T3.2 记约 1748 行）。`Repl
 
 
 
+
+
 verifier：`npx vitest run reply-adapter` 全绿 + typecheck。覆盖度断言：① stripAnsi 去除 CSI/OSC 转义；② applyCliSpecificFilter 各分支（如 hermes `Warning: Unknown toolsets`、claude `Tip:`）；③ applyGenericFilter 去 log 前缀（warn/debug/info/error…）+ 启动 banner（Welcome/Booting/Starting…）；④ collapseBlankLines（3+ 连续空行→2、首尾 trim）；⑤ `delivered=false` 或 cleaned 为空时返回空串且不抛；⑥ `ReplyResult.source` 派生正确（http-api/ws-rpc→`api`、tmux/applescript→`tmux-capture`、cli-spawn/stdin→`stdout`）。检查者 sub-agent：确认 trigger 相关用例合计 >15 个且覆盖 `applyCliSpecificFilter` 的每个 CLI 分支（对齐 T3.2 验收）。
 
 ## Prompt
+
+
 
 
 
