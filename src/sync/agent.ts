@@ -58,13 +58,20 @@ export class SyncAgent {
 
   /** 执行一次同步 */
   private async sync(): Promise<void> {
-    // TODO: 实现 E2E 加密推送 + 拉取
-    // 1. 查询本地未同步的 session
-    // 2. 加密 session 内容
-    // 3. POST 到 relay
-    // 4. GET 其他设备的加密 session
-    // 5. 解密并入库
-    // 6. 更新 sync_state
+    // sync 尚未实现（planned）——显式失败而非静默
+    // （ARCHITECTURE §III.5「Failure is never silent」）。
+    // 目标架构与未来验收门见 docs/sdd/sync.md。
+    // 实现时按以下步骤做 E2E 加密推送 + 拉取（密文离开设备，relay 只见密文）：
+    //   1. 查询本地未同步的 session
+    //   2. 加密 session 内容
+    //   3. POST 到 relay
+    //   4. GET 其他设备的加密 session
+    //   5. 解密并入库
+    //   6. 更新 sync_state
+    //
+    // store 字段保留给未来实现（构造器已注入），此处仅占位读取以满足
+    // noUnusedLocals，不产生任何副作用；真正的失败由下方 throw 显式抛出。
     void this.store;
+    throw new Error('sync 尚未实现（planned）');
   }
 }
