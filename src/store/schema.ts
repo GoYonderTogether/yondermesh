@@ -159,18 +159,28 @@ CREATE INDEX IF NOT EXISTS idx_msg_expires            ON agent_messages(expires_
 /**
  * FTS5 全文索引（messages.content）+ 同步触发器。
  *
- * 设计要点：
+ * 设计要点（v2 — 体积优化版）：
+ *   - **只索引 user 消息**：用户消息是搜索的主要目标（找"我问过 X 的 session"），
+ *     assistant 消息体量大但搜索价值低（多为代码/长回复）。这一限制将 FTS 行数
+ *     从 11.3M 降到 ~885K，FTS 体积从预估 13GB 降到 ~0.9GB。
+ *   - **截断到 500 字符**：trigram 索引体积与 content 长度线性相关。
+ *     user 消息中 > 500 字符的占 18% 但占 80% 字节；截断后查询仍能匹配前 500 字符的子串。
+ *   - **Regular FTS5（非 contentless）**：存储 content + UNINDEXED 列（session_id 等）。
+ *     contentless 看似节省 ~50% 体积，但 UNINDEXED 列无法检索（xColumnValue 不可用），
+ *     导致 JOIN 查询失败。Regular + 截断后 content 存储仅 ~177MB，可接受。
  *   - 使用 trigram 分词器：原生支持 CJK 子串匹配 + 英文子串匹配（大小写不敏感）
- *   - 独立 FTS5 表（非 contentless），存储 content + 元数据（session_id / message_id / revision_id）
- *   - 触发器保持 messages → messages_fts 单向同步（INSERT/UPDATE/DELETE）
- *   - 查询时通过 session_id + revision_id = sessions.current_revision_id 过滤，
- *     只命中当前 revision 的消息（旧 revision 即使在 FTS 中也不会被召回）
+ *   - 触发器带 `WHEN new.role = 'user'` 条件，非 user 消息不索引（零开销）
+ *   - 查询时通过 session_id + revision_id = sessions.current_revision_id 过滤
  *   - trigram 限制：<3 字符的 token 无法走 FTS，由 store 层 LIKE 回退
  *   - 旧库升级时由 syncFtsIfStale() 回填（见 session-store.ts）
  *   - 零新依赖：better-sqlite3 / node:sqlite 原生支持 FTS5 + trigram
+ *
+ * 体积对比（11.3M messages 库）：
+ *   v1 全量回填：~13GB（content 3.4GB + trigram 10GB）
+ *   v2 只 user + 截断 500：~0.9GB（content 177MB + trigram 700MB）
  */
 export const SCHEMA_FTS = `
--- FTS5 虚拟表：消息正文全文索引（trigram 分词器，支持 CJK 子串匹配）
+-- FTS5 虚拟表：仅 user 消息的全文索引（trigram 分词器，支持 CJK 子串匹配）
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   content,
   session_id UNINDEXED,
@@ -179,23 +189,42 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   tokenize = 'trigram'
 );
 
--- 触发器：messages INSERT → 同步到 FTS
-CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+-- 触发器：user 消息 INSERT → 索引（截断到 500 字符控制 trigram 体积）
+CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages WHEN new.role = 'user' BEGIN
   INSERT INTO messages_fts(content, session_id, message_id, revision_id)
-  VALUES (new.content, new.session_id, new.id, new.revision_id);
+  VALUES (substr(new.content, 1, 500), new.session_id, new.id, new.revision_id);
 END;
 
--- 触发器：messages DELETE → 从 FTS 删除
-CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+-- 触发器：user 消息 DELETE → 从 FTS 删除
+CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages WHEN old.role = 'user' BEGIN
   DELETE FROM messages_fts WHERE message_id = old.id;
 END;
 
--- 触发器：messages UPDATE → 更新 FTS
-CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+-- 触发器：user 消息 UPDATE → 重建该行的 FTS 索引
+CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages WHEN new.role = 'user' BEGIN
   DELETE FROM messages_fts WHERE message_id = old.id;
   INSERT INTO messages_fts(content, session_id, message_id, revision_id)
-  VALUES (new.content, new.session_id, new.id, new.revision_id);
+  VALUES (substr(new.content, 1, 500), new.session_id, new.id, new.revision_id);
 END;
+`;
+
+/**
+ * FTS schema 升级：从 v1（全消息索引）迁移到 v2（仅 user + 截断 500）。
+ *
+ * 由 ensureSchema 在检测到 v1 时调用一次。幂等（DROP IF EXISTS）。
+ *
+ * 检测条件：schema_meta 表中 fts_version != 'v2'。
+ */
+export const FTS_V2_MIGRATION = `
+-- 删除旧触发器（v1 全角色触发器）
+DROP TRIGGER IF EXISTS messages_fts_ai;
+DROP TRIGGER IF EXISTS messages_fts_ad;
+DROP TRIGGER IF EXISTS messages_fts_au;
+
+-- 删除旧 FTS 表（v1，全消息索引）
+DROP TABLE IF EXISTS messages_fts;
+
+-- 重建为 v2（仅 user + 截断 500）—— 由 SCHEMA_FTS 重新创建
 `;
 
 /**

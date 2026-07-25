@@ -14,7 +14,7 @@
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
-import { SCHEMA, SCHEMA_INDEXES, SCHEMA_FTS } from './schema.js';
+import { SCHEMA, SCHEMA_INDEXES, SCHEMA_FTS, FTS_V2_MIGRATION } from './schema.js';
 import { MIGRATION_COLUMNS, MIGRATION_BACKFILLS } from './schema.js';
 import type { ProcessAliveChecker } from './process-detector.js';
 import type {
@@ -97,8 +97,57 @@ export class SessionStore {
     this.db.exec(SCHEMA);
     this.runMigrations();
     this.db.exec(SCHEMA_INDEXES);
-    // FTS5 全文索引 + 同步触发器（旧库首次升级时由 syncFtsIfStale 回填）
-    this.db.exec(SCHEMA_FTS);
+
+    // FTS v2 迁移：检测 v1 FTS（非 contentless）并升级到 v2（contentless + 仅 user）
+    // 用 schema_meta 元数据表记录 fts_version，幂等
+    this.db.exec(`CREATE TABLE IF NOT EXISTS schema_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )`);
+    const ftsVersionRow = this.db
+      .prepare('SELECT value FROM schema_meta WHERE key = ?')
+      .get('fts_version') as Row | undefined;
+
+    if (!ftsVersionRow) {
+      // 首次安装或旧库无元数据：检测是否需要从 v1 迁移
+      // v1 = 全消息索引（无 WHEN role='user' 条件）
+      const oldFtsRow = this.db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages_fts'")
+        .get() as Row | undefined;
+      const oldSql = (oldFtsRow?.sql as string) ?? '';
+      if (oldSql) {
+        // 任何已存在的 FTS 表都需要迁移到 v2（v1 全消息，或 contentless 实验）
+        this.db.exec(FTS_V2_MIGRATION);
+      }
+      // 创建 v2 FTS schema
+      this.db.exec(SCHEMA_FTS);
+      this.db
+        .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
+        .run('fts_version', 'v2');
+    } else if (ftsVersionRow.value !== 'v2') {
+      // 从其他版本升级到 v2
+      this.db.exec(FTS_V2_MIGRATION);
+      this.db.exec(SCHEMA_FTS);
+      this.db
+        .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
+        .run('fts_version', 'v2');
+    } else {
+      // fts_version == 'v2'，但需要检测当前 FTS 是否真的是 v2（regular，非 contentless）
+      // 因为之前有一个错误的 v2 实现（contentless），需要检测并修复
+      const currentFtsRow = this.db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages_fts'")
+        .get() as Row | undefined;
+      const currentSql = (currentFtsRow?.sql as string) ?? '';
+      if (currentSql.includes("content=''")) {
+        // 当前是 contentless FTS（错误的 v2），迁移到正确的 v2（regular）
+        this.db.exec(FTS_V2_MIGRATION);
+        this.db.exec(SCHEMA_FTS);
+      } else {
+        // 已是正确的 v2，确保 schema 存在（CREATE IF NOT EXISTS 幂等）
+        this.db.exec(SCHEMA_FTS);
+      }
+    }
+
     this.syncFtsIfStale();
   }
 
@@ -106,40 +155,45 @@ export class SessionStore {
    * 回填 messages_fts：旧库升级到 FTS 时，触发器只能同步新写入的 messages，
    * 历史 messages 需要一次性回填。幂等（NOT IN 防重复）。
    *
-   * 快速路径：FTS 行数 >= messages 行数 → 已同步，跳过。
-   * 大库保护：messages > 50000 且 FTS 空 → 跳过自动回填（避免阻塞所有命令），
+   * v2 策略：只回填 user 消息，content 截断到 500 字符。
+   *
+   * 快速路径：FTS 行数 >= user messages 行数 → 已同步，跳过。
+   * 大库保护：user messages > 50000 且 FTS 空 → 跳过自动回填（避免阻塞所有命令），
    *           由 `ymesh sync fts` 显式触发（分批回填）。
    */
   private syncFtsIfStale(): void {
     const row = this.db
       .prepare(
         `SELECT
-           (SELECT COUNT(*) FROM messages) AS m,
+           (SELECT COUNT(*) FROM messages WHERE role = 'user') AS m,
            (SELECT COUNT(*) FROM messages_fts) AS f`,
       )
       .get() as Row;
-    const msgTotal = (row.m as number) ?? 0;
+    const userMsgTotal = (row.m as number) ?? 0;
     const ftsTotal = (row.f as number) ?? 0;
-    if (ftsTotal >= msgTotal) return; // 已同步
-    // 大库保护：messages > 50000 且 FTS 未完全同步（差距 > 1000）时跳过自动回填。
+    if (ftsTotal >= userMsgTotal) return; // 已同步
+    // 大库保护：user messages > 50000 且 FTS 未完全同步（差距 > 1000）时跳过自动回填。
     // 自动回填是单事务全量 INSERT，大表上会阻塞数分钟~数小时，拖死所有 store 构造。
     // 由 `ymesh sync fts` 显式分批回填（游标法，不阻塞其他命令）。
-    if (msgTotal > 50_000 && msgTotal - ftsTotal > 1000) {
+    if (userMsgTotal > 50_000 && userMsgTotal - ftsTotal > 1000) {
       console.warn(
-        `[yondermesh] messages 表 ${msgTotal} 条，FTS 已回填 ${ftsTotal} 条（未同步）。` +
+        `[yondermesh] user 消息 ${userMsgTotal} 条，FTS 已回填 ${ftsTotal} 条（未同步）。` +
           ` 跳过自动回填以避免阻塞。如需全文搜索，请跑 \`ymesh sync fts\` 显式分批回填。`,
       );
       return;
     }
     this.db.exec(`
       INSERT INTO messages_fts(content, session_id, message_id, revision_id)
-      SELECT content, session_id, id, revision_id FROM messages
-      WHERE id NOT IN (SELECT message_id FROM messages_fts)
+      SELECT substr(content, 1, 500), session_id, id, revision_id
+      FROM messages
+      WHERE role = 'user' AND id NOT IN (SELECT message_id FROM messages_fts)
     `);
   }
 
   /**
    * 显式分批回填 messages_fts（供 `ymesh sync fts` 调用）。
+   *
+   * v2 策略：只回填 user 消息，content 截断到 500 字符。
    *
    * 与 syncFtsIfStale 的区别：
    *   - 公开方法，不跳过大库
@@ -157,7 +211,7 @@ export class SessionStore {
     const row = this.db
       .prepare(
         `SELECT
-           (SELECT COUNT(*) FROM messages) AS m,
+           (SELECT COUNT(*) FROM messages WHERE role = 'user') AS m,
            (SELECT COUNT(*) FROM messages_fts) AS f`,
       )
       .get() as Row;
@@ -172,11 +226,11 @@ export class SessionStore {
       .get() as Row;
     const cursor = (cursorRow.cur as number) ?? 0;
 
-    // 取游标之后的下一批（id > cursor 走主键索引，O(batchSize)）
+    // 取游标之后的下一批 user 消息（id > cursor 走主键索引，O(batchSize)）
     const batch = this.db
       .prepare(
         `SELECT id, content, session_id, revision_id FROM messages
-         WHERE id > ? ORDER BY id ASC LIMIT ?`,
+         WHERE role = 'user' AND id > ? ORDER BY id ASC LIMIT ?`,
       )
       .all(cursor, batchSize) as Array<{
         id: number;
@@ -193,7 +247,9 @@ export class SessionStore {
     this.db.exec('BEGIN');
     try {
       for (const m of batch) {
-        insert.run(m.content, m.session_id, m.id, m.revision_id);
+        // 截断到 500 字符（与触发器保持一致）
+        const truncated = m.content.length > 500 ? m.content.substring(0, 500) : m.content;
+        insert.run(truncated, m.session_id, m.id, m.revision_id);
       }
       this.db.exec('COMMIT');
     } catch (err) {

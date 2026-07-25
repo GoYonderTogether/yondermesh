@@ -190,30 +190,28 @@ export function apply(
     // ─── L3：归档老 session ─────────────────────────────────────
     const archiveResult = applyArchive(db, policy, writeBackupEntry);
 
-    // ─── FTS 维护：重建触发器 + 清理孤立 FTS 行 ────────────────
+    // ─── FTS 维护：重建 v2 触发器 + 清理孤立 FTS 行 ────────────────
     //
-    // apply 期间 DROP 了 FTS 触发器，现在重建。
+    // apply 期间 DROP 了 FTS 触发器，现在重建为 v2（regular FTS5 + 仅 user + 截断 500）。
     // 然后清理孤立 FTS 行（指向已被 DELETE 的 messages 的行）。
     //
-    // 清理策略：用 NOT IN 子查询走 messages.id 主键索引
-    // 12M FTS 行 × log(12M messages) ≈ 288M 操作，约 5-10 分钟
-    // 比 apply 期间逐条触发 FTS 全表扫描快 100x+
-    db.exec(`CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+    // v2 触发器只对 role='user' 的消息触发，重建后未来增量正确。
+    // regular FTS5 可以直接 DELETE WHERE message_id = ?（UNINDEXED 列可查询）。
+    db.exec(`CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages WHEN new.role = 'user' BEGIN
       INSERT INTO messages_fts(content, session_id, message_id, revision_id)
-      VALUES (new.content, new.session_id, new.id, new.revision_id);
+      VALUES (substr(new.content, 1, 500), new.session_id, new.id, new.revision_id);
     END`);
-    db.exec(`CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+    db.exec(`CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages WHEN old.role = 'user' BEGIN
       DELETE FROM messages_fts WHERE message_id = old.id;
     END`);
-    db.exec(`CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+    db.exec(`CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages WHEN new.role = 'user' BEGIN
       DELETE FROM messages_fts WHERE message_id = old.id;
       INSERT INTO messages_fts(content, session_id, message_id, revision_id)
-      VALUES (new.content, new.session_id, new.id, new.revision_id);
+      VALUES (substr(new.content, 1, 500), new.session_id, new.id, new.revision_id);
     END`);
 
     // 清理孤立 FTS 行（分批避免长事务）
-    // 注意：这条 SQL 会扫 messages_fts 全表，但对每行用 messages.id 主键做 lookup
-    // 如果 messages 表小（被删很多），NOT IN 的结果集大，清理量大
+    // regular FTS5 可以直接 DELETE WHERE message_id NOT IN (messages.id)
     const orphanCleanupBatch = db.prepare(
       `DELETE FROM messages_fts WHERE rowid IN (
          SELECT rowid FROM messages_fts
