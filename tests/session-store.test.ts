@@ -81,7 +81,8 @@ describe('LOOP-001 验收门 1：schema 与 :memory: 构造', () => {
   it('重复初始化幂等（schema IF NOT EXISTS）', () => {
     // 再调一次 ensureSchema 不应抛错
     expect(() => store.ensureSchema()).not.toThrow();
-    expect(store.listTables()).toHaveLength(7);
+    // 7 张业务表 + 1 张 messages_fts 虚拟表（FTS5 全文索引）
+    expect(store.listTables()).toHaveLength(8);
   });
 });
 

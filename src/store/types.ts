@@ -183,6 +183,8 @@ export interface SessionQuery {
   includeArchived?: boolean;
   /** 按模型过滤 */
   model?: string;
+  /** 关键字全文检索（匹配当前 revision 的 messages.content，FTS5 MATCH） */
+  keyword?: string;
 }
 
 /** session 列表项 */

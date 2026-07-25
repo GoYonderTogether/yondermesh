@@ -157,6 +157,48 @@ CREATE INDEX IF NOT EXISTS idx_msg_expires            ON agent_messages(expires_
 `;
 
 /**
+ * FTS5 全文索引（messages.content）+ 同步触发器。
+ *
+ * 设计要点：
+ *   - 使用 trigram 分词器：原生支持 CJK 子串匹配 + 英文子串匹配（大小写不敏感）
+ *   - 独立 FTS5 表（非 contentless），存储 content + 元数据（session_id / message_id / revision_id）
+ *   - 触发器保持 messages → messages_fts 单向同步（INSERT/UPDATE/DELETE）
+ *   - 查询时通过 session_id + revision_id = sessions.current_revision_id 过滤，
+ *     只命中当前 revision 的消息（旧 revision 即使在 FTS 中也不会被召回）
+ *   - trigram 限制：<3 字符的 token 无法走 FTS，由 store 层 LIKE 回退
+ *   - 旧库升级时由 syncFtsIfStale() 回填（见 session-store.ts）
+ *   - 零新依赖：better-sqlite3 / node:sqlite 原生支持 FTS5 + trigram
+ */
+export const SCHEMA_FTS = `
+-- FTS5 虚拟表：消息正文全文索引（trigram 分词器，支持 CJK 子串匹配）
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+  content,
+  session_id UNINDEXED,
+  message_id UNINDEXED,
+  revision_id UNINDEXED,
+  tokenize = 'trigram'
+);
+
+-- 触发器：messages INSERT → 同步到 FTS
+CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts(content, session_id, message_id, revision_id)
+  VALUES (new.content, new.session_id, new.id, new.revision_id);
+END;
+
+-- 触发器：messages DELETE → 从 FTS 删除
+CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+  DELETE FROM messages_fts WHERE message_id = old.id;
+END;
+
+-- 触发器：messages UPDATE → 更新 FTS
+CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+  DELETE FROM messages_fts WHERE message_id = old.id;
+  INSERT INTO messages_fts(content, session_id, message_id, revision_id)
+  VALUES (new.content, new.session_id, new.id, new.revision_id);
+END;
+`;
+
+/**
  * 已有数据库的列迁移。在 ensureSchema 之后执行，幂等。
  */
 export const MIGRATION_COLUMNS: { table: string; column: string; type: string }[] = [

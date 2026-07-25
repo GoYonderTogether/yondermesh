@@ -14,7 +14,7 @@
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
-import { SCHEMA, SCHEMA_INDEXES } from './schema.js';
+import { SCHEMA, SCHEMA_INDEXES, SCHEMA_FTS } from './schema.js';
 import { MIGRATION_COLUMNS, MIGRATION_BACKFILLS } from './schema.js';
 import type { ProcessAliveChecker } from './process-detector.js';
 import type {
@@ -61,6 +61,21 @@ const { DatabaseSync } = nodeRequire('node:sqlite') as {
   DatabaseSync: typeof DatabaseSyncType;
 };
 
+/**
+ * 清理关键字并分词：保留字母 / 数字 / 下划线 / CJK / 空白，其余替换为空白。
+ *
+ * 返回有效 token 列表（空白分隔）。空关键字返回空数组。
+ * 用于 trigram FTS5 MATCH（≥3 字符 token）+ LIKE 回退（<3 字符 token）。
+ */
+export function tokenizeKeyword(keyword: string): string[] {
+  const cleaned = keyword
+    .replace(/[^\p{L}\p{N}_\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return [];
+  return cleaned.split(' ').filter(Boolean);
+}
+
 export class SessionStore {
   private readonly db: DatabaseSyncType;
 
@@ -78,6 +93,33 @@ export class SessionStore {
     this.db.exec(SCHEMA);
     this.runMigrations();
     this.db.exec(SCHEMA_INDEXES);
+    // FTS5 全文索引 + 同步触发器（旧库首次升级时由 syncFtsIfStale 回填）
+    this.db.exec(SCHEMA_FTS);
+    this.syncFtsIfStale();
+  }
+
+  /**
+   * 回填 messages_fts：旧库升级到 FTS 时，触发器只能同步新写入的 messages，
+   * 历史 messages 需要一次性回填。幂等（NOT IN 防重复）。
+   *
+   * 快速路径：FTS 行数 >= messages 行数 → 已同步，跳过。
+   */
+  private syncFtsIfStale(): void {
+    const row = this.db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM messages) AS m,
+           (SELECT COUNT(*) FROM messages_fts) AS f`,
+      )
+      .get() as Row;
+    const msgTotal = (row.m as number) ?? 0;
+    const ftsTotal = (row.f as number) ?? 0;
+    if (ftsTotal >= msgTotal) return; // 已同步
+    this.db.exec(`
+      INSERT INTO messages_fts(content, session_id, message_id, revision_id)
+      SELECT content, session_id, id, revision_id FROM messages
+      WHERE id NOT IN (SELECT message_id FROM messages_fts)
+    `);
   }
 
   /** 幂等列迁移：检测列是否存在，缺失才 ALTER TABLE ADD COLUMN */
@@ -122,11 +164,11 @@ export class SessionStore {
     this.db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE id = ?`).run(...params);
   }
 
-  /** 列出所有业务表（不含 sqlite 内部表） */
+  /** 列出所有业务表（不含 sqlite 内部表与 FTS5 影子表） */
   listTables(): string[] {
     const rows = this.db
       .prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE TABLE ''%' ORDER BY name",
       )
       .all() as Row[];
     return rows.map((r) => r.name as string);
@@ -419,6 +461,48 @@ export class SessionStore {
       const projEsc = this.escapeLike(projNorm);
       conditions.push("(project_path = ? OR project_path LIKE ? ESCAPE '\\')");
       params.push(projNorm, projEsc + '/%');
+    }
+
+    // 关键字全文检索：trigram FTS5 MATCH（≥3 字符 token）+ LIKE 回退（<3 字符 token）
+    // 只命中当前 revision 的消息（旧 revision 内容不召回）
+    if (query.keyword !== undefined) {
+      const tokens = tokenizeKeyword(query.keyword);
+      if (tokens.length === 0) {
+        // 无有效 token：不可能匹配任何消息，直接返回空结果
+        conditions.push('1 = 0');
+      } else {
+        const longTokens = tokens.filter((t) => t.length >= 3);
+        const shortTokens = tokens.filter((t) => t.length < 3);
+        // 长token（≥3字符）：走 FTS5 trigram MATCH（子串匹配，大小写不敏感）
+        if (longTokens.length > 0) {
+          // 每个 token 用双引号包裹（phrase，避免 FTS5 语法字符干扰），空格连接（AND）
+          const matchExpr = longTokens.map((t) => `"${t}"`).join(' ');
+          conditions.push(
+            `EXISTS (
+              SELECT 1 FROM messages_fts f
+              WHERE f.messages_fts MATCH ?
+                AND f.session_id = sessions.id
+                AND f.revision_id = sessions.current_revision_id
+            )`,
+          );
+          params.push(matchExpr);
+        }
+        // 短token（<3字符）：trigram 无法索引，回退到 LIKE 子串匹配
+        for (const t of shortTokens) {
+          const lowered = t.toLowerCase();
+          // 转义 LIKE 特殊字符
+          const escaped = lowered.replace(/[%_\\]/g, '\\$&');
+          conditions.push(
+            `EXISTS (
+              SELECT 1 FROM messages m
+              WHERE m.session_id = sessions.id
+                AND m.revision_id = sessions.current_revision_id
+                AND LOWER(m.content) LIKE ? ESCAPE '\\'
+            )`,
+          );
+          params.push(`%${escaped}%`);
+        }
+      }
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
