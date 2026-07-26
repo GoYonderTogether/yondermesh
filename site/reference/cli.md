@@ -65,6 +65,11 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh retain` | analyze      Scan database for redundancy (noise/oversized/stale sessions + session-level classification), report compressible volume (read-only) |
 | `ymesh retain` | apply        Execute retention (L0 drop noise + L2 truncate + SL0/SL1/SL2 session-level + L3 archive), with deduplicated backup |
 | `ymesh Options:` | --dry-run (preview) --no-backup (skip backup) [--db &lt;path&gt;] [--json] |
+| `ymesh retrospective` | Single-session retrospective: fact layer (originalNeed/toolCalls/detours) + 5-section markdown skeleton |
+| `ymesh Options:` | --session &lt;id&gt; [--output &lt;path&gt;] [--json] [--no-redact] [--db &lt;path&gt;] |
+| `ymesh issue` | create        Submit retrospective as a user-story GitHub issue (shell-out to gh CLI) |
+| `ymesh Options:` | --title &lt;t&gt; [--body &lt;text&gt;] [--body-file &lt;path&gt;|-] [--label &lt;l&gt;...] |
+| `ymesh [--repo` | &lt;owner/name&gt;] [--dry-run] |
 
 ## Global Options
 

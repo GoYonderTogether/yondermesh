@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
 import { hostname, homedir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 
 import { SessionStore } from '../store/index.js';
 import { detectAliveProcesses } from '../store/process-detector.js';
@@ -51,6 +51,8 @@ import type { ExtractKind } from '../extract/index.js';
 import { BriefingGenerator } from '../briefing/generator.js';
 import { StatsGenerator, sortedDays } from '../briefing/stats.js';
 import { distillProject, listDistilled, getDistilled } from '../distill/index.js';
+import { generateRetrospective, renderNarrative, redact } from '../retrospective/index.js';
+import type { RetrospectiveFact } from '../retrospective/index.js';
 
 import { McpServer } from '../mcp/server.js';
 import {
@@ -261,6 +263,11 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   retain analyze      扫描数据库冗余（噪音/超长/老旧 session + session 级分类），报告可压缩量（只读）
   retain apply        执行筛除（L0 删噪音 + L2 截断 + SL0/SL1/SL2 session 级 + L3 归档），含去重备份
                       选项: --dry-run（预演）--no-backup（跳过备份）[--db <path>] [--json]
+  retrospective       单 session 复盘：生成事实层（originalNeed/toolCalls/detours）+ 5 段 markdown 骨架
+                      选项: --session <id> [--output <path>] [--json] [--no-redact] [--db <path>]
+  issue create        把复盘产物作为 user story 提交到 GitHub issue（shell-out 到 gh CLI）
+                      选项: --title <t> [--body <text>] [--body-file <path>|-] [--label <l>...]
+                            [--repo <owner/name>] [--dry-run]
 
 安装方式:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -371,6 +378,11 @@ Commands:
   retain analyze      Scan database for redundancy (noise/oversized/stale sessions + session-level classification), report compressible volume (read-only)
   retain apply        Execute retention (L0 drop noise + L2 truncate + SL0/SL1/SL2 session-level + L3 archive), with deduplicated backup
                       Options: --dry-run (preview) --no-backup (skip backup) [--db <path>] [--json]
+  retrospective       Single-session retrospective: fact layer (originalNeed/toolCalls/detours) + 5-section markdown skeleton
+                      Options: --session <id> [--output <path>] [--json] [--no-redact] [--db <path>]
+  issue create        Submit retrospective as a user-story GitHub issue (shell-out to gh CLI)
+                      Options: --title <t> [--body <text>] [--body-file <path>|-] [--label <l>...]
+                               [--repo <owner/name>] [--dry-run]
 
 Install:
   curl -fsSL https://raw.githubusercontent.com/GoYonderTogether/yondermesh/main/install.sh | bash
@@ -2828,6 +2840,234 @@ async function cmdScaffold(flags: Record<string, string | boolean>): Promise<num
   return 0;
 }
 
+// ─── retrospective / issue 命令（loop build-retrospective） ────────────
+
+/**
+ * retrospective 命令：单 session 复盘
+ *
+ * 用法：ymesh retrospective [--session <id>] [--output <path>] [--json] [--no-redact] [--db <path>]
+ *
+ * 默认 session：env YONDERMESH_SELF_SESSION_ID（暂不实现 cwd 匹配）。
+ * 默认输出：stdout（markdown）；--json 输出 RetrospectiveFact JSON。
+ * --output <path> 写文件。
+ * --no-redact 跳过脱敏（默认对所有字符串字段做 redact，loop §A2/F3）。
+ */
+function cmdRetrospective(flags: Record<string, string | boolean>): number {
+  // --help：打印用法并 exit 0（verifier 用 set -e，--help 必须成功退出）
+  if (flags.help === true) {
+    console.log('用法: ymesh retrospective --session <id> [--output <path>] [--json] [--no-redact] [--db <path>]');
+    console.log('  --session <id>     目标 session id（默认 env YONDERMESH_SELF_SESSION_ID）');
+    console.log('  --output <path>    写入文件（默认 stdout）');
+    console.log('  --json             输出 RetrospectiveFact JSON');
+    console.log('  --no-redact        跳过脱敏（默认对所有字符串字段做 redact）');
+    console.log('  --db <path>        数据库路径（默认 ~/.yondermesh/yondermesh.db）');
+    return 0;
+  }
+
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  const sessionId = typeof flags.session === 'string' ? flags.session : process.env.YONDERMESH_SELF_SESSION_ID ?? '';
+
+  if (!sessionId) {
+    console.error('用法: ymesh retrospective --session <id> [--output <path>] [--json] [--no-redact]');
+    console.error('  默认 session 取 env YONDERMESH_SELF_SESSION_ID；未设置时必须显式 --session');
+    return 1;
+  }
+
+  const noRedact = flags['no-redact'] === true;
+  const store = openStore(dbPath);
+  try {
+    let fact: RetrospectiveFact;
+    try {
+      fact = generateRetrospective({ sessionId, store });
+    } catch (err) {
+      console.error(`[yondermesh] retrospective 生成失败: ${String(err)}`);
+      return 1;
+    }
+
+    // 脱敏：对字符串字段统一应用 redact（除非 --no-redact）
+    if (!noRedact) {
+      fact = redactFact(fact);
+    }
+
+    if (flags.json) {
+      console.log(JSON.stringify(fact, null, 2));
+      return 0;
+    }
+
+    const md = renderNarrative(fact);
+    if (typeof flags.output === 'string') {
+      try {
+        mkdirSync(dirname(flags.output), { recursive: true });
+        writeFileSync(flags.output, md, 'utf-8');
+        console.error(`[yondermesh] 复盘已写入 ${flags.output}`);
+        return 0;
+      } catch (err) {
+        console.error(`[yondermesh] 写文件失败: ${String(err)}`);
+        return 1;
+      }
+    }
+    console.log(md);
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+/** 对 RetrospectiveFact 的字符串字段做脱敏（loop §F3：输出不含 /Users/zoran 等） */
+function redactFact(fact: RetrospectiveFact): RetrospectiveFact {
+  const r = (s: string): string => redact(s);
+  return {
+    ...fact,
+    originalNeed: r(fact.originalNeed),
+    toolCalls: fact.toolCalls.map((t) => ({ ...t, name: r(t.name) })),
+    detours: fact.detours.map((d) => ({ ...d, snippet: r(d.snippet), pattern: d.pattern })),
+    sessionMeta: {
+      ...fact.sessionMeta,
+      cwd: fact.sessionMeta.cwd ? r(fact.sessionMeta.cwd) : null,
+      projectPath: fact.sessionMeta.projectPath ? r(fact.sessionMeta.projectPath) : null,
+    },
+  };
+}
+
+/**
+ * issue 命令：把复盘产物作为 user story 提交到 GitHub issue
+ *
+ * 用法：ymesh issue create --title <t> [--body <text>] [--body-file <path>]
+ *                            [--label <l>...] [--repo <owner/name>] [--dry-run]
+ *
+ * --dry-run：打印将执行的 gh 命令但不执行（loop §E4）。
+ * --body-file -：从 stdin 读 body（loop §E5）。
+ * 失败时 stderr 透传 gh 的错误，exit 1（ARCHITECTURE §III.5）。
+ */
+function cmdIssue(flags: Record<string, string | boolean>): number {
+  // --help：打印用法并 exit 0
+  if (flags.help === true) {
+    console.log('用法: ymesh issue create --title <t> [--body <text>] [--body-file <path>|-] [--label <l>...] [--repo <owner/name>] [--dry-run]');
+    console.log('  create             子命令：创建 issue（暂仅支持 create）');
+    console.log('  --title <t>        issue 标题（必填）');
+    console.log('  --body <text>      issue 正文');
+    console.log('  --body-file <p>    issue 正文文件；- 表示从 stdin 读');
+    console.log('  --label <l>        label，可多次指定');
+    console.log('  --repo <o/n>       目标仓库（默认从 git remote 推断）');
+    console.log('  --dry-run          打印将执行的 gh 命令但不执行');
+    return 0;
+  }
+  // 子命令：仅支持 create（保留扩展空间）
+  const positional = process.argv.slice(process.argv.indexOf('issue') + 1);
+  const action = positional[0] ?? '';
+  if (action !== 'create') {
+    console.error('用法: ymesh issue create --title <t> [--body <text>] [--body-file <path>] [--label <l>...] [--repo <owner/name>] [--dry-run]');
+    return 1;
+  }
+  return cmdIssueCreate(flags);
+}
+
+function cmdIssueCreate(flags: Record<string, string | boolean>): number {
+  const title = typeof flags.title === 'string' ? flags.title : '';
+  if (!title) {
+    console.error('[yondermesh] 缺少必填参数 --title');
+    console.error('用法: ymesh issue create --title <t> [--body <text>] [--body-file <path>] [--label <l>...] [--repo <owner/name>] [--dry-run]');
+    return 1;
+  }
+
+  // body 来源：--body 优先；--body-file 次之；--body-file - 读 stdin
+  let body = typeof flags.body === 'string' ? flags.body : '';
+  if (!body && typeof flags['body-file'] === 'string') {
+    const bf = flags['body-file'];
+    try {
+      if (bf === '-') {
+        body = readFileSync(0, 'utf-8');
+      } else {
+        body = readFileSync(bf, 'utf-8');
+      }
+    } catch (err) {
+      console.error(`[yondermesh] 读取 body-file 失败: ${String(err)}`);
+      return 1;
+    }
+  }
+
+  // repo 解析：--repo 优先；否则从 git remote get-url origin 推断
+  let repo = typeof flags.repo === 'string' ? flags.repo : '';
+  if (!repo) {
+    try {
+      const remote = execSync('git remote get-url origin', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+      repo = parseGithubRepo(remote);
+    } catch {
+      console.error('[yondermesh] 无法从 git remote 推断 repo，请用 --repo <owner/name> 指定');
+      return 1;
+    }
+  }
+  if (!repo) {
+    console.error('[yondermesh] 无效的 repo（推断失败且未显式指定）');
+    return 1;
+  }
+
+  // label：支持多次 --label（解析时同 key 后者覆盖；这里也从 process.argv 全量抓）
+  const labels: string[] = [];
+  const argv = process.argv;
+  for (let i = argv.indexOf('create') + 1; i < argv.length; i++) {
+    if (argv[i] === '--label' || argv[i] === '--labels') {
+      const v = argv[i + 1];
+      if (v && !v.startsWith('--')) {
+        labels.push(v);
+        i++;
+      }
+    } else if (argv[i]?.startsWith('--label=')) {
+      labels.push(argv[i]!.slice('--label='.length));
+    } else if (argv[i]?.startsWith('--labels=')) {
+      labels.push(argv[i]!.slice('--labels='.length));
+    }
+  }
+
+  // 构造 gh 参数数组（直接传给 execFileSync，绕开 shell 解析，避免多行/特殊字符 body 被错误切词）
+  const args: string[] = ['issue', 'create', '--title', title, '--repo', repo];
+  if (body) {
+    args.push('--body', body);
+  }
+  for (const lb of labels) {
+    args.push('--label', lb);
+  }
+
+  // dry-run：打印等效 shell 命令（用 quoteShell 还原人类可读形式），但不执行
+  if (flags['dry-run'] === true) {
+    const cmdStr = `gh ${['issue', 'create', '--title', quoteShell(title), '--repo', quoteShell(repo)]
+      .concat(body ? ['--body', quoteShell(body)] : [])
+      .concat(labels.flatMap((lb) => ['--label', quoteShell(lb)]))
+      .join(' ')}`;
+    console.log(cmdStr);
+    return 0;
+  }
+
+  // 执行 gh issue create；失败透传 stderr（stdio: inherit），exit 用 gh 的退出码
+  try {
+    execFileSync('gh', args, { encoding: 'utf-8', stdio: 'inherit', env: { ...process.env } });
+    return 0;
+  } catch (err) {
+    // stderr 已透传；返回 gh 的退出码（若拿不到则 1）
+    const code = (err as { status?: number }).status ?? 1;
+    return code;
+  }
+}
+
+/** 从 git remote URL 推断 owner/name；不支持时返回空串 */
+function parseGithubRepo(remote: string): string {
+  // ssh: git@github.com:owner/name.git
+  const ssh = remote.match(/git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (ssh) return `${ssh[1]}/${ssh[2]}`;
+  // https: https://github.com/owner/name(.git)
+  const https = remote.match(/https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (https) return `${https[1]}/${https[2]}`;
+  return '';
+}
+
+/** 简单 shell 引用：含空格/特殊字符时用单引号包，内部单引号转义 */
+function quoteShell(s: string): string {
+  if (s === '') return "''";
+  if (!/[^A-Za-z0-9_\-./:=@,+]/.test(s)) return s;
+  return `'${s.replace(/'/g, "'\''")}'`;
+}
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const { command, flags } = parseArgs(argv);
@@ -2926,6 +3166,12 @@ async function main(): Promise<number> {
 
     case 'retain':
       return await cmdRetain(flags);
+
+    case 'retrospective':
+      return cmdRetrospective(flags);
+
+    case 'issue':
+      return cmdIssue(flags);
 
     case 'rollback':
       {

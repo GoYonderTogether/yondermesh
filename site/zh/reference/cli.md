@@ -65,6 +65,11 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh retain` | analyze      扫描数据库冗余（噪音/超长/老旧 session + session 级分类），报告可压缩量（只读） |
 | `ymesh retain` | apply        执行筛除（L0 删噪音 + L2 截断 + SL0/SL1/SL2 session 级 + L3 归档），含去重备份 |
 | `ymesh 选项:` | --dry-run（预演）--no-backup（跳过备份）[--db &lt;path&gt;] [--json] |
+| `ymesh retrospective` | 单 session 复盘：生成事实层（originalNeed/toolCalls/detours）+ 5 段 markdown 骨架 |
+| `ymesh 选项:` | --session &lt;id&gt; [--output &lt;path&gt;] [--json] [--no-redact] [--db &lt;path&gt;] |
+| `ymesh issue` | create        把复盘产物作为 user story 提交到 GitHub issue（shell-out 到 gh CLI） |
+| `ymesh 选项:` | --title &lt;t&gt; [--body &lt;text&gt;] [--body-file &lt;path&gt;|-] [--label &lt;l&gt;...] |
+| `ymesh [--repo` | &lt;owner/name&gt;] [--dry-run] |
 
 ## 通用选项
 
