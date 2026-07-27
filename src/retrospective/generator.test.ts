@@ -34,7 +34,12 @@ function registerInstance(store: SessionStore): string {
 function mkSession(opts: {
   store: SessionStore;
   sourceInstanceId: string;
-  messages: { role: 'user' | 'assistant' | 'system' | 'tool'; content: string; timestamp?: number }[];
+  messages: {
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string;
+    timestamp?: number;
+    toolCalls?: { callSeq: number; toolName: string; toolInput?: string }[];
+  }[];
   startedAt?: number;
   fileModifiedAt?: number;
   cwd?: string;
@@ -144,6 +149,49 @@ describe('generateRetrospective', () => {
     const names = fact.toolCalls.map((t) => t.name);
     expect(names).toContain('Read');
     expect(names).toContain('Bash');
+  });
+
+  it('边界 3b：结构化 toolCalls 优先于正则（loop build-tool-calls-schema §E1）', () => {
+    // assistant 消息带结构化 toolCalls，但 content 不含 "name" 字符串
+    // → 应从 toolCalls 提取，而非正则
+    const sid = mkSession({
+      store,
+      sourceInstanceId: instId,
+      messages: [
+        { role: 'user', content: 'do task' },
+        {
+          role: 'assistant',
+          content: 'I will use tools now.',
+          toolCalls: [
+            { callSeq: 0, toolName: 'Read', toolInput: '{"file_path":"/a.ts"}' },
+            { callSeq: 1, toolName: 'Bash', toolInput: '{"command":"ls"}' },
+          ],
+        },
+        { role: 'user', content: 'next' },
+      ],
+    });
+    const fact = generateRetrospective({ sessionId: sid, store });
+    expect(fact.toolCallCount).toBe(2);
+    const names = fact.toolCalls.map((t) => t.name);
+    expect(names).toEqual(['Read', 'Bash']);
+  });
+
+  it('边界 3c：无结构化 toolCalls 时回退到正则扫描（fallback 兼容老数据）', () => {
+    // 消息无 toolCalls 字段，但 content 含 tool_use JSON → 正则应提取
+    const sid = mkSession({
+      store,
+      sourceInstanceId: instId,
+      messages: [
+        { role: 'user', content: 'do task' },
+        {
+          role: 'assistant',
+          content: 'using tool {"type":"tool_use","name":"Edit","input":{}}',
+        },
+      ],
+    });
+    const fact = generateRetrospective({ sessionId: sid, store });
+    expect(fact.toolCallCount).toBeGreaterThanOrEqual(1);
+    expect(fact.toolCalls.map((t) => t.name)).toContain('Edit');
   });
 
   it('边界 4：命中 DEFAULT_FAILURE_PATTERNS → detours 非空', () => {

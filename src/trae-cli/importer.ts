@@ -49,6 +49,7 @@ import type {
   Coverage,
   MessageRole,
   SessionMessageInput,
+  ToolCallInput,
 } from '../store/types.js';
 import type { SessionStore } from '../store/session-store.js';
 
@@ -126,6 +127,40 @@ function parseTimestamp(value: unknown): number | undefined {
   const normalized = s.replace(/(\.\d{3})\d+/, '$1');
   const ms = Date.parse(normalized);
   return Number.isNaN(ms) ? undefined : ms;
+}
+
+/**
+ * 从 agent_steps 项或 llm_interaction 的 tool_calls 字段提取结构化工具调用。
+ * 兼容两种格式：
+ *   - OpenAI 风格：[{id, type:'function', function:{name, arguments}}]
+ *   - 简化风格：[{name, arguments}] 或 [{tool_name, arguments}]
+ */
+function extractToolCalls(raw: unknown): ToolCallInput[] {
+  const arr = asArr(raw);
+  if (!arr) return [];
+  const out: ToolCallInput[] = [];
+  let seq = 0;
+  for (const item of arr) {
+    const o = asObj(item);
+    if (!o) continue;
+    const fn = asObj(o.function);
+    const name = asStr(fn?.name) ?? asStr(o.name) ?? asStr(o.tool_name);
+    if (!name || name.length === 0) continue;
+    const tc: ToolCallInput = { callSeq: seq, toolName: name };
+    const args = fn?.arguments ?? o.arguments ?? o.args;
+    if (typeof args === 'string') {
+      tc.toolInput = args;
+    } else if (args !== undefined && args !== null) {
+      try {
+        tc.toolInput = JSON.stringify(args);
+      } catch {
+        /* ignore */
+      }
+    }
+    out.push(tc);
+    seq++;
+  }
+  return out;
 }
 
 /**
@@ -238,16 +273,30 @@ export function parseTrajectory(obj: unknown, nativeId: string): ParsedTrajector
     }
     // 每个 interaction 的 response → assistant 消息（去重：与上一条不同才加）
     for (const it of interactions) {
-      const resp = extractResponseText(asObj(it)?.response);
+      const itObj = asObj(it);
+      const resp = extractResponseText(itObj?.response);
+      // 提取该 interaction 的 tool_calls（OpenAI 风格 response.tool_calls 或顶层 tool_calls）
+      const tcs = extractToolCalls(
+        asObj(itObj?.response)?.tool_calls ?? itObj?.tool_calls,
+      );
       if (resp) {
         const last = messages[messages.length - 1];
         if (!(last && last.role === 'assistant' && last.content === resp)) {
-          messages.push({ role: 'assistant', content: resp });
+          const msg: SessionMessageInput = { role: 'assistant', content: resp };
+          if (tcs.length > 0) msg.toolCalls = tcs;
+          messages.push(msg);
+        } else if (last && tcs.length > 0) {
+          // 同条 assistant 已存在 → 补 toolCalls（若无）
+          if (!last.toolCalls) last.toolCalls = [];
+          for (const tc of tcs) {
+            const seq = last.toolCalls.length;
+            last.toolCalls.push({ ...tc, callSeq: seq });
+          }
         }
       }
     }
   } else {
-    // 3. 回退：agent_steps[].llm_messages + llm_response
+    // 3. 回退：agent_steps[].llm_messages + llm_response + tool_calls
     const steps = asArr(root.agent_steps);
     if (steps) {
       for (const st of steps) {
@@ -260,10 +309,20 @@ export function parseTrajectory(obj: unknown, nativeId: string): ParsedTrajector
           }
         }
         const resp = extractResponseText(so?.llm_response);
+        // 提取该步的 tool_calls（loop build-tool-calls-schema §C3）
+        const tcs = extractToolCalls(so?.tool_calls);
         if (resp) {
           const last = messages[messages.length - 1];
           if (!(last && last.role === 'assistant' && last.content === resp)) {
-            messages.push({ role: 'assistant', content: resp });
+            const msg: SessionMessageInput = { role: 'assistant', content: resp };
+            if (tcs.length > 0) msg.toolCalls = tcs;
+            messages.push(msg);
+          } else if (last && tcs.length > 0) {
+            if (!last.toolCalls) last.toolCalls = [];
+            for (const tc of tcs) {
+              const seq = last.toolCalls.length;
+              last.toolCalls.push({ ...tc, callSeq: seq });
+            }
           }
         }
       }

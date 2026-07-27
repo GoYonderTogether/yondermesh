@@ -64,6 +64,7 @@ import type {
   MessageRole,
   SessionMessageInput,
   SessionTopology,
+  ToolCallInput,
 } from '../store/types.js';
 import type { SessionStore } from '../store/session-store.js';
 
@@ -136,6 +137,8 @@ interface ParsedSession {
   /** subagent 的父 native id（仅 subagent 且 parent_thread_id 可读时有值） */
   parentNativeId?: string;
   messages: SessionMessageInput[];
+  /** 工具调用总数 */
+  toolCallCount?: number;
   /** 元数据（LOOP-012） */
   modelProvider?: string;
   cliVersion?: string;
@@ -152,6 +155,8 @@ interface SegmentAccum {
   parentNativeId?: string;
   earliest?: number;
   messages: SessionMessageInput[];
+  /** 工具调用总数（messages 内 toolCalls 数组长度之和） */
+  toolCallCount: number;
   /** 首 session_meta 元数据已记录，重发不覆盖 */
   metaApplied: boolean;
   modelProvider?: string;
@@ -178,6 +183,8 @@ interface LogicalAccum {
   startedAt?: number;
   /** 所有段的有序消息（每条带 fileOrder/seq 稳定排序键），入库前再统一稳定排序 */
   messages: OrderedMessage[];
+  /** 工具调用总数（messages 内 toolCalls 数组长度之和） */
+  toolCallCount: number;
   modelProvider?: string;
   cliVersion?: string;
   originator?: string;
@@ -408,11 +415,11 @@ export class CodexImporter {
       }
       // 稳定排序：保持真实时序（timestamp 主键 + (fileOrder, seq) 稳定 tie-breaker）
       const ordered = lg.messages.slice().sort(compareOrdered);
-      const messages = ordered.map(({ role, content, timestamp }) => ({
-        role,
-        content,
-        timestamp,
-      }));
+      const messages: SessionMessageInput[] = ordered.map(({ role, content, timestamp, toolCalls }) => {
+        const m: SessionMessageInput = { role, content, timestamp };
+        if (toolCalls && toolCalls.length > 0) m.toolCalls = toolCalls;
+        return m;
+      });
       const result = this.store.ingestSession({
         deviceId,
         sourceInstanceId,
@@ -429,6 +436,7 @@ export class CodexImporter {
        originator: lg.originator,
        entrySource: lg.entrySource,
        threadSource: lg.threadSource,
+       toolCallCount: lg.toolCallCount,
      });
       sessionIdByNative.set(lg.nativeId, result.sessionId);
       if (lg.topology === 'subagent') {
@@ -493,9 +501,11 @@ export class CodexImporter {
         nativeId: seg.nativeId,
         topology: 'root',
         messages: [],
+        toolCallCount: 0,
       };
       logical.set(seg.nativeId, lg);
     }
+    if (seg.toolCallCount !== undefined) lg.toolCallCount += seg.toolCallCount;
     if (lg.cwd === undefined && seg.cwd !== undefined) {
       lg.cwd = seg.cwd;
     }
@@ -518,13 +528,16 @@ export class CodexImporter {
     }
     for (let i = 0; i < seg.messages.length; i++) {
       const m = seg.messages[i]!;
-      lg.messages.push({
+      const om: OrderedMessage = {
         role: m.role,
         content: m.content,
         timestamp: m.timestamp,
         fileOrder,
         seq: i,
-      });
+      };
+      // 保留结构化 toolCalls（loop build-tool-calls-schema §C2）
+      if (m.toolCalls && m.toolCalls.length > 0) om.toolCalls = m.toolCalls;
+      lg.messages.push(om);
     }
   }
 
@@ -600,6 +613,7 @@ export class CodexImporter {
           nativeId: id,
           topology: 'root',
           messages: [],
+          toolCallCount: 0,
           metaApplied: false,
         };
         segments.set(id, seg);
@@ -661,7 +675,35 @@ export class CodexImporter {
         }
         const role = (obj.payload as { role?: unknown } | undefined)?.role;
         const mapped = role === 'assistant' ? 'assistant' : 'user';
-        seg.messages.push({ role: mapped as MessageRole, content: text, timestamp: ts });
+        const msg: SessionMessageInput = { role: mapped as MessageRole, content: text, timestamp: ts };
+        // assistant 消息紧随其后可能含 function_call payload（同 ts 块）；
+        // codex 的 function_call 是独立 response_item（payload.type='function_call'），
+        // 在下方单独处理；此处只处理 message 块。
+        seg.messages.push(msg);
+      }
+
+      // 提取 function_call payload（codex 工具调用）→ attach 到最近一条 assistant 消息
+      const fc = this.extractFunctionCall(obj);
+      if (fc !== null) {
+        const targetId = currentId ?? relPath;
+        const seg = ensureSegment(targetId);
+        if (ts !== undefined && (seg.earliest === undefined || ts < seg.earliest)) {
+          seg.earliest = ts;
+        }
+        // 找最近一条 assistant 消息（function_call 通常紧跟 assistant message）
+        let lastAssistant: SessionMessageInput | undefined;
+        for (let i = seg.messages.length - 1; i >= 0; i--) {
+          if (seg.messages[i]!.role === 'assistant') {
+            lastAssistant = seg.messages[i]!;
+            break;
+          }
+        }
+        if (lastAssistant) {
+          if (!lastAssistant.toolCalls) lastAssistant.toolCalls = [];
+          fc.callSeq = lastAssistant.toolCalls.length;
+          lastAssistant.toolCalls.push(fc);
+          seg.toolCallCount++;
+        }
       }
     }
 
@@ -672,6 +714,7 @@ export class CodexImporter {
       topology: seg.topology,
       parentNativeId: seg.parentNativeId,
       messages: seg.messages,
+      toolCallCount: seg.toolCallCount,
       modelProvider: seg.modelProvider,
       cliVersion: seg.cliVersion,
       originator: seg.originator,
@@ -718,5 +761,32 @@ export class CodexImporter {
     if (typeof value !== 'string' || value.length === 0) return undefined;
     const ms = Date.parse(value);
     return Number.isNaN(ms) ? undefined : ms;
+  }
+
+  /**
+   * 从一行 jsonl 提取 function_call payload（codex 工具调用）。
+   * codex 的工具调用是独立 response_item，payload.type === 'function_call'，
+   * 含 name + arguments（JSON 字符串）。
+   * 返回的 ToolCallInput.callSeq 由调用方填（取决于接到哪条 assistant 消息）。
+   * 非 function_call / 缺 name → 返回 null。
+   */
+  private extractFunctionCall(obj: JsonlLine): ToolCallInput | null {
+    if (obj.type !== 'response_item') return null;
+    const payload = obj.payload as { type?: unknown; name?: unknown; arguments?: unknown } | undefined;
+    if (!payload) return null;
+    if (payload.type !== 'function_call') return null;
+    if (typeof payload.name !== 'string' || payload.name.length === 0) return null;
+    const tc: ToolCallInput = { callSeq: 0, toolName: payload.name };
+    // arguments 是 JSON 字符串（OpenAI 风格）；原样保留，下游可 JSON.parse
+    if (typeof payload.arguments === 'string') {
+      tc.toolInput = payload.arguments;
+    } else if (payload.arguments !== undefined && payload.arguments !== null) {
+      try {
+        tc.toolInput = JSON.stringify(payload.arguments);
+      } catch {
+        /* ignore */
+      }
+    }
+    return tc;
   }
 }

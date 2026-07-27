@@ -153,6 +153,21 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   reply_to_id     INTEGER,
   FOREIGN KEY (reply_to_id) REFERENCES agent_messages(id)
 );
+
+-- 8. message_tool_calls：结构化工具调用（loop build-tool-calls-schema）
+--    不动 messages 表（避免 12M 行 ALTER）；新建独立表存储 tool_use / function_call。
+--    幂等：UNIQUE(message_id, call_seq) → INSERT OR IGNORE 重复跑不重复插入。
+CREATE TABLE IF NOT EXISTS message_tool_calls (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id   INTEGER NOT NULL,
+  session_id   TEXT NOT NULL,
+  call_seq     INTEGER NOT NULL,
+  tool_name    TEXT NOT NULL,
+  tool_input   TEXT,
+  UNIQUE (message_id, call_seq),
+  FOREIGN KEY (message_id) REFERENCES messages(id),
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
 `;
 
 /**
@@ -180,6 +195,9 @@ CREATE INDEX IF NOT EXISTS idx_msg_thread             ON agent_messages(thread_i
 CREATE INDEX IF NOT EXISTS idx_msg_expires            ON agent_messages(expires_at);
 -- 投递队列：按 (投递时机, 未投递) 找待发消息
 CREATE INDEX IF NOT EXISTS idx_msg_queue              ON agent_messages(deliver_on, delivered_at);
+
+CREATE INDEX IF NOT EXISTS idx_mtc_message             ON message_tool_calls(message_id);
+CREATE INDEX IF NOT EXISTS idx_mtc_session             ON message_tool_calls(session_id);
 `;
 
 /**

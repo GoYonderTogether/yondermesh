@@ -34,6 +34,8 @@ export type {
   SessionTopology,
   SourceInstance,
   SourceInstanceInput,
+  ToolCall,
+  ToolCallInput,
 } from './types.js';
 export { IncrementalIndex } from './incremental.js';
 export type { FileState } from './incremental.js';

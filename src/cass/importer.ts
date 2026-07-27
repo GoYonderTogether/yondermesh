@@ -22,6 +22,7 @@ import type {
   Coverage,
   MessageRole,
   SessionMessageInput,
+  ToolCallInput,
 } from '../store/types.js';
 import type { SessionStore } from '../store/session-store.js';
 
@@ -279,16 +280,31 @@ export class CassImporter {
       // 仅当前 conversation 的消息进入内存
       const msgRows = msgStmt.all(conv.id) as unknown as CassMessageRow[];
       const messages: SessionMessageInput[] = [];
+      /** 上一条 assistant 消息在 messages 数组中的下标，用于 role='tool' 关联 toolCalls */
+      let lastAssistantIdx = -1;
       for (const m of msgRows) {
         const content = (m.content ?? '').trim();
         if (!content) continue; // 空正文 / 纯空白 → 跳过该条消息
         const role = this.normalizeRole(m.role);
         if (!role) continue; // 未知 role → 跳过该条消息
+
+        // role='tool' 行：额外关联到最近 assistant 消息的 toolCalls（loop build-tool-calls-schema §C5）
+        // 保留原 role='tool' 消息入 messages（不破坏现有测试与 content_hash 幂等）。
+        if (role === 'tool' && lastAssistantIdx >= 0) {
+          const target = messages[lastAssistantIdx];
+          const seq = target.toolCalls ? target.toolCalls.length : 0;
+          const tc: ToolCallInput = { callSeq: seq, toolName: 'tool' };
+          if (m.content && m.content.length > 0) tc.toolInput = m.content;
+          if (!target.toolCalls) target.toolCalls = [];
+          target.toolCalls.push(tc);
+        }
+
         messages.push({
           role,
           content: m.content,
           timestamp: m.created_at ?? undefined,
         });
+        if (role === 'assistant') lastAssistantIdx = messages.length - 1;
       }
       if (messages.length === 0) {
         skipped++; // 无有效消息 → 跳过该 conversation

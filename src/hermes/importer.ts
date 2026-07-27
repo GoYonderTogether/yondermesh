@@ -36,6 +36,7 @@ import type {
   MessageRole,
   SessionMessageInput,
   SessionTopology,
+  ToolCallInput,
 } from '../store/types.js';
 import type { SessionStore } from '../store/session-store.js';
 
@@ -116,6 +117,10 @@ interface HermesMessageRow {
   content: string | null;
   timestamp: number;
   active: number;
+  /** OpenAI 风格 tool_calls JSON（assistant 消息可有） */
+  tool_calls: string | null;
+  /** 工具名（role='tool' 行有值） */
+  tool_name: string | null;
 }
 
 /** 解析 Hermes home 目录：hermesHome 选项 > 默认 ~/.hermes */
@@ -248,7 +253,7 @@ export class HermesImporter {
       );
 
       const messageStmt = hermesDb.prepare(
-        `SELECT role, content, timestamp, active
+        `SELECT role, content, timestamp, active, tool_calls, tool_name
          FROM messages
          WHERE session_id = ?
          ORDER BY timestamp ASC, id ASC`,
@@ -389,24 +394,95 @@ export class HermesImporter {
   }
 
   /**
-   * 从 state.db messages 行提取可显示消息：
-   *   - 只取 role=user/assistant 的非空 content
-   *   - role=tool（工具结果）/session_meta（元数据）排除
+   * 从 state.db messages 行提取可显示消息 + 结构化 toolCalls：
+   *   - 只取 role=user/assistant 的非空 content 入 messages
+   *   - role=tool（工具结果）/session_meta（元数据）不进 messages
    *   - active=0（已删除）排除
    *   - content 为 NULL 或空白排除
    *   - timestamp 从 epoch 秒转 epoch 毫秒
+   *   - toolCalls 提取（loop build-tool-calls-schema §C4）：
+   *     · 优先：assistant 行的 tool_calls 列（OpenAI 风格 JSON 数组）
+   *     · 回退：role='tool' 行的 tool_name 关联到最近一条 assistant 消息
    */
   private extractMessages(rows: HermesMessageRow[]): SessionMessageInput[] {
     const messages: SessionMessageInput[] = [];
+    /** 上一条 assistant 消息在 messages 数组中的下标，用于 role='tool' 回退关联 */
+    let lastAssistantIdx = -1;
+
     for (const row of rows) {
       if (row.active === 0) continue; // 已删除消息跳过
+
+      // role='tool' 行：回退方式 —— 用 tool_name 关联到最近 assistant 消息
+      if (row.role === 'tool') {
+        if (lastAssistantIdx >= 0 && typeof row.tool_name === 'string' && row.tool_name.length > 0) {
+          const target = messages[lastAssistantIdx];
+          const existingSeq = target.toolCalls ? target.toolCalls.length : 0;
+          const tc: ToolCallInput = { callSeq: existingSeq, toolName: row.tool_name };
+          if (typeof row.content === 'string' && row.content.length > 0) {
+            tc.toolInput = row.content;
+          }
+          if (!target.toolCalls) target.toolCalls = [];
+          target.toolCalls.push(tc);
+        }
+        continue;
+      }
+
       if (row.role !== 'user' && row.role !== 'assistant') continue; // 仅 user/assistant
       if (typeof row.content !== 'string' || row.content.trim().length === 0) continue;
 
       const role = (row.role === 'assistant' ? 'assistant' : 'user') as MessageRole;
       const timestampMs = Math.round(row.timestamp * 1000);
-      messages.push({ role, content: row.content, timestamp: timestampMs });
+      const msg: SessionMessageInput = { role, content: row.content, timestamp: timestampMs };
+
+      // 优先方式：assistant 行的 tool_calls 列（OpenAI 风格 JSON 数组）
+      if (role === 'assistant' && typeof row.tool_calls === 'string' && row.tool_calls.length > 0) {
+        const parsed = this.parseToolCallsJson(row.tool_calls);
+        if (parsed.length > 0) msg.toolCalls = parsed;
+      }
+
+      messages.push(msg);
+      if (role === 'assistant') lastAssistantIdx = messages.length - 1;
     }
     return messages;
+  }
+
+  /**
+   * 解析 OpenAI 风格 tool_calls JSON（assistant 消息的 tool_calls 列）。
+   * 格式：[{"id":"...","type":"function","function":{"name":"...","arguments":"..."}}]
+   * 容错：function 字段缺失 / arguments 不是字符串都跳过该条；整体解析失败返回 []。
+   */
+  private parseToolCallsJson(json: string): ToolCallInput[] {
+    try {
+      const arr = JSON.parse(json) as unknown;
+      if (!Array.isArray(arr)) return [];
+      const out: ToolCallInput[] = [];
+      let seq = 0;
+      for (const item of arr) {
+        if (!item || typeof item !== 'object') continue;
+        const fn = (item as { function?: unknown }).function;
+        const name = typeof fn === 'object' && fn !== null
+          ? (fn as { name?: unknown }).name
+          : (item as { name?: unknown }).name;
+        if (typeof name !== 'string' || name.length === 0) continue;
+        const tc: ToolCallInput = { callSeq: seq, toolName: name };
+        const args = typeof fn === 'object' && fn !== null
+          ? (fn as { arguments?: unknown }).arguments
+          : (item as { arguments?: unknown }).arguments;
+        if (typeof args === 'string') {
+          tc.toolInput = args;
+        } else if (args !== undefined && args !== null) {
+          try {
+            tc.toolInput = JSON.stringify(args);
+          } catch {
+            /* ignore */
+          }
+        }
+        out.push(tc);
+        seq++;
+      }
+      return out;
+    } catch {
+      return [];
+    }
   }
 }

@@ -67,6 +67,8 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh Options:` | --dry-run (preview) --no-backup (skip backup) [--db &lt;path&gt;] [--json] |
 | `ymesh retrospective` | Single-session retrospective: fact layer (originalNeed/toolCalls/detours) + 5-section markdown skeleton |
 | `ymesh Options:` | --session &lt;id&gt; [--output &lt;path&gt;] [--json] [--no-redact] [--db &lt;path&gt;] |
+| `ymesh reimport` | Re-scan a source to backfill structured tool_calls (idempotent; dry-run by default) |
+| `ymesh Options:` | --source &lt;name&gt; [--limit &lt;n&gt;] [--dry-run] [--yes] [--db &lt;path&gt;] [--json] |
 | `ymesh issue` | create        Submit retrospective as a user-story GitHub issue (shell-out to gh CLI) |
 | `ymesh Options:` | --title &lt;t&gt; [--body &lt;text&gt;] [--body-file &lt;path&gt;|-] [--label &lt;l&gt;...] |
 | `ymesh [--repo` | &lt;owner/name&gt;] [--dry-run] |

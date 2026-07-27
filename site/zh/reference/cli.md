@@ -67,6 +67,8 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh 选项:` | --dry-run（预演）--no-backup（跳过备份）[--db &lt;path&gt;] [--json] |
 | `ymesh retrospective` | 单 session 复盘：生成事实层（originalNeed/toolCalls/detours）+ 5 段 markdown 骨架 |
 | `ymesh 选项:` | --session &lt;id&gt; [--output &lt;path&gt;] [--json] [--no-redact] [--db &lt;path&gt;] |
+| `ymesh reimport` | 重新扫描指定 source 补结构化 tool_calls（幂等；默认 dry-run） |
+| `ymesh 选项:` | --source &lt;name&gt; [--limit &lt;n&gt;] [--dry-run] [--yes] [--db &lt;path&gt;] [--json] |
 | `ymesh issue` | create        把复盘产物作为 user story 提交到 GitHub issue（shell-out 到 gh CLI） |
 | `ymesh 选项:` | --title &lt;t&gt; [--body &lt;text&gt;] [--body-file &lt;path&gt;|-] [--label &lt;l&gt;...] |
 | `ymesh [--repo` | &lt;owner/name&gt;] [--dry-run] |

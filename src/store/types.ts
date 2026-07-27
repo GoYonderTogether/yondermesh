@@ -28,6 +28,24 @@ export type RelationType =
 /** 消息角色 */
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
+/**
+ * 工具调用输入（loop build-tool-calls-schema）。
+ * callSeq = 同一条消息内第几次调用（0-based）。
+ * toolInput = JSON string of arguments（claude 的 input 对象 / codex 的 arguments 字符串）。
+ */
+export interface ToolCallInput {
+  callSeq: number;
+  toolName: string;
+  toolInput?: string;
+}
+
+/** 读取到的工具调用记录（与 message_tool_calls 表对应） */
+export interface ToolCall {
+  callSeq: number;
+  toolName: string;
+  toolInput?: string;
+}
+
 /** 扫描运行状态 */
 export type ScanRunStatus = 'running' | 'completed' | 'failed';
 
@@ -54,6 +72,8 @@ export interface SessionMessageInput {
   role: MessageRole;
   content: string;
   timestamp?: number;
+  /** 结构化工具调用（loop build-tool-calls-schema）；老 importer 不填此字段 */
+  toolCalls?: ToolCallInput[];
 }
 
 /** Session 入库输入 */
@@ -106,6 +126,8 @@ export interface SessionMessage {
   role: MessageRole;
   content: string;
   timestamp?: number;
+  /** 结构化工具调用（loop build-tool-calls-schema）；老数据无此字段为 undefined */
+  toolCalls?: ToolCall[];
 }
 
 /** Revision 记录 */

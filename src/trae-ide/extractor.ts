@@ -192,6 +192,8 @@ interface ParsedTraeSession {
   messages: SessionMessageInput[];
   /** 配置目录来源（~/.trae-cn 或 ~/.trae） */
   configDir: string;
+  /** 工具调用总数（actions[] 长度之和；loop build-tool-calls-schema §C6） */
+  toolCallCount: number;
 }
 
 /** 把未知错误归一化为消息字符串 */
@@ -346,15 +348,21 @@ function readTraeJsonlSummaries(configDirs: string[]): {
               cwd,
               messages: [],
               configDir,
+              toolCallCount: 0,
             };
             sessions.set(sessionId, sess);
           }
-
           for (const line of raw.split('\n')) {
             const trimmed = line.trim();
             if (!trimmed) continue;
             const obj = safeJsonParse<TraeSummaryLine>(trimmed);
             if (!obj) continue;
+            // 累加该行的 actions 数到 toolCallCount（loop build-tool-calls-schema §C6）
+            if (Array.isArray(obj.actions)) {
+              sess.toolCallCount += obj.actions.filter(
+                (a: unknown) => typeof a === 'string' && (a as string).length > 0,
+              ).length;
+            }
             const msgs = summaryLineToMessages(obj);
             for (const m of msgs) {
               sess.messages.push(m);
@@ -568,6 +576,8 @@ export class TraeIdeExtractor {
         messages: ordered,
         // Trae 摘要无 model 字段
         entrySource: sqlcipherResult.cracked ? 'sqlite+jsonl' : 'jsonl-summary',
+        // actions[] 是 AI 摘要非原始 tool_call，但用其长度作为 toolCallCount 估值
+        toolCallCount: sess.toolCallCount,
       });
       if (result.created) inserted++;
       else if (result.newRevision) updated++;

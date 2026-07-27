@@ -269,6 +269,8 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
                       选项: --dry-run（预演）--no-backup（跳过备份）[--db <path>] [--json]
   retrospective       单 session 复盘：生成事实层（originalNeed/toolCalls/detours）+ 5 段 markdown 骨架
                       选项: --session <id> [--output <path>] [--json] [--no-redact] [--db <path>]
+  reimport            重新扫描指定 source 补结构化 tool_calls（幂等；默认 dry-run）
+                      选项: --source <name> [--limit <n>] [--dry-run] [--yes] [--db <path>] [--json]
   issue create        把复盘产物作为 user story 提交到 GitHub issue（shell-out 到 gh CLI）
                       选项: --title <t> [--body <text>] [--body-file <path>|-] [--label <l>...]
                             [--repo <owner/name>] [--dry-run]
@@ -384,6 +386,8 @@ Commands:
                       Options: --dry-run (preview) --no-backup (skip backup) [--db <path>] [--json]
   retrospective       Single-session retrospective: fact layer (originalNeed/toolCalls/detours) + 5-section markdown skeleton
                       Options: --session <id> [--output <path>] [--json] [--no-redact] [--db <path>]
+  reimport            Re-scan a source to backfill structured tool_calls (idempotent; dry-run by default)
+                      Options: --source <name> [--limit <n>] [--dry-run] [--yes] [--db <path>] [--json]
   issue create        Submit retrospective as a user-story GitHub issue (shell-out to gh CLI)
                       Options: --title <t> [--body <text>] [--body-file <path>|-] [--label <l>...]
                                [--repo <owner/name>] [--dry-run]
@@ -3198,6 +3202,152 @@ function cmdRetrospective(flags: Record<string, string | boolean>): number {
   }
 }
 
+/**
+ * reimport 命令：重新扫描指定 source 的 session，把结构化工具调用补进 message_tool_calls 表
+ *
+ * 用法：ymesh reimport --source <name> [--limit <n>] [--dry-run] [--yes] [--db <path>] [--json]
+ *
+ * --source <name>     指定 source（支持 label 如 claude/codex/hermes/cass/trae_cli 或 id 如 claude-code）
+ * --limit <n>         限制处理的 session 数（默认全部）
+ * --dry-run           仅报告，不写入（默认 dry-run；需 --yes 确认才真正执行）
+ * --yes               确认执行（非 dry-run）
+ * --db <path>         数据库路径
+ * --json              JSON 输出
+ *
+ * 内部机制（loop build-tool-calls-schema §D）：
+ *   - 调用对应 adapter 的 importer 重新扫描
+ *   - importer 的 ingestSession 现在会在内容幂等时调 attachToolCallsBySeq 补 toolCalls
+ *   - 幂等：UNIQUE(message_id, call_seq) + INSERT OR IGNORE，重复跑不重复插入
+ */
+async function cmdReimport(flags: Record<string, string | boolean>): Promise<number> {
+  if (flags.help === true) {
+    console.log('用法: ymesh reimport --source <name> [--limit <n>] [--dry-run] [--yes] [--db <path>] [--json]');
+    console.log('  --source <name>   指定 source（claude/codex/hermes/cass/trae_cli/trae-ide 等）');
+    console.log('  --limit <n>       限制处理的 session 数（默认全部）');
+    console.log('  --dry-run         仅报告，不写入（默认 dry-run）');
+    console.log('  --yes             确认执行（非 dry-run）');
+    console.log('  --db <path>       数据库路径（默认 ~/.yondermesh/yondermesh.db）');
+    console.log('  --json            JSON 输出');
+    return 0;
+  }
+
+  const sourceRaw = typeof flags.source === 'string' ? flags.source : '';
+  if (!sourceRaw) {
+    console.error('用法: ymesh reimport --source <name> [--limit <n>] [--dry-run] [--yes]');
+    console.error('  必须指定 --source；可用值见 ymesh scan 输出的 adapter 列');
+    return 1;
+  }
+
+  // label → id 映射（claude → claude-code，trae_cli → trae-cli）
+  const labelToId: Record<string, string> = {
+    claude: 'claude-code',
+    codex: 'codex',
+    hermes: 'hermes',
+    cass: 'cass',
+    trae_cli: 'trae-cli',
+    'trae-ide': 'trae-ide',
+    'trae-cli': 'trae-cli',
+  };
+  const sourceId = labelToId[sourceRaw] ?? sourceRaw;
+
+  const meta = IMPORTER_META[sourceId];
+  if (!meta) {
+    console.error(`[yondermesh] 未知 source: ${sourceRaw}（id=${sourceId}）`);
+    console.error(`  可用 source: claude, codex, hermes, cass, trae_cli, trae-ide`);
+    return 1;
+  }
+
+  const isDryRun = flags['dry-run'] === true || flags.yes !== true;
+  if (isDryRun && flags.yes !== true) {
+    // 默认 dry-run
+  }
+
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  const deviceId = (flags.device as string) ?? hostname();
+  const limit = typeof flags.limit === 'string' ? parseInt(flags.limit, 10) : undefined;
+
+  // dry-run 模式：先查现有 toolCalls 数，报告将补多少
+  const store = openStore(dbPath);
+  try {
+    // 查询该 source 的现有 session 数和 toolCalls 数
+    const beforeRow = store.sourceToolCallStats([meta.label, sourceId]);
+
+    if (isDryRun) {
+      const msg = `[yondermesh] reimport dry-run: source=${meta.label}, sessions=${beforeRow.sessions}, existing_tool_calls=${beforeRow.toolCalls}`
+        + (limit ? `, limit=${limit}` : '')
+        + `\n  将重新扫描并补 attach 结构化 toolCalls到 message_tool_calls 表。`
+        + `\n  加 --yes 确认执行。`;
+      if (flags.json) {
+        console.log(JSON.stringify({
+          dryRun: true,
+          source: meta.label,
+          sessionsBefore: beforeRow.sessions,
+          toolCallsBefore: beforeRow.toolCalls,
+          limit: limit ?? null,
+        }, null, 2));
+      } else {
+        console.log(msg);
+      }
+      return 0;
+    }
+
+    // 非 dry-run：执行 importer 重新扫描
+    // 找到对应 adapter
+    const adapter = listImporters().find((a) => a.id === sourceId);
+    if (!adapter || !adapter.importerLoader) {
+      console.error(`[yondermesh] source ${meta.label} 无 importer 加载器`);
+      return 1;
+    }
+
+    const mod = await adapter.importerLoader() as Record<string, unknown>;
+    let Cls: (new (store: unknown, opts: unknown) => { import?: () => unknown; extract?: () => unknown }) | null = null;
+    for (const key of Object.keys(mod)) {
+      if ((key.endsWith('Importer') || key.endsWith('Extractor')) && typeof mod[key] === 'function') {
+        Cls = mod[key] as new (store: unknown, opts: unknown) => { import?: () => unknown; extract?: () => unknown };
+        break;
+      }
+    }
+    if (!Cls) {
+      console.error(`[yondermesh] source ${meta.label} 未找到 importer/extractor 类`);
+      return 1;
+    }
+
+    const instance = new Cls(store, { deviceId });
+    const stats = (meta.method === 'extract' ? instance.extract?.() : instance.import?.()) as Record<string, unknown> | undefined;
+
+    // 统计 reimport 后的 toolCalls 数
+    const afterRow = store.sourceToolCallStats([meta.label, sourceId]);
+
+    const scanned = (stats && typeof stats[meta.scannedField] === 'number') ? stats[meta.scannedField] as number : 0;
+    const inserted = (stats && typeof stats.inserted === 'number') ? stats.inserted as number : 0;
+    const updated = (stats && typeof stats.updated === 'number') ? stats.updated as number : 0;
+    const unchanged = (stats && typeof stats.unchanged === 'number') ? stats.unchanged as number : 0;
+    const toolCallsAdded = afterRow.toolCalls - beforeRow.toolCalls;
+
+    if (flags.json) {
+      console.log(JSON.stringify({
+        dryRun: false,
+        source: meta.label,
+        scanned,
+        inserted,
+        updated,
+        unchanged,
+        sessionsBefore: beforeRow.sessions,
+        toolCallsBefore: beforeRow.toolCalls,
+        toolCallsAfter: afterRow.toolCalls,
+        toolCallsAdded: toolCallsAdded > 0 ? toolCallsAdded : 0,
+      }, null, 2));
+    } else {
+      console.log(`[yondermesh] reimport ${meta.label}: scanned=${scanned}, inserted=${inserted}, updated=${updated}, unchanged=${unchanged}`);
+      console.log(`  tool_calls: ${beforeRow.toolCalls} → ${afterRow.toolCalls} (+${toolCallsAdded > 0 ? toolCallsAdded : 0})`);
+    }
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
 /** 对 RetrospectiveFact 的字符串字段做脱敏（loop §F3：输出不含 /Users/zoran 等） */
 function redactFact(fact: RetrospectiveFact): RetrospectiveFact {
   const r = (s: string): string => redact(s);
@@ -3470,6 +3620,9 @@ async function main(): Promise<number> {
 
     case 'retrospective':
       return cmdRetrospective(flags);
+
+    case 'reimport':
+      return await cmdReimport(flags);
 
     case 'issue':
       return cmdIssue(flags);

@@ -164,6 +164,12 @@ function assembleFact(
   const firstUserMessageAt = findFirstUserTimestamp(messages);
   const toolCalls = extractToolCalls(messages);
   const detours = detectDetours(messages);
+  // trae-ide 等 source 把 tool_call_count 存在 sessions 表（非 message_tool_calls）：
+  // 结构化/正则都提取不到时，回退到 session.toolCallCount（loop build-tool-calls-schema §F3）
+  const effectiveToolCallCount =
+    toolCalls.length > 0
+      ? toolCalls.length
+      : (session.toolCallCount ?? 0);
   const stuckSegments: StuckSegment[] = []; // v0 不启用
   const durationSec = computeDurationSec(session);
 
@@ -171,7 +177,7 @@ function assembleFact(
     sessionId,
     originalNeed,
     toolCalls,
-    toolCallCount: toolCalls.length,
+    toolCallCount: effectiveToolCallCount,
     detours,
     stuckSegments,
     sessionMeta: {
@@ -234,13 +240,28 @@ function findFirstUserTimestamp(
 /**
  * 提取工具调用列表（按 seq 升序）。
  *
- * 扫描 assistant + tool 消息内容，匹配 Claude 风格 tool_use 与通用
+ * 优先使用结构化 toolCalls 字段（loop build-tool-calls-schema §E1）：
+ *   - 若消息有 m.toolCalls（来自 message_tool_calls 表），直接用其 toolName
+ *     填 ToolCallEntry，不再跑正则。
+ *   - 若消息无结构化 toolCalls，回退到原正则扫描 content（兼容老数据）。
+ *
+ * 正则回退扫描 assistant + tool 消息内容，匹配 Claude 风格 tool_use 与通用
  * JSON `{"name":"X"}` 形态。同一条消息内多次出现也分别记录。
  */
 function extractToolCalls(messages: ReadonlyArray<SessionMessage>): ToolCallEntry[] {
   const out: ToolCallEntry[] = [];
   for (const m of messages) {
     if (m.role !== 'assistant' && m.role !== 'tool') continue;
+
+    // 优先：结构化 toolCalls 字段（loop build-tool-calls-schema §E1）
+    if (m.toolCalls && m.toolCalls.length > 0) {
+      for (const tc of m.toolCalls) {
+        out.push({ seq: m.seq, name: tc.toolName });
+      }
+      continue; // 该消息已用结构化数据，不再跑正则
+    }
+
+    // 回退：正则扫描 content（兼容无结构化 toolCalls 的老数据）
     const content = m.content ?? '';
     if (!content || content.indexOf('"name"') === -1) continue;
 

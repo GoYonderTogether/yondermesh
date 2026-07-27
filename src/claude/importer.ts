@@ -30,6 +30,7 @@ import type {
   Coverage,
   MessageRole,
   SessionMessageInput,
+  ToolCallInput,
 } from '../store/types.js';
 import type { SessionStore } from '../store/session-store.js';
 
@@ -75,6 +76,7 @@ interface ContentBlock {
   type?: string;
   text?: string;
   name?: string;
+  input?: unknown;
 }
 
 /** 一个文件的解析结果 */
@@ -89,6 +91,8 @@ interface ParsedSession {
   messages: SessionMessageInput[];
   model?: string;
   cliVersion?: string;
+  /** 工具调用总数（messages 内 toolCalls 数组长度之和） */
+  toolCallCount?: number;
 }
 
 /** 解析 Claude projects 根目录：rootPath 选项优先，否则回退默认路径 */
@@ -246,6 +250,7 @@ export class ClaudeCodeImporter {
       model: parsed.model,
       cliVersion: parsed.cliVersion,
       threadSource: parsed.sidechain ? 'sidechain' : 'user',
+      toolCallCount: parsed.toolCallCount,
       fileModifiedAt: this.getFileMtime(item.absPath),
     });
     rootIdByNative.set(parsed.nativeId, result.sessionId);
@@ -280,6 +285,7 @@ export class ClaudeCodeImporter {
       model: parsed.model,
       cliVersion: parsed.cliVersion,
       threadSource: parsed.sidechain ? 'sidechain' : 'user',
+      toolCallCount: parsed.toolCallCount,
       fileModifiedAt: this.getFileMtime(item.absPath),
     });
     this.tally(result, {
@@ -428,9 +434,18 @@ export class ClaudeCodeImporter {
 
       // 仅取 user/assistant 的可显示文本
       const text = this.extractDisplayText(obj);
+      const role = (obj.type === 'assistant' ? 'assistant' : 'user') as MessageRole;
+      // assistant 消息即使无 text 块（纯 tool_use）也要保留，以承载结构化工具调用
+      const tcs = role === 'assistant' ? this.extractToolCalls(obj) : [];
       if (text !== null) {
-        const role = (obj.type === 'assistant' ? 'assistant' : 'user') as MessageRole;
-        messages.push({ role, content: text, timestamp: ts });
+        const msg: SessionMessageInput = { role, content: text, timestamp: ts };
+        if (tcs.length > 0) msg.toolCalls = tcs;
+        messages.push(msg);
+      } else if (tcs.length > 0) {
+        // 纯 tool_use 消息：用空串占位，保留 toolCalls（loop build-tool-calls-schema §C1）
+        const msg: SessionMessageInput = { role, content: '', timestamp: ts };
+        msg.toolCalls = tcs;
+        messages.push(msg);
       }
     }
 
@@ -450,7 +465,8 @@ export class ClaudeCodeImporter {
       nativeId = sessionId && sessionId.length > 0 ? sessionId : relPath;
     }
 
-    return { nativeId, parentRootNativeId, cwd, startedAt: earliest, sidechain, messages, model, cliVersion };
+    const toolCallCount = messages.reduce((sum, m) => sum + (m.toolCalls?.length ?? 0), 0);
+    return { nativeId, parentRootNativeId, cwd, startedAt: earliest, sidechain, messages, model, cliVersion, toolCallCount };
   }
 
   /**
@@ -491,5 +507,38 @@ export class ClaudeCodeImporter {
     if (typeof value !== 'string' || value.length === 0) return undefined;
     const ms = Date.parse(value);
     return Number.isNaN(ms) ? undefined : ms;
+  }
+
+  /**
+   * 从一行 jsonl 提取结构化工具调用（Claude 风格 tool_use 块）。
+   * 只在 assistant 消息的 content 数组里有效；user 消息 / 非 content 数组返回空。
+   * callSeq = 该消息内 tool_use 块的序号（0-based）。
+   * toolInput = JSON.stringify(input)（保持原始结构，便于下游消费）。
+   */
+  private extractToolCalls(obj: JsonlLine): ToolCallInput[] {
+    if (obj.type !== 'assistant') return [];
+    const message = obj.message as { content?: unknown } | undefined;
+    if (!message) return [];
+    const content = message.content;
+    if (!Array.isArray(content)) return [];
+    const out: ToolCallInput[] = [];
+    let seq = 0;
+    for (const block of content as ContentBlock[]) {
+      if (block && block.type === 'tool_use' && typeof block.name === 'string') {
+        let inputStr: string | undefined;
+        if (block.input !== undefined && block.input !== null) {
+          try {
+            inputStr = JSON.stringify(block.input);
+          } catch {
+            inputStr = undefined;
+          }
+        }
+        const tc: ToolCallInput = { callSeq: seq, toolName: block.name };
+        if (inputStr !== undefined) tc.toolInput = inputStr;
+        out.push(tc);
+        seq++;
+      }
+    }
+    return out;
   }
 }

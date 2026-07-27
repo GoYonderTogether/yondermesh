@@ -41,6 +41,7 @@ import type {
   SessionTopology,
   SourceInstance,
   SourceInstanceInput,
+  ToolCall,
 } from './types.js';
 
 /** 行记录的松散类型 */
@@ -451,6 +452,22 @@ export class SessionStore {
           .run(now, sessionId);
         // 即使内容不变也刷新元数据（model、tokens、cost 等可能由 adapter 新增解析）
         this.updateMetadata(sessionId, input);
+        // loop build-tool-calls-schema §D2：内容不变也补 attach toolCalls
+        // （老 session 在 toolCalls 字段加入前入库，reimport 时 importer 现在能提取 toolCalls；
+        //   content_hash 不含 toolCalls 故不产生新 revision，用 INSERT OR IGNORE 幂等补写）
+        const hasToolCalls = input.messages.some((m) => m.toolCalls && m.toolCalls.length > 0);
+        if (hasToolCalls) {
+          const revId = existing.current_revision_id as number;
+          const existingMsgs = this.db
+            .prepare('SELECT id, seq FROM messages WHERE session_id = ? AND revision_id = ? ORDER BY seq')
+            .all(sessionId, revId) as Array<{ id: number; seq: number }>;
+          const seqToId = new Map<number, number>();
+          for (const r of existingMsgs) seqToId.set(r.seq, r.id);
+          const tcStmt = this.db.prepare(
+            'INSERT OR IGNORE INTO message_tool_calls (message_id, session_id, call_seq, tool_name, tool_input) VALUES (?, ?, ?, ?, ?)',
+          );
+          this.attachToolCallsBySeqInner(sessionId, input.messages, seqToId, tcStmt);
+        }
         const revRow = this.db
           .prepare('SELECT revision_number FROM session_revisions WHERE id = ?')
           .get(existing.current_revision_id as number) as Row | undefined;
@@ -489,23 +506,162 @@ export class SessionStore {
     }
   }
 
-  /** 读取当前 revision 的消息 */
+  /** 读取当前 revision 的消息（含结构化 toolCalls，LEFT JOIN message_tool_calls） */
   getMessages(sessionId: string): SessionMessage[] {
     const rows = this.db
       .prepare(
-        `SELECT m.seq, m.role, m.content, m.timestamp
+        `SELECT m.seq, m.role, m.content, m.timestamp,
+                COALESCE((
+                   SELECT json_group_array(json_object('callSeq', t.call_seq, 'toolName', t.tool_name, 'toolInput', t.tool_input))
+                   FROM message_tool_calls t WHERE t.message_id = m.id
+                   ORDER BY t.call_seq
+                 ), '[]') AS tool_calls_json
          FROM messages m
          JOIN sessions s ON s.id = m.session_id
          WHERE m.session_id = ? AND m.revision_id = s.current_revision_id
          ORDER BY m.seq`,
       )
-      .all(sessionId) as Row[];
-    return rows.map((r) => ({
-      seq: r.seq as number,
-      role: r.role as SessionMessage['role'],
-      content: r.content as string,
-      timestamp: (r.timestamp as number | null) ?? undefined,
-    }));
+      .all(sessionId) as Array<Row & { tool_calls_json: string }>;
+    return rows.map((r) => {
+      const msg: SessionMessage = {
+        seq: r.seq as number,
+        role: r.role as SessionMessage['role'],
+        content: r.content as string,
+        timestamp: (r.timestamp as number | null) ?? undefined,
+      };
+      const json = r.tool_calls_json ?? '[]';
+      if (json && json !== '[]') {
+        try {
+          const arr = JSON.parse(json) as Array<{ callSeq: number; toolName: string; toolInput?: string | null }>;
+          if (Array.isArray(arr) && arr.length > 0) {
+            const toolCalls: ToolCall[] = arr.map((a) => {
+              const tc: ToolCall = {
+                callSeq: a.callSeq,
+                toolName: a.toolName,
+              };
+              if (a.toolInput !== undefined && a.toolInput !== null) {
+                tc.toolInput = a.toolInput;
+              }
+              return tc;
+            });
+            if (toolCalls.length > 0) msg.toolCalls = toolCalls;
+          }
+        } catch {
+          /* tool_calls_json 损坏 → 跳过，不影响 messages 读取 */
+        }
+      }
+      return msg;
+    });
+  }
+
+  /**
+   * 把 toolCalls 补 attach 到已存在 session 的当前 revision 的 messages。
+   *
+   * 按 (session_id, seq) 在 current_revision_id 下定位 message_id，
+   * 然后 INSERT OR IGNORE into message_tool_calls（幂等：UNIQUE message_id+call_seq）。
+   *
+   * 用于 reimport：旧 importer 没采集 toolCalls 的 session，reimport 重新跑
+   * importer 拿到带 toolCalls 的 messages，但内容未变（content_hash 相同）不会产生
+   * 新 revision；此时用本方法把 toolCalls 补到现有 messages 上，无需新 revision。
+   *
+   * 入参 messages 的顺序与原 ingestSession 一致（seq = 数组索引）。
+   *
+   * @returns 实际新插入的 tool_call 行数（重复跑返回 0）
+   */
+  attachToolCallsBySeq(sessionId: string, messages: SessionMessageInput[]): number {
+    const revRow = this.db
+      .prepare('SELECT current_revision_id AS rid FROM sessions WHERE id = ?')
+      .get(sessionId) as Row | undefined;
+    if (!revRow || revRow.rid === null || revRow.rid === undefined) return 0;
+    const revisionId = revRow.rid as number;
+
+    const rows = this.db
+      .prepare(
+        'SELECT id, seq FROM messages WHERE session_id = ? AND revision_id = ? ORDER BY seq',
+      )
+      .all(sessionId, revisionId) as Array<{ id: number; seq: number }>;
+    const seqToId = new Map<number, number>();
+    for (const r of rows) seqToId.set(r.seq, r.id);
+
+    const tcStmt = this.db.prepare(
+      'INSERT OR IGNORE INTO message_tool_calls (message_id, session_id, call_seq, tool_name, tool_input) VALUES (?, ?, ?, ?, ?)',
+    );
+
+    let inserted = 0;
+    this.db.exec('BEGIN');
+    try {
+      inserted = this.attachToolCallsBySeqInner(sessionId, messages, seqToId, tcStmt);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return inserted;
+  }
+
+  /**
+   * attachToolCallsBySeq 的内部实现，不管理事务（供 ingestSession 在已开事务内调用）。
+   * 由调用方保证事务边界。返回实际新插入的 tool_call 行数。
+   */
+  private attachToolCallsBySeqInner(
+    sessionId: string,
+    messages: SessionMessageInput[],
+    seqToId: Map<number, number>,
+    tcStmt: ReturnType<DatabaseSyncType['prepare']>,
+  ): number {
+    let inserted = 0;
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (!msg.toolCalls || msg.toolCalls.length === 0) continue;
+      const messageId = seqToId.get(i);
+      if (messageId === undefined) continue;
+      for (const tc of msg.toolCalls) {
+        const r = tcStmt.run(messageId, sessionId, tc.callSeq, tc.toolName, tc.toolInput ?? null);
+        if (r.changes > 0) inserted++;
+      }
+    }
+    return inserted;
+  }
+
+  /**
+   * 统计某 session 当前 revision 的 message_tool_calls 行数。
+   * 用于 reimport 后报告「补了 N 条 tool_calls」。
+   */
+  countToolCalls(sessionId: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM message_tool_calls t
+         JOIN messages m ON m.id = t.message_id
+         JOIN sessions s ON s.id = m.session_id
+         WHERE t.session_id = ? AND m.revision_id = s.current_revision_id`,
+      )
+      .get(sessionId) as Row;
+    return (row.c as number) ?? 0;
+  }
+
+  /**
+   * 统计指定 source（一个或多个 source label）的 session 数和 toolCalls 总数（当前 revision）。
+   * 用于 reimport 命令的前后对比报告（loop build-tool-calls-schema §D3）。
+   */
+  sourceToolCallStats(sourceLabels: string[]): { sessions: number; toolCalls: number } {
+    if (sourceLabels.length === 0) return { sessions: 0, toolCalls: 0 };
+    const placeholders = sourceLabels.map(() => '?').join(',');
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(DISTINCT s.id) AS sessions,
+                COALESCE(SUM(
+                  (SELECT COUNT(*) FROM message_tool_calls t
+                   JOIN messages m ON m.id = t.message_id
+                   WHERE m.session_id = s.id AND m.revision_id = s.current_revision_id)
+                ), 0) AS tool_calls
+         FROM sessions s
+         WHERE s.source IN (${placeholders})`,
+      )
+      .get(...sourceLabels) as Row;
+    return {
+      sessions: (row.sessions as number) ?? 0,
+      toolCalls: (row.tool_calls as number) ?? 0,
+    };
   }
 
   /** 读取 session 的全部 revision 历史（升序） */
@@ -1400,13 +1556,22 @@ export class SessionStore {
     return Number(result.lastInsertRowid);
   }
 
-  /** 批量插入某 revision 的消息快照 */
+  /** 批量插入某 revision 的消息快照（含结构化 toolCalls） */
   private insertMessages(sessionId: string, revisionId: number, messages: SessionMessageInput[]): void {
     const stmt = this.db.prepare(
       'INSERT INTO messages (session_id, revision_id, seq, role, content, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
     );
+    const tcStmt = this.db.prepare(
+      'INSERT OR IGNORE INTO message_tool_calls (message_id, session_id, call_seq, tool_name, tool_input) VALUES (?, ?, ?, ?, ?)',
+    );
     messages.forEach((m, i) => {
-      stmt.run(sessionId, revisionId, i, m.role, m.content, m.timestamp ?? null);
+      const r = stmt.run(sessionId, revisionId, i, m.role, m.content, m.timestamp ?? null);
+      if (m.toolCalls && m.toolCalls.length > 0) {
+        const messageId = Number(r.lastInsertRowid);
+        for (const tc of m.toolCalls) {
+          tcStmt.run(messageId, sessionId, tc.callSeq, tc.toolName, tc.toolInput ?? null);
+        }
+      }
     });
   }
 
