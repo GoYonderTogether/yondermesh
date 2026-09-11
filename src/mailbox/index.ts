@@ -31,3 +31,5 @@ export type {
   TrayNotice,
   UnreadCount,
 } from './types.js';
+export { formatSelfSessionFailure } from './core.js';
+export type { SelfSessionDiagnosis, SelfSessionFailureReason } from './core.js';

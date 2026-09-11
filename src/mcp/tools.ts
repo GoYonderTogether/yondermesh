@@ -25,7 +25,7 @@ import {
   detectInstalledClis,
 } from '../mount/registry.js';
 import { verifyAll } from '../mount/manager.js';
-import { MailboxCore } from '../mailbox/index.js';
+import { MailboxCore, formatSelfSessionFailure } from '../mailbox/index.js';
 import type { PostMessageInput, SendMode, SendTarget } from '../mailbox/index.js';
 import { loadWrapper as regLoadWrapper } from '../adapters/registry.js';
 import {
@@ -688,11 +688,10 @@ const mailboxCheckHandler: McpToolHandler = async (args) => {
 
   const mailbox = openMailbox();
   try {
-    const selfSid = mailbox.resolveSelfSession({ explicit: explicitSid });
+    const diag = mailbox.resolveSelfSessionDetailed({ explicit: explicitSid });
+    const selfSid = diag.sid;
     if (!selfSid) {
-      return errorContent(
-        '无法解析 self session id。请通过 self_session_id 显式传入，或设置 YONDERMESH_SELF_SESSION_ID 环境变量，或在已入库的 session 对应的 cwd 下调用。',
-      );
+      return errorContent(formatSelfSessionFailure(diag));
     }
 
     const trayNotices = mailbox.consumeTray(selfSid);
@@ -815,12 +814,15 @@ const whoamiHandler: McpToolHandler = async (args) => {
 
   const mailbox = openMailbox();
   try {
-    const selfSid = mailbox.resolveSelfSession({ explicit: explicitSid });
+    const diag = mailbox.resolveSelfSessionDetailed({ explicit: explicitSid });
+    const selfSid = diag.sid;
     if (!selfSid) {
       return jsonContent({
         sessionId: null,
         resolved: false,
-        hint: '无法解析 self session id。可通过 self_session_id 显式传入，或设置 YONDERMESH_SELF_SESSION_ID 环境变量（需 wrapper 注入），或确保当前 cwd 有匹配的活跃 session。',
+        reason: diag.reason ?? null,
+        hints: diag.hints,
+        detail: formatSelfSessionFailure(diag),
       });
     }
     const unread = mailbox.countUnread(selfSid);

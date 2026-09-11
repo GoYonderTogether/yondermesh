@@ -5,6 +5,7 @@
  * v2: 实时 session 感知 + 跨 session 消息总线
  */
 
+import '../prelude/quiet-sqlite-warning.js';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';

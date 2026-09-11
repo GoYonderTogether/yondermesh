@@ -78,6 +78,8 @@ export function tokenizeKeyword(keyword: string): string[] {
 
 export class SessionStore {
   private readonly db: DatabaseSyncType;
+  /** FTS 未同步时的数据量（供 CLI/MCP 按需提示，不再自动打印）。 */
+  private ftsStale: { userMsgTotal: number; ftsTotal: number } | null = null;
 
   constructor(location: string) {
     this.db = new DatabaseSync(location);
@@ -176,10 +178,10 @@ export class SessionStore {
     // 自动回填是单事务全量 INSERT，大表上会阻塞数分钟~数小时，拖死所有 store 构造。
     // 由 `ymesh sync fts` 显式分批回填（游标法，不阻塞其他命令）。
     if (userMsgTotal > 50_000 && userMsgTotal - ftsTotal > 1000) {
-      console.warn(
-        `[yondermesh] user 消息 ${userMsgTotal} 条，FTS 已回填 ${ftsTotal} 条（未同步）。` +
-          ` 跳过自动回填以避免阻塞。如需全文搜索，请跑 \`ymesh sync fts\` 显式分批回填。`,
-      );
+      // 只记录状态，**不在这里打印**：SessionStore 是低层组件，每次构造都往
+      // stderr 喷提示会污染所有命令（含 --json）。由 CLI/MCP 在「需要 FTS 的
+      // 命令」（search / query / status / doctor）里按需提示。见 ftsStaleInfo()。
+      this.ftsStale = { userMsgTotal, ftsTotal };
       return;
     }
     this.db.exec(`
@@ -1079,6 +1081,24 @@ export class SessionStore {
       sessionsUpdated: row.sessions_updated as number,
       error: (row.error as string | null) ?? null,
     };
+  }
+
+  /**
+   * FTS 未同步信息（仅当大库保护触发回填跳过时有值）。
+   *
+   * 供 CLI/MCP 在**需要全文搜索的命令**里提示用户跑 `ymesh sync fts`；
+   * 不再从构造里打印，避免污染与 FTS 无关的命令输出。
+   */
+  ftsStaleInfo(): { userMsgTotal: number; ftsTotal: number } | null {
+    return this.ftsStale;
+  }
+
+  /** 供调用方渲染成一行提示。 */
+  static formatFtsStaleHint(info: { userMsgTotal: number; ftsTotal: number }): string {
+    return (
+      `user 消息 ${info.userMsgTotal} 条，FTS 全文索引仅回填 ${info.ftsTotal} 条（未同步）。` +
+      ` 全文搜索会漏结果；跑 \`ymesh sync fts\` 分批回填即可（不阻塞其它命令）。`
+    );
   }
 
   /** 关闭数据库 */

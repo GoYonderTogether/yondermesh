@@ -8,6 +8,7 @@
  * 支持 --json 全局标志，输出 JSON 格式。
  */
 
+import '../prelude/quiet-sqlite-warning.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
 import { hostname, homedir } from 'node:os';
@@ -73,7 +74,7 @@ import type {
   SendMode,
   SendTarget,
 } from '../mailbox/index.js';
-import { MAIL_KINDS, MAIL_PRIORITIES } from '../mailbox/index.js';
+import { MAIL_KINDS, MAIL_PRIORITIES, formatSelfSessionFailure } from '../mailbox/index.js';
 import { loadWrapper as regLoadWrapper, listImporters } from '../adapters/registry.js';
 import { scaffoldAdapter } from '../sdk/scaffold.js';
 import type { ScaffoldOptions } from '../sdk/scaffold.js';
@@ -985,6 +986,12 @@ function cmdStatus(flags: Record<string, string | boolean>): number {
       console.log(`    总消息:      ${stats.totalMessages}`);
     } else {
       console.log(`\n  数据统计: (数据库未初始化)`);
+    }
+
+    // FTS 未同步提示：只在这里（以及 search/query 路径）提示，不再每条命令都喷。
+    const ftsStale = new SessionStore(dbPath).ftsStaleInfo();
+    if (ftsStale) {
+      console.log(`\n  ⚠️  全文索引未同步: ${SessionStore.formatFtsStaleHint(ftsStale)}`);
     }
 
     // Detected Agents 段：仅显示已安装的 agent
@@ -2158,9 +2165,10 @@ function cmdMailboxCheck(flags: Record<string, string | boolean>): number {
 
   const mailbox = openMailbox(flags);
   try {
-    const selfSid = mailbox.resolveSelfSession({ explicit: explicitSid });
+    const diag = mailbox.resolveSelfSessionDetailed({ explicit: explicitSid });
+    const selfSid = diag.sid;
     if (!selfSid) {
-      console.error('[yondermesh] 无法解析 self session id。请用 --for <sid> 显式指定，或设置 YONDERMESH_SELF_SESSION_ID 环境变量。');
+      console.error(`[yondermesh] ${formatSelfSessionFailure(diag)}`);
       return 2;
     }
 
@@ -2210,13 +2218,14 @@ function cmdMailboxWhoami(flags: Record<string, string | boolean>): number {
 
   const mailbox = openMailbox(flags);
   try {
-    const selfSid = mailbox.resolveSelfSession({ explicit: explicitSid });
+    const diag = mailbox.resolveSelfSessionDetailed({ explicit: explicitSid });
+    const selfSid = diag.sid;
     if (flags.json) {
-      console.log(JSON.stringify({ sessionId: selfSid ?? null, resolved: !!selfSid }, null, 2));
+      console.log(JSON.stringify({ sessionId: selfSid ?? null, resolved: !!selfSid, via: diag.via ?? null, reason: diag.reason ?? null, hints: diag.hints }, null, 2));
       return 0;
     }
     if (!selfSid) {
-      console.log('[yondermesh] 无法解析 self session id');
+      console.error(`[yondermesh] ${formatSelfSessionFailure(diag)}`);
       return 2;
     }
     console.log(`[yondermesh] self session id: ${selfSid}`);

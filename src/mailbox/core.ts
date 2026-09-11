@@ -62,6 +62,58 @@ const TRAY_DIRNAME = 'mailbox-tray';
  * 每个实例持有自己的 SQLite 连接（与 SessionStore 同一个 DB 文件，不同连接）。
  * SQLite 默认 journal 模式下，单进程多连接的读写是安全的（write 时获得文件锁）。
  */
+
+/** 把解析失败的诊断渲染成**给人看的多行提示**（CLI 与 MCP 共用同一份口径）。 */
+export function formatSelfSessionFailure(d: SelfSessionDiagnosis): string {
+  const lines: string[] = [];
+  const why =
+    d.reason === 'daemon-down'
+      ? '本机 daemon 未运行 → 新会话不会被入库，所以按当前目录匹配不到你'
+      : d.reason === 'no-sessions'
+        ? '数据库里还没有任何 session（从未 scan 过）'
+        : `当前目录（${d.cwd ?? '?'}）匹配不到任何 live 会话（本会话可能尚未入库，或 cwd 不一致）`;
+  lines.push('无法解析 self session id（即：我不知道"我自己"是哪个会话）。');
+  lines.push(`  原因：${why}`);
+  lines.push('  怎么修：');
+  for (const h of d.hints) lines.push(`    · ${h}`);
+  if (d.nearby && d.nearby.length > 0) {
+    lines.push('  最近活跃的会话（大概率其中就有你自己，可用它做 --for）：');
+    for (const n of d.nearby) {
+      const mins = Math.floor(n.ageMs / 60000);
+      const age = mins < 1 ? '刚刚' : mins < 60 ? `${mins} 分钟前` : `${Math.floor(mins / 60)} 小时前`;
+      lines.push(`    · ${n.id.slice(0, 12)}…  ${n.source.padEnd(10)}  ${n.cwd}  ${age}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/** self session 解析失败的原因（用于给可操作的报错，而不是黑盒 null）。 */
+export type SelfSessionFailureReason =
+  /** daemon 没在跑：新会话不会入库，cwd 匹配必然落空 */
+  | 'daemon-down'
+  /** 库里一条 session 都没有（还没 scan 过） */
+  | 'no-sessions'
+  /** daemon 在跑但当前 cwd 匹配不到任何会话（本会话尚未入库 / cwd 不一致） */
+  | 'cwd-mismatch';
+
+/** `resolveSelfSessionDetailed()` 的返回：要么给 id，要么给「为什么 + 怎么办」。 */
+export interface SelfSessionDiagnosis {
+  /** 解析出的 session id；失败为 null */
+  sid: string | null;
+  /** 成功时说明靠哪一层解析出来的 */
+  via?: 'env' | 'explicit' | 'cwd-live' | 'cwd-recent';
+  /** 失败原因 */
+  reason?: SelfSessionFailureReason;
+  /** 失败时：daemon 是否存活 */
+  daemonUp?: boolean;
+  /** 失败时：本次用于匹配的 cwd */
+  cwd?: string;
+  /** 失败时：最近活跃的几个会话（帮用户认领自己的 id） */
+  nearby?: Array<{ id: string; cwd: string; source: string; ageMs: number }>;
+  /** 失败时：可操作的建议（按优先级） */
+  hints: string[];
+}
+
 export class MailboxCore {
   private readonly db: DatabaseSyncType;
   private readonly dataDir: string;
@@ -524,66 +576,133 @@ export class MailboxCore {
   // ─── 自识别（3 层降级） ──────────────────────────────────────────────
 
   /**
-   * 解析当前调用方的 self session id。
+   * 解析当前调用方的 self session id —— **带诊断**版本（推荐新代码使用）。
    *
-   * 1. env YONDERMESH_SELF_SESSION_ID（wrapper 注入）
-   * 2. caller 显式传入
-   * 3. 用 cwd 匹配最近活跃的 live session
+   * 自识别四层降级：env → 显式传入 → cwd 精确匹配（live 2min → recent 5min）→ cwd 前缀。
+   * 全部落空时**不再是黑盒**：返回结构化失败原因 + 最近活跃会话候选 + 可操作修法。
    *
-   * 返回 null 表示无法解析。
+   * 为什么要这样做：旧版只返回 null，调用方只能打印一句「无法解析 self session id」，
+   * 用户看不出根因（最常见是 **daemon 没跑 → 新会话没入库**），也不知道该做什么。
    */
-  resolveSelfSession(options: { explicit?: string; cwd?: string }): string | null {
+  resolveSelfSessionDetailed(options: {
+    explicit?: string;
+    cwd?: string;
+    /** 覆盖 daemon pid 文件路径（测试用）。默认走 install/paths。 */
+    daemonPidPath?: string;
+  }): SelfSessionDiagnosis {
     // 层 1: env
     const envSid = process.env.YONDERMESH_SELF_SESSION_ID;
-    if (envSid && typeof envSid === 'string') return envSid;
+    if (envSid && typeof envSid === 'string') {
+      return { sid: envSid, via: 'env', hints: [] };
+    }
 
     // 层 2: caller 显式传入
-    if (options.explicit) return options.explicit;
+    if (options.explicit) {
+      return { sid: options.explicit, via: 'explicit', hints: [] };
+    }
 
-    // 层 3: cwd 匹配
     const cwd = options.cwd ?? process.cwd();
-    if (!cwd) return null;
-
-    // 优先：cwd 精确匹配 + 最近 live（2 分钟内有文件活动）
     const now = Date.now();
-    const liveThreshold = now - LIVE_THRESHOLD_MS;
-    const liveRow = this.db
-      .prepare(
-        `SELECT id FROM sessions
+
+    const pick = (sql: string, ...params: (string | number)[]): string | undefined => {
+      const row = this.db.prepare(sql).get(...params) as Row | undefined;
+      return row?.id ? String(row.id) : undefined;
+    };
+
+    if (cwd) {
+      const liveThreshold = now - LIVE_THRESHOLD_MS;
+      const base = `SELECT id FROM sessions
          WHERE cwd = ? AND retention = 'live'
            AND COALESCE(file_modified_at, last_seen_at) >= ?
          ORDER BY COALESCE(file_modified_at, last_seen_at) DESC
-         LIMIT 1`,
-      )
-      .get(cwd, liveThreshold) as Row | undefined;
-    if (liveRow?.id) return liveRow.id as string;
+         LIMIT 1`;
 
-    // 退化：cwd 精确匹配 + 任意最近 session（5 分钟内）
-    const recentThreshold = now - 5 * 60_000;
-    const recentRow = this.db
+      const recentThreshold = now - 5 * 60_000;
+
+      const hit =
+        pick(base, cwd, liveThreshold) ??
+        pick(base, cwd, recentThreshold) ??
+        pick(
+          `SELECT id FROM sessions
+             WHERE ? LIKE cwd || '%' AND retention = 'live'
+               AND COALESCE(file_modified_at, last_seen_at) >= ?
+             ORDER BY COALESCE(file_modified_at, last_seen_at) DESC
+             LIMIT 1`,
+          cwd,
+          recentThreshold,
+        );
+
+      if (hit) {
+        const via =
+          pick(base, cwd, liveThreshold) === hit ? 'cwd-live' : 'cwd-recent';
+        return { sid: hit, via, hints: [] };
+      }
+    }
+
+    // ── 全部落空：构造可操作的诊断 ──────────────────────────────────
+    const daemonUp = this.isDaemonAlive(options.daemonPidPath);
+    const totalSessions =
+      (this.db.prepare('SELECT COUNT(*) AS n FROM sessions').get() as Row | undefined)?.n ?? 0;
+
+    // 最近活跃的几个会话，帮用户「认领」自己的 id
+    const nearby = this.db
       .prepare(
-        `SELECT id FROM sessions
-         WHERE cwd = ? AND retention = 'live'
-           AND COALESCE(file_modified_at, last_seen_at) >= ?
-         ORDER BY COALESCE(file_modified_at, last_seen_at) DESC
-         LIMIT 1`,
+        `SELECT id, cwd, source, COALESCE(file_modified_at, last_seen_at) AS ts
+           FROM sessions
+          WHERE retention = 'live'
+          ORDER BY COALESCE(file_modified_at, last_seen_at) DESC
+          LIMIT 5`,
       )
-      .get(cwd, recentThreshold) as Row | undefined;
-    if (recentRow?.id) return recentRow.id as string;
+      .all() as Row[];
 
-    // 兜底：cwd 前缀匹配（应对路径符号链接/大小写差异）
-    const prefixRow = this.db
-      .prepare(
-        `SELECT id FROM sessions
-         WHERE ? LIKE cwd || '%' AND retention = 'live'
-           AND COALESCE(file_modified_at, last_seen_at) >= ?
-         ORDER BY COALESCE(file_modified_at, last_seen_at) DESC
-         LIMIT 1`,
-      )
-      .get(cwd, recentThreshold) as Row | undefined;
-    if (prefixRow?.id) return prefixRow.id as string;
+    const nearbyOut = nearby.map((r) => ({
+      id: String(r.id),
+      cwd: String(r.cwd ?? ''),
+      source: String(r.source ?? ''),
+      ageMs: now - Number(r.ts ?? 0),
+    }));
 
-    return null;
+    const reason: SelfSessionFailureReason = !daemonUp
+      ? 'daemon-down'
+      : totalSessions === 0
+        ? 'no-sessions'
+        : 'cwd-mismatch';
+
+    const hints: string[] = [];
+    if (!daemonUp) {
+      hints.push('本机 daemon 未运行 → 先把 daemon 跑起来：`ymesh daemon`（会实时监听 + 定时 reconcile）');
+      hints.push('或先做一次全量入库：`ymesh scan`');
+    } else {
+      hints.push('本会话可能还没入库 → 跑一次 `ymesh scan`，或稍等 daemon 的定时 reconcile');
+    }
+    hints.push('也可以直接指定：`ymesh mailbox check --for <sid>`（用 `ymesh sessions` 查 id）');
+    hints.push('长期方案：让 wrapper 注入 `YONDERMESH_SELF_SESSION_ID`（最稳，不依赖 cwd 猜测）');
+
+    return { sid: null, reason, daemonUp, cwd, nearby: nearbyOut, hints };
+  }
+
+  /** daemon 是否存活（读 pid 文件 + kill(0) 探活）。失败一律当作未运行。 */
+  private isDaemonAlive(pidPathOverride?: string): boolean {
+    try {
+      const pidPath = pidPathOverride ?? join(this.dataDir, 'daemon.pid');
+      if (!pidPath || !existsSync(pidPath)) return false;
+      const pid = Number(readFileSync(pidPath, 'utf-8').trim());
+      if (!Number.isFinite(pid) || pid <= 0) return false;
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 解析当前调用方的 self session id（薄包装，保持旧签名兼容）。
+   *
+   * 新代码建议直接用 `resolveSelfSessionDetailed()` 拿诊断信息。
+   * 返回 null 表示无法解析（想看"为什么"就用 detailed 版本）。
+   */
+  resolveSelfSession(options: { explicit?: string; cwd?: string }): string | null {
+    return this.resolveSelfSessionDetailed(options).sid;
   }
 
   // ─── 内部辅助 ────────────────────────────────────────────────────────

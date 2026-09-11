@@ -15,12 +15,12 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 
 import { SessionStore } from '../src/store/index.js';
-import { MailboxCore } from '../src/mailbox/core.js';
+import { MailboxCore, formatSelfSessionFailure } from '../src/mailbox/core.js';
 import type { MailboxMessage, MailboxNotifier } from '../src/mailbox/types.js';
 import { TriggerAdapter } from '../src/trigger/adapter.js';
 import { ReplyAdapter } from '../src/trigger/reply-adapter.js';
@@ -457,6 +457,62 @@ describe('MailboxCore', () => {
     it('无法匹配时返回 null', () => {
       const sid = env.mailbox.resolveSelfSession({ cwd: '/nonexistent/path' });
       expect(sid).toBeNull();
+    });
+  });
+
+
+  describe('8b. resolveSelfSessionDetailed 诊断（UX 修复）', () => {
+    afterEach(() => {
+      delete process.env.YONDERMESH_SELF_SESSION_ID;
+    });
+
+    it('成功：给出 sid 与解析途径 via', () => {
+      const d = env.mailbox.resolveSelfSessionDetailed({ cwd: '/projects/test-cwd' });
+      expect(d.sid).toBe(selfSid);
+      expect(d.via).toBeTruthy();
+      expect(d.hints).toHaveLength(0);
+    });
+
+    it('失败：给出 reason + 可操作 hints + 最近活跃会话候选（不再黑盒 null）', () => {
+      // 造一个「daemon 活着」的 pid 文件 → 失败原因应落在 cwd-mismatch（而非 daemon-down）
+      const livePidFile = join(env.dataDir, 'daemon.live.pid');
+      writeFileSync(livePidFile, String(process.pid));
+      const d = env.mailbox.resolveSelfSessionDetailed({
+        cwd: '/nonexistent/path',
+        daemonPidPath: livePidFile,
+      });
+      expect(d.sid).toBeNull();
+      expect(d.reason).toBe('cwd-mismatch');
+      expect(d.cwd).toBe('/nonexistent/path');
+      expect(d.hints.length).toBeGreaterThan(0);
+      // 候选里应能看到刚才灌入的 session，用户可据此认领自己的 id
+      expect(d.nearby?.some((n) => n.id === selfSid)).toBe(true);
+    });
+
+    it('失败原因区分 daemon：pid 文件指向死进程 → daemon-down', () => {
+      const deadPidFile = join(env.dataDir, 'daemon.dead.pid');
+      writeFileSync(deadPidFile, '999999');
+      const d = env.mailbox.resolveSelfSessionDetailed({
+        cwd: '/nonexistent/path',
+        daemonPidPath: deadPidFile,
+      });
+      expect(d.sid).toBeNull();
+      expect(d.reason).toBe('daemon-down');
+      expect(d.daemonUp).toBe(false);
+      expect(d.hints.join(' ')).toContain('ymesh daemon');
+    });
+
+    it('格式化成多行人话：含「原因」「怎么修」', () => {
+      const livePidFile = join(env.dataDir, 'daemon.live2.pid');
+      writeFileSync(livePidFile, String(process.pid));
+      const d = env.mailbox.resolveSelfSessionDetailed({
+        cwd: '/nonexistent/path',
+        daemonPidPath: livePidFile,
+      });
+      const text = formatSelfSessionFailure(d);
+      expect(text).toContain('原因');
+      expect(text).toContain('怎么修');
+      expect(text).toContain('--for');
     });
   });
 
