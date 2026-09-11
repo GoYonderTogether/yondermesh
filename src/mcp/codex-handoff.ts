@@ -64,7 +64,8 @@ export interface CompactedSummary {
 /** 完整 handoff 包 */
 export interface HandoffPackage {
   session_id: string | null;
-  source: 'codex' | 'claude';
+  /** 来源 CLI。不限于 codex/claude —— 见 buildStoreHandoff（DB 回退支持全部 27 个 adapter） */
+  source: string;
   file_path: string;
   session_meta: HandoffSessionMeta;
   compacted_summaries: CompactedSummary[];
@@ -569,4 +570,97 @@ export function buildSessionHandoff(
   if (claudeFile) return buildClaudeHandoff(claudeFile, options);
 
   return null;
+}
+
+/**
+ * DB 回退版 handoff：直接从 yondermesh 数据库组装，**不依赖任何 CLI 的私有目录**。
+ *
+ * 为什么要这个：原 `buildSessionHandoff` 只认 codex / claude 两个硬编码路径，
+ * 于是 pi / omp / hermes / … 等其余 adapter 的 `ymesh handoff` 一律失败
+ * （实测：`ymesh handoff <pi-session>` → 「找不到 session 的源文件」）。
+ * 而所有 adapter 的消息本来就已经入库了——直接查库即可覆盖全部来源，
+ * 不需要为每个 CLI 再写一条读取路径。
+ *
+ * 代价：拿不到原始 tool_call 的 arguments/output 结构，也没有 compacted 摘要
+ *（这两项依赖各家原始 jsonl 格式），因此它们是空/简化值。
+ * 用于「接管任务、快速看懂上下文」足够；需要工具调用级细节时仍走原路径。
+ */
+export function buildStoreHandoff(
+  sessionId: string,
+  store: {
+    resolveSessionId(input: string): string | null;
+    getSession(id: string): SessionRecordLike | undefined;
+    getMessages(id: string): MessageLike[];
+  },
+  options: BuildHandoffOptions = {},
+): HandoffPackage | null {
+  // 先用统一 id 解析（用户可能给的是 native id 或截断前缀）
+  let resolved = sessionId;
+  try {
+    resolved = store.resolveSessionId(sessionId) ?? sessionId;
+  } catch {
+    // 前缀歧义 → 用原值再试一次
+  }
+  const session = store.getSession(resolved);
+  if (!session) return null;
+
+  const all = store.getMessages(resolved);
+  const tailMessages = options.tailMessages ?? 30;
+  const truncateAt = options.truncateOutput ?? 2000;
+  const truncate = (text: string): string =>
+    text.length > truncateAt ? text.slice(0, truncateAt) : text;
+
+  const now = Date.now();
+  const lastActivityAt = session.fileModifiedAt ?? session.lastSeenAt ?? now;
+  const liveThresholdMs = options.liveThresholdMs ?? 120_000;
+
+  const lastUser = [...all].reverse().find((m) => m.role === 'user');
+
+  return {
+    session_id: session.nativeSessionId ?? sessionId,
+    source: session.source ?? 'unknown',
+    file_path: '',
+    session_meta: {
+      cwd: session.cwd ?? null,
+      topology: (session.topology as 'root' | 'subagent' | null) ?? null,
+      model: session.model ?? null,
+      cliVersion: session.cliVersion ?? null,
+      originator: session.originator ?? null,
+      entrySource: session.entrySource ?? null,
+    },
+    compacted_summaries: [],
+    last_user_message: lastUser ? truncate(lastUser.content ?? '') : null,
+    recent_messages: all.slice(-tailMessages).map((m) => ({
+      seq: m.seq,
+      role: m.role,
+      content: truncate(m.content ?? ''),
+      timestamp: m.timestamp,
+    })),
+    task_plan: null,
+    is_live: now - lastActivityAt < liveThresholdMs,
+    last_activity_sec_ago: Math.round((now - lastActivityAt) / 1000),
+    message_count: session.messageCount ?? all.length,
+  };
+}
+
+/** buildStoreHandoff 需要的最小 DB 形状（结构性类型，避免与 store 模块耦合） */
+export interface SessionRecordLike {
+  nativeSessionId?: string;
+  source?: string;
+  cwd?: string | null;
+  topology?: string;
+  model?: string | null;
+  cliVersion?: string | null;
+  originator?: string | null;
+  entrySource?: string | null;
+  lastSeenAt?: number;
+  fileModifiedAt?: number | null;
+  messageCount?: number;
+}
+
+export interface MessageLike {
+  seq: number;
+  role: string;
+  content?: string;
+  timestamp?: number;
 }

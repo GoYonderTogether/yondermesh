@@ -62,7 +62,7 @@ import {
   checkRegistration,
   buildYmeshArgs,
 } from '../mcp/register.js';
-import { buildSessionHandoff } from '../mcp/codex-handoff.js';
+import { buildSessionHandoff, buildStoreHandoff } from '../mcp/codex-handoff.js';
 import type { HandoffPackage } from '../mcp/codex-handoff.js';
 import { MCP_TOOLS, listToolSchemas } from '../mcp/tools.js';
 import { MailboxCore } from '../mailbox/index.js';
@@ -1526,9 +1526,30 @@ function cmdHandoff(flags: Record<string, string | boolean>): number {
 
   const claudePath = join(homedir(), '.claude', 'projects');
   const codexPath = join(homedir(), '.codex', 'sessions');
-  const pkg = buildSessionHandoff(sessionId, claudePath, codexPath, { tailMessages: tailNum });
+  // 优先走原始 jsonl 路径（有 tool_call 细节），失败则回退到 DB
+  //——DB 回退覆盖全部 adapter（pi / omp / hermes / …），不再只有 claude/codex。
+  let pkg = buildSessionHandoff(sessionId, claudePath, codexPath, { tailMessages: tailNum });
   if (!pkg) {
-    console.error(`[yondermesh] 找不到 session ${sessionId} 的源文件`);
+    const dataDir = resolveDataDir(flags);
+    const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+    try {
+      const store = new SessionStore(dbPath);
+      try {
+        pkg = buildStoreHandoff(sessionId, store, { tailMessages: tailNum });
+      } finally {
+        store.close();
+      }
+    } catch (err) {
+      console.error(`[yondermesh] handoff 读库失败: ${String(err)}`);
+      return 1;
+    }
+  }
+  if (!pkg) {
+    console.error(
+      `[yondermesh] 找不到 session ${sessionId}。\n` +
+        `  说明：已在 codex/claude 目录与数据库中都查找过（DB 支持任意前缀）。\n` +
+        `  用 \`ymesh sessions --json\` 查可用 id。`,
+    );
     return 1;
   }
 
