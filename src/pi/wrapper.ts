@@ -195,20 +195,54 @@ export class PiController {
 
   /**
    * 绑定到已有 session 并 steer 注入消息。
-   * 实现：启动 RPC → switchSession(filePath) → steer(message) → 可选 waitForIdle → stop。
-   * 用于对已存在（可能已 settle）的 session 追加中途指令；运行中 session 由同进程
-   * 的 launch 句柄 inject 更可靠（避免双进程写同一文件）。
+   * 实现：存活检测 → 启动 RPC → switchSession(filePath) → steer(message) → 回读验证 → stop。
+   *
+   * ⚠️ 双写保护（P0）：本方法会**新起一个 pi 进程**去写那个 .jsonl。如果该 session
+   * 此刻正被另一个 pi 进程使用（比如用户正在终端里跟它对话），两个进程写同一个文件
+   * 会导致消息错乱/丢失。因此注入前会做**存活检测**：最近有写入的 session 默认拒绝，
+   * 需要显式传 `force: true` 才继续。
+   *
+   * ⚠️ 真实性保证：`ok: true` 不再只代表"RPC 没报错"。注入后会**回读 session 文件**
+   * 确认消息真的落盘（`verified`），查不到就抛错——避免"假成功"。
    */
   async inject(
     sessionId: string,
     message: string,
     cli: PiCli | string = 'pi',
-    options: { waitIdle?: boolean; images?: RpcImage[] } = {},
-  ): Promise<{ ok: true }> {
+    options: {
+      waitIdle?: boolean;
+      images?: RpcImage[];
+      /** 跳过存活检测（明知目标进程已退出时用） */
+      force?: boolean;
+      /** 存活判定窗口（毫秒），默认 120_000 */
+      liveWindowMs?: number;
+      /** 回读验证超时（毫秒），默认 5_000 */
+      verifyTimeoutMs?: number;
+    } = {},
+  ): Promise<{ ok: true; verified: boolean; filePath: string }> {
     const flavor = this.flavorOf(cli);
     if (!flavor) throw new Error(`未知 Pi flavor / cli: ${cli}`);
     const summary = await this.findSession(sessionId, flavor.source);
     if (!summary) throw new Error(`未找到 session: ${sessionId} (source=${flavor.source})`);
+
+    // ── 双写保护：存活检测 ──────────────────────────────────────────
+    const liveWindowMs = options.liveWindowMs ?? 120_000;
+    if (!options.force) {
+      const ageMs = this.sessionIdleMs(summary.filePath);
+      if (ageMs !== null && ageMs < liveWindowMs) {
+        const secs = Math.round(ageMs / 1000);
+        throw new Error(
+          [
+            `拒绝注入：session ${sessionId} 在 ${secs} 秒前还有写入，很可能正在被另一个 pi 进程使用。`,
+            `  为什么危险：注入会新起一个 pi 进程写同一个 .jsonl，与正在运行的进程双写，`,
+            `  可能造成消息错乱或丢失。`,
+            `  怎么办：`,
+            `    · 若目标进程已退出 → 加 --force 重试`,
+            `    · 若目标正在跑 → 请直接在那个会话里发消息；或用 \`ymesh send\`（同进程句柄投递）`,
+          ].join('\n'),
+        );
+      }
+    }
 
     const client = new PiRpcClient({
       cli: flavor.cli as PiCli,
@@ -222,7 +256,61 @@ export class PiController {
     } finally {
       await client.stop();
     }
-    return { ok: true };
+
+    // ── 回读验证：确认消息真的落盘（消灭"假成功"）──────────────────
+    const verifyTimeoutMs = options.verifyTimeoutMs ?? 5_000;
+    const verified = await this.waitForMessageInFile(summary.filePath, message, verifyTimeoutMs);
+    if (!verified) {
+      throw new Error(
+        `注入未确认：RPC 未报错，但 ${verifyTimeoutMs}ms 内没能在 session 文件里读到这条消息。` +
+          `\n  文件: ${summary.filePath}` +
+          `\n  请勿当真——可用 \`ymesh sessions\` / 直接查看该文件核实。`,
+      );
+    }
+    return { ok: true, verified, filePath: summary.filePath };
+  }
+
+  /**
+   * session 文件「静默了多久」（毫秒）。null = 文件不存在/读不到。
+   * 用来判断"可能仍在被某个进程使用"。
+   */
+  private sessionIdleMs(filePath: string): number | null {
+    try {
+      const st = fs.statSync(filePath);
+      return Date.now() - st.mtimeMs;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 轮询 session 文件，确认 `message` 真的写进去了（取特征片段匹配，
+   * 兼容 JSON 转义：先按原样找，再按 JSON 转义后找）。
+   */
+  private async waitForMessageInFile(
+    filePath: string,
+    message: string,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const probe = message.slice(0, 60);
+    const escapedProbe = JSON.stringify(probe).slice(1, -1);
+    const deadline = Date.now() + timeoutMs;
+    let offset = 0;
+    try {
+      offset = Math.max(0, fs.statSync(filePath).size - 512 * 1024);
+    } catch {
+      offset = 0;
+    }
+    while (Date.now() <= deadline) {
+      try {
+        const text = fs.readFileSync(filePath, 'utf-8').slice(offset);
+        if (text.includes(probe) || text.includes(escapedProbe)) return true;
+      } catch {
+        // 读不到就继续等
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return false;
   }
 
   // ─── abort ─────────────────────────────────────────────────────────────

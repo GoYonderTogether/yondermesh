@@ -813,13 +813,19 @@ async function cmdLaunch(flags: Record<string, string | boolean>): Promise<numbe
   }
 }
 
-/** inject 命令：向运行中 session 注入消息 */
+/**
+ * inject 命令：向已有 session 注入消息。
+ *
+ * 两个安全语义（P0）：
+ *   · 默认对「最近有写入」的 session 拒绝注入（双写风险），需 `--force` 显式覆盖；
+ *   · 成功必须**回读验证**——只是 RPC 没报错不算成功。
+ */
 async function cmdInject(flags: Record<string, string | boolean>): Promise<number> {
   const cli = flags.cli as string;
   const session = flags.session as string;
   const message = flags.message as string;
   if (!cli || !session || !message) {
-    console.error('用法: ymesh inject --cli <agent> --session <id> --message "text" [--json]');
+    console.error('用法: ymesh inject --cli <agent> --session <id> --message "text" [--force] [--json]');
     return 1;
   }
 
@@ -827,8 +833,9 @@ async function cmdInject(flags: Record<string, string | boolean>): Promise<numbe
     const mod = await loadWrapper(cli);
     let result: unknown;
     const wrapper = instantiateWrapper(cli, mod);
+    const injectOpts = { force: flags.force === true };
     if (wrapper && typeof wrapper.inject === 'function') {
-      result = await wrapper.inject(session, message);
+      result = await wrapper.inject(session, message, cli, injectOpts);
     } else if (typeof mod.inject === 'function') {
       result = await mod.inject(session, message);
     } else {
@@ -838,7 +845,10 @@ async function cmdInject(flags: Record<string, string | boolean>): Promise<numbe
     if (flags.json) {
       console.log(JSON.stringify({ cli, session, status: 'injected', result }, null, 2));
     } else {
-      console.log(`[yondermesh] ${cli} session ${session} injected`);
+      const r = result as { verified?: boolean } | undefined;
+      console.log(
+        `[yondermesh] ${cli} session ${session} injected${r?.verified ? '（已回读验证）' : ''}`,
+      );
     }
     return 0;
   } catch (err) {

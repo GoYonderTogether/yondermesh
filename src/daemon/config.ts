@@ -28,6 +28,8 @@ export interface DaemonConfig {
   skipClaude?: boolean;
   /** 是否跳过 Codex 实时监听 */
   skipCodex?: boolean;
+  /** 跳过 pi 系（pi / omp / gsd-pi）采集与实时监听 */
+  skipPi?: boolean;
   /**
    * 是否在 reconcile 和新 session 检测时自动挂载扩展到已安装的 CLI。
    * 默认 true。设为 false 可关闭 auto-mount 行为（仅手动 `ymesh mount all`）。

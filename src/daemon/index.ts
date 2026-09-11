@@ -21,6 +21,8 @@ import { CassImporter, resolveCassDbPath } from '../cass/index.js';
 import { ClaudeCodeImporter, resolveClaudeProjectsPath } from '../claude/index.js';
 import { CodexImporter, resolveCodexSessionsPath } from '../codex/index.js';
 import { mountAll } from '../mount/index.js';
+import { getAdapter } from '../adapters/registry.js';
+import { resolvePiFlavors } from '../pi/index.js';
 import { BriefingScheduler } from './briefing-scheduler.js';
 import type { DaemonConfig } from './config.js';
 import { defaultDaemonConfig } from './config.js';
@@ -74,6 +76,8 @@ export class YondermeshDaemon {
 
   // watcher 和 timer 资源
   private watchers: fs.FSWatcher[] = [];
+  /** registry 动态加载的 importer 模块缓存（避免每轮重复 import） */
+  private importerModuleCache = new Map<string, Record<string, unknown>>();
   private reconcileTimer?: ReturnType<typeof setInterval>;
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private briefingScheduler?: BriefingScheduler;
@@ -96,17 +100,24 @@ export class YondermeshDaemon {
     this.running = true;
     this.startedAt = Date.now();
 
+    // 预热 registry 动态 importer（pi 系走异步 dynamic import；
+    // 不预热则首次 fullScan 会漏掉 pi，要等下一轮 reconcile）
+    await this.prewarmImporterModules();
+
     // 全量扫描（同步等待完成）
     await this.fullScan();
 
     // 启动 watcher：
-    // 已知有 jsonl session 目录可监听的 CLI 只有 claude / codex；
-    // cursor / gemini / windsurf 没有标准 session 目录；
-    // trae / trae-cn 的 session 在 IDE 内部存储。
-    // 这些不可监听的 CLI 由 reconcile 兜底（默认 1 分钟）。
+    // 有标准 jsonl session 目录、可做实时监听的 CLI：claude / codex / pi(及 omp/gsd)。
+    //   · pi 系（pi/omp/gsd-pi）session 在 <configDir>/sessions/<cwd 编码>/*.jsonl，
+    //     是嵌套目录 → 用 fs.watch({recursive:true}) 监听顶层 sessions 目录即可。
+    //   · cursor / gemini / windsurf 没有标准 session 目录；
+    //   · trae / trae-cn 的 session 在 IDE 内部存储。
+    //   这些不可监听的 CLI 由 reconcile 兜底（默认 1 分钟）。
     const watchTargets: Array<{ cliId: string; path: string; skip?: boolean }> = [
       { cliId: 'claude', path: resolveClaudeProjectsPath(), skip: this.config.skipClaude },
       { cliId: 'codex', path: resolveCodexSessionsPath(), skip: this.config.skipCodex },
+      ...this.resolvePiWatchTargets(),
     ];
     for (const t of watchTargets) {
       if (t.skip) continue;
@@ -242,6 +253,13 @@ export class YondermeshDaemon {
       results.push({ source: 'codex', scanned: 0, inserted: 0, updated: 0, skipped: true });
     }
 
+    // pi 系（pi / omp / gsd-pi）——之前 daemon **完全没扫 pi**：
+    // 只能靠手动 `ymesh scan` 入库，导致 daemon 跑着但 pi 新会话不入库
+    //（表现为 mailbox 「按 cwd 找不到自己」）。现在纳入定时 reconcile。
+    if (!this.config.skipPi) {
+      results.push(...this.scanPiFlavors());
+    }
+
     return results;
   }
 
@@ -293,6 +311,98 @@ export class YondermeshDaemon {
         skipped: true,
         error: String(err),
       };
+    }
+  }
+
+  /** 预热 registry 里的异步 importer 模块（pi / omp / gsd-pi），供同步扫描路径使用。 */
+  private async prewarmImporterModules(): Promise<void> {
+    const ids = ['pi', 'omp', 'gsd-pi'];
+    await Promise.all(
+      ids.map(async (id) => {
+        const adapter = getAdapter(id);
+        if (!adapter?.importerLoader) return;
+        try {
+          this.importerModuleCache.set(id, (await adapter.importerLoader()) as Record<string, unknown>);
+        } catch {
+          // 加载失败 → 该 flavor 本轮跳过（不阻断 daemon 启动）
+        }
+      }),
+    );
+  }
+
+  /**
+   * pi 系采集：pi / omp / gsd-pi 共用 PiImporter，靠 flavors 区分目录。
+   * 目录不存在时跳过（不报错）。同步接口（dynamic import 已完成）。
+   */
+  private scanPiFlavors(): SourceScanResult[] {
+    const out: SourceScanResult[] = [];
+    for (const cliId of ['pi', 'omp', 'gsd-pi'] as const) {
+      const adapter = getAdapter(cliId);
+      if (!adapter?.importerLoader) continue;
+      const flavor = resolvePiFlavors().find((f) => f.cli === cliId);
+      if (!flavor) continue;
+      // 目录不存在 → 跳过（用户没装这个 flavor）
+      const hasDir = flavor.sessionsDirs.some((d) => fs.existsSync(d));
+      if (!hasDir) continue;
+      const r = this.scanViaRegistrySync(cliId);
+      if (r) out.push(r);
+    }
+    return out;
+  }
+
+  /** pi 系的实时监听目标（取各 flavor 首个存在的 sessions 目录） */
+  private resolvePiWatchTargets(): Array<{ cliId: string; path: string; skip?: boolean }> {
+    const targets: Array<{ cliId: string; path: string; skip?: boolean }> = [];
+    for (const cliId of ['pi', 'omp', 'gsd-pi'] as const) {
+      const flavor = resolvePiFlavors().find((f) => f.cli === cliId);
+      if (!flavor) continue;
+      const dir = flavor.sessionsDirs.find((d) => fs.existsSync(d));
+      if (dir) targets.push({ cliId, path: dir, skip: this.config.skipPi });
+    }
+    return targets;
+  }
+
+  /**
+   * 经 registry 动态加载某 adapter 的 importer 并跑一次增量采集。
+   * 与 CLI `ymesh scan` 共用同一套识别逻辑（找 *Importer / *Extractor 类），
+   * 避免 daemon 与 CLI 两套实现漂移。
+   *
+   * 注意：dynamic import 是异步的，这里用「已缓存模块」同步取用；
+   * 首次调用若未缓存则返回 null，由 reconcile 下一轮补上（1 分钟后）。
+   */
+  private scanViaRegistrySync(cliId: string): SourceScanResult | null {
+    const adapter = getAdapter(cliId);
+    if (!adapter?.importerLoader) return null;
+    const cached = this.importerModuleCache.get(cliId);
+    if (!cached) {
+      // 预热：异步加载后缓存，下一轮 reconcile 生效
+      void adapter
+        .importerLoader()
+        .then((mod) => this.importerModuleCache.set(cliId, mod as Record<string, unknown>))
+        .catch(() => undefined);
+      return null;
+    }
+    try {
+      let Cls: (new (store: unknown, opts: unknown) => { import?: () => unknown; extract?: () => unknown }) | null = null;
+      for (const key of Object.keys(cached)) {
+        if ((key.endsWith('Importer') || key.endsWith('Extractor')) && typeof cached[key] === 'function') {
+          Cls = cached[key] as new (store: unknown, opts: unknown) => { import?: () => unknown; extract?: () => unknown };
+          break;
+        }
+      }
+      if (!Cls) return null;
+      const instance = new Cls(this.store, { deviceId: this.deviceId });
+      const stats = (instance.import?.() ?? instance.extract?.()) as Record<string, unknown> | undefined;
+      const num = (k: string): number => (stats && typeof stats[k] === 'number' ? (stats[k] as number) : 0);
+      return {
+        source: cliId,
+        scanned: num('scanned') || num('threadsSeen'),
+        inserted: num('inserted'),
+        updated: num('updated'),
+        skipped: false,
+      };
+    } catch (err) {
+      return { source: cliId, scanned: 0, inserted: 0, updated: 0, skipped: true, error: String(err) };
     }
   }
 
@@ -370,6 +480,9 @@ export class YondermeshDaemon {
         result = this.scanClaude();
       } else if (key === 'codex') {
         result = this.scanCodex();
+      } else {
+        // pi 系（pi / omp / gsd-pi）：走 registry 通用管线
+        result = this.scanViaRegistrySync(key) ?? undefined;
       }
       // 新文件检测：扫描到内容且确实新增了 session 时，输出单行 stderr 日志
       if (result && result.scanned > 0 && result.inserted > 0) {
