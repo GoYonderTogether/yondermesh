@@ -40,38 +40,68 @@ export function buildRelease(projectRoot: string, force = false): ReleaseResult 
   const version = resolveVersion(projectRoot);
   const target = releaseDir(version);
 
+  // ── 预检：必须是「源码树」才能构建 ─────────────────────────────────
+  // 为什么：从已安装的 release 里跑 `ymesh install` 时，resolveProjectRoot()
+  // 会把 release 目录当成项目根（它有 package.json 但没有 src/tsconfig），
+  // 于是 `npm run build` 必然失败——而旧实现在此之前**已经删掉了目标 release**，
+  // 结果把正在使用的安装毁掉（CLI 直接 command not found），且无回滚。
+  // 现在：先检查，早失败，且**不碰任何文件**。
+  const isSourceTree =
+    fs.existsSync(path.join(projectRoot, 'tsconfig.json')) &&
+    fs.existsSync(path.join(projectRoot, 'src')) &&
+    fs.existsSync(path.join(projectRoot, 'package.json'));
+  if (!isSourceTree) {
+    throw new Error(
+      [
+        `不是 yondermesh 源码树，拒绝构建: ${projectRoot}`,
+        `  （缺少 src/ 或 tsconfig.json —— 你大概是在"已安装的 release"里跑 install）`,
+        ``,
+        `  请改用源码目录运行：`,
+        `    cd <yondermesh 源码> && npm run dev -- install --force`,
+        `  或指定源码路径：`,
+        `    YONDERMESH_DEV_ROOT=<源码目录> ymesh install --force`,
+        ``,
+        `  已中止：你的现有安装未被改动。`,
+      ].join('\n'),
+    );
+  }
+
   if (fs.existsSync(target) && !force) {
     throw new Error(
       `release ${version} 已存在于 ${target}。使用 force=true 覆盖。`,
     );
   }
 
-  // 清理目标目录
-  // 清理目标目录（可能因上次失败残留）
+  // ── 原子构建：先建到暂存目录，全部成功后才替换正式目录 ─────────────
+  // 为什么：旧实现是「先 rmSync 正式目录 → 再 npm build →
+  // 失败就留下空目录」，而 bin/ymesh 与 releases/current 可能正指向它
+  //（版本号不变时必然如此）→ 安装被毁。暂存 + rename 保证：
+  // 构建过程中，正在运行的安装始终完好；失败则原样保留。
+  const staging = `${target}.staging-${process.pid}`;
+  fs.rmSync(staging, { recursive: true, force: true });
+  fs.mkdirSync(staging, { recursive: true });
+
+  // 1. 编译 TypeScript（在源码目录里构建，绝不改 CWD 到 release）
   try {
-    fs.rmSync(target, { recursive: true, force: true });
-  } catch {
-    // ENOTEMPTY 偶发：重试一次
-    try {
-      fs.rmSync(target, { recursive: true, force: true });
-    } catch {
-      /* 仍然失败则忽略，mkdirSync 会处理 */
-    }
+    execSync('npm run build', { cwd: projectRoot, stdio: 'pipe' });
+  } catch (err) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    throw new Error(
+      `构建失败，已中止且**未改动现有安装**。\n  ${String(err).split('\n')[0]}`,
+    );
   }
-  fs.mkdirSync(target, { recursive: true });
 
-  // 1. 编译 TypeScript
-  execSync('npm run build', { cwd: projectRoot, stdio: 'pipe' });
+  // 以下所有产物都写进 staging；全部就绪后才在末尾原子替换到 target。
 
-  // 2. 复制 dist 到 release 目录
+  // 2. 复制 dist
   const distSrc = path.join(projectRoot, 'dist');
-  const distDst = path.join(target, 'dist');
+  const distDst = path.join(staging, 'dist');
   copyDir(distSrc, distDst);
 
   // 2.5 复制 skills 到 release 目录（skill 随版本发布）
   const skillsSrc = path.join(projectRoot, 'skills');
   if (fs.existsSync(skillsSrc)) {
-    const skillsDst = path.join(target, 'skills');
+    const skillsDst = path.join(staging, 'skills');
     copyDir(skillsSrc, skillsDst);
   }
 
@@ -87,12 +117,12 @@ export function buildRelease(projectRoot: string, force = false): ReleaseResult 
     gitBranch: gitBranch(projectRoot) ?? undefined,
   };
   fs.writeFileSync(
-    path.join(target, 'package.json'),
+    path.join(staging, 'package.json'),
     JSON.stringify(releasePkg, null, 2),
   );
 
   // 4. 生成 ymesh.js 启动脚本
-  const entryPath = releaseEntry(target);
+  const entryPath = releaseEntry(staging);
   const entryContent = `#!/usr/bin/env node
 // yondermesh ${version} — 自动生成的启动脚本
 import('./dist/bin/ymesh.js');
@@ -100,10 +130,14 @@ import('./dist/bin/ymesh.js');
   fs.writeFileSync(entryPath, entryContent, 'utf-8');
   fs.chmodSync(entryPath, 0o755);
 
+  // 5. 原子替换：暂存目录就绪后，才动正式目录
+  fs.rmSync(target, { recursive: true, force: true });
+  fs.renameSync(staging, target);
+
   return {
     version,
     releasePath: target,
-    entryPath,
+    entryPath: releaseEntry(target),
     builtAt: Date.now(),
   };
 }
