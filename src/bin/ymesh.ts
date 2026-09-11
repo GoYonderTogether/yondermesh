@@ -3127,7 +3127,15 @@ function quoteShell(s: string): string {
 
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
-  const { command, flags } = parseArgs(argv);
+  const parsed = parseArgs(argv);
+  const { flags } = parsed;
+  let { command } = parsed;
+
+  // 全局动作型 flag 归一化：`--version` / `--help` 会被参数解析器吃进 flags，
+  // 导致 command 为空而落到 help 分支（实测 `ymesh --version` 输出 111 行 help
+  // 而不是一行版本号）。这里把纯「想问版本/帮助」的调用纠正回对应命令。
+  if (!command && flags.version !== undefined) command = 'version';
+  if (!command && flags.help !== undefined) command = 'help';
 
   switch (command) {
     case 'help':
