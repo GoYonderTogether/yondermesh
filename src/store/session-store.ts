@@ -76,10 +76,23 @@ export function tokenizeKeyword(keyword: string): string[] {
   return cleaned.split(' ').filter(Boolean);
 }
 
+/**
+ * FTS 自动陈旧检查的行数上限。
+ *
+ * 低于此值：构造时直接做精确检查（COUNT(*) 便宜，保持"小库自动回填"体验）。
+ * 高于此值：推迟检查（deferred）——1300 万行上 COUNT(*) 实测 44.5s，不能进热路径。
+ * 可用环境变量 YONDERMESH_FTS_AUTOCHECK_MAX_ROWS 覆盖。
+ */
+const FTS_AUTOCHECK_MAX_ROWS = Number(
+  process.env.YONDERMESH_FTS_AUTOCHECK_MAX_ROWS ?? 200_000,
+);
+
 export class SessionStore {
   private readonly db: DatabaseSyncType;
   /** FTS 未同步时的数据量（供 CLI/MCP 按需提示，不再自动打印）。 */
   private ftsStale: { userMsgTotal: number; ftsTotal: number } | null = null;
+  /** 大库下把 FTS 陈旧检查推迟（避免每条命令付 40s+ 的全表 COUNT）。 */
+  private ftsCheckDeferred = false;
 
   constructor(location: string) {
     this.db = new DatabaseSync(location);
@@ -150,6 +163,30 @@ export class SessionStore {
       }
     }
 
+    // FTS 陈旧检查的**成本闸门**：旧实现在构造里直接跑
+    //   SELECT COUNT(*) FROM messages WHERE role='user'  + COUNT(*) FROM messages_fts
+    // 在 1300 万行的 messages 表上实测 **44.5 秒/次 × 2**，于是每条命令
+    //（连「只有 27 条消息的 session 详情」也一样）都要等 90 秒以上。
+    // 现在：先用 O(1) 的 MAX(rowid) 探测库规模（实测 0.038s）——
+    //   · 小库 → 立刻做精确检查（便宜，保持自动回填体验）
+    //   · 大库 → 推迟（deferred），只在显式需要时（status / sync fts / 搜索路径）
+    //     调 ensureFtsChecked()
+    const sizeProbe = this.db.prepare('SELECT MAX(rowid) AS r FROM messages').get() as Row | undefined;
+    const approxRows = (sizeProbe?.r as number) ?? 0;
+    if (approxRows <= FTS_AUTOCHECK_MAX_ROWS) {
+      this.syncFtsIfStale();
+    } else {
+      this.ftsCheckDeferred = true;
+    }
+  }
+
+  /**
+   * 显式执行 FTS 陈旧检查（大库下由 status / sync fts / 搜索路径调用）。
+   * 幂等：只真正跑一次。大库上单次开销约数十秒，调用方需自行告知用户。
+   */
+  ensureFtsChecked(): void {
+    if (!this.ftsCheckDeferred) return;
+    this.ftsCheckDeferred = false;
     this.syncFtsIfStale();
   }
 
@@ -1133,6 +1170,11 @@ export class SessionStore {
    */
   ftsStaleInfo(): { userMsgTotal: number; ftsTotal: number } | null {
     return this.ftsStale;
+  }
+
+  /** FTS 陈旧检查是否被推迟（大库）。为 true 时调用方应先 ensureFtsChecked()。 */
+  isFtsCheckDeferred(): boolean {
+    return this.ftsCheckDeferred;
   }
 
   /** 供调用方渲染成一行提示。 */

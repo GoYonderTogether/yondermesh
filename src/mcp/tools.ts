@@ -458,11 +458,20 @@ const getSessionHandler: McpToolHandler = async (args) => {
 
   const store = openStore();
   try {
-    const session = store.getSession(sessionId);
-    if (!session) {
-      return errorContent(`会话 ${sessionId} 不存在`);
+    // 统一 id 解析：接受 DB 主键 / native_session_id / 唯一前缀
+    let resolved = sessionId;
+    try {
+      resolved = store.resolveSessionId(sessionId) ?? sessionId;
+    } catch (err) {
+      return errorContent(String(err instanceof Error ? err.message : err));
     }
-    const messages = store.getMessages(sessionId);
+    const session = store.getSession(resolved);
+    if (!session) {
+      return errorContent(
+        `会话 ${sessionId} 不存在（已尝试 DB 主键 / native_session_id / 唯一前缀）`,
+      );
+    }
+    const messages = store.getMessages(resolved);
 
     if (format === 'markdown') {
       const lines: string[] = [];

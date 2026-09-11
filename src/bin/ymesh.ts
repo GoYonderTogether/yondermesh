@@ -998,10 +998,27 @@ function cmdStatus(flags: Record<string, string | boolean>): number {
       console.log(`\n  数据统计: (数据库未初始化)`);
     }
 
-    // FTS 未同步提示：只在这里（以及 search/query 路径）提示，不再每条命令都喷。
-    const ftsStale = new SessionStore(dbPath).ftsStaleInfo();
-    if (ftsStale) {
-      console.log(`\n  ⚠️  全文索引未同步: ${SessionStore.formatFtsStaleHint(ftsStale)}`);
+    // FTS 未同步提示。
+    // 成本说明：精确检查在大库上要几十秒（1300 万行实测 44s/次）→ **默认不查**，
+    // 只给一行指针；`status --full` 才真去查（用户明确要看时才付这个成本）。
+    const ftsStore = new SessionStore(dbPath);
+    try {
+      if (ftsStore.isFtsCheckDeferred() && flags.full !== true) {
+        console.log(
+          `\n  全文索引: 未检查（大库，精确检查约需数十秒）。` +
+            `\n    想看: ymesh status --full   ·   想回填: ymesh sync fts`,
+        );
+      } else {
+        ftsStore.ensureFtsChecked();
+        const ftsStale = ftsStore.ftsStaleInfo();
+        if (ftsStale) {
+          console.log(`\n  ⚠️  全文索引未同步: ${SessionStore.formatFtsStaleHint(ftsStale)}`);
+        } else {
+          console.log(`\n  全文索引: 已同步`);
+        }
+      }
+    } finally {
+      ftsStore.close();
     }
 
     // Detected Agents 段：仅显示已安装的 agent
