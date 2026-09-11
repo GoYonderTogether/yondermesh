@@ -133,14 +133,21 @@ export function generateRetrospective(
 ): RetrospectiveFact {
   const { sessionId, store } = input;
 
-  const session = store.getSession(sessionId);
+  // 统一 id 解析：允许传入 DB 主键（sha256）、native_session_id 或其唯一前缀。
+  // 之前只认主键 → 用户从 `ymesh sessions` 复制到的截断 hash / pi 的 UUID
+  // 一律得到「session not found」。
+  const resolved = store.resolveSessionId(sessionId) ?? sessionId;
+  const session = store.getSession(resolved);
   if (!session) {
-    throw new Error(`session not found: ${sessionId}`);
+    throw new Error(
+      `session not found: ${sessionId}\n` +
+        `  （已尝试 DB 主键 / native_session_id / 唯一前缀；用 \`ymesh sessions --json\` 查可用 id）`,
+    );
   }
 
-  const messages = store.getMessages(sessionId);
+  const messages = store.getMessages(resolved);
 
-  return assembleFact(sessionId, session, messages);
+  return assembleFact(resolved, session, messages);
 }
 
 // ---------------------------------------------------------------------------

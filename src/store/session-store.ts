@@ -668,6 +668,48 @@ export class SessionStore {
     return row ? this.rowToSession(row) : undefined;
   }
 
+  /**
+   * 把「用户手里可能拿到的任意一种 id」解析成 DB 主键 `id`。
+   *
+   * 背景（为什么需要）：本库有**两套 id 并存**——
+   *   · `id`                = sha256(content) 派生，DB 主键（CLI 多处用它，如 retrospective）
+   *   · `native_session_id` = 各 CLI 自己的 id（pi 是 UUID，claude/codex 是各自的文件名 id）
+   * 而 `ymesh sessions` 列表里显示的是**截断的 hash**，`ymesh mailbox` / `ymesh inject`
+   * 用的却是 native id —— 用户几乎必然拿错 id 去用，得到一句「session not found」。
+   *
+   * 本方法让两者可以互换：完整 hash / 完整 native id / 任一的**唯一前缀**都能解析。
+   *
+   * @returns 解析出的 DB 主键 id；找不到返回 null
+   * @throws 当传入前缀匹配到多个 session（歧义）时抛错，并列出候选，避免猜错
+   */
+  resolveSessionId(input: string): string | null {
+    const key = input.trim();
+    if (!key) return null;
+
+    // 1. 精确匹配（两种 id 都试）
+    const exact = this.db
+      .prepare('SELECT id FROM sessions WHERE id = ? OR native_session_id = ? LIMIT 1')
+      .get(key, key) as Row | undefined;
+    if (exact?.id) return String(exact.id);
+
+    // 2. 前缀匹配（用户在列表里复制到的常是截断 id）
+    const rows = this.db
+      .prepare(
+        `SELECT id FROM sessions
+          WHERE id LIKE ? OR native_session_id LIKE ?
+          LIMIT 6`,
+      )
+      .all(`${key}%`, `${key}%`) as Row[];
+
+    if (rows.length === 0) return null;
+    if (rows.length === 1) return String(rows[0].id);
+
+    const candidates = rows.map((r) => String(r.id).slice(0, 16)).join(', ');
+    throw new Error(
+      `session id 前缀「${key}」不唯一，匹配到 ${rows.length} 个（${candidates}…）。请给更长的前缀或完整 id。`,
+    );
+  }
+
   /** 统计（与 querySessions 同过滤语义） */
   getSessionStats(query: SessionQuery): SessionStats {
     const { where, params } = this.buildQueryConditions(query);
