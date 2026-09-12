@@ -229,6 +229,8 @@ export class HermesImporter {
 
     /** nativeId → 内部 session id，供 subagent 查父 */
     const sessionIdByNative = new Map<string, string>();
+    /** 本轮指纹（变化过的会话），循环结束后一次性落库 */
+    const fpToRecord: Array<{ path: string; mtime: number; size: number }> = [];
     /** 已入库的 subagent：{internalId, parentNativeId} */
     const subRecords: Array<{ internalId: string; parentNativeId?: string }> = [];
 
@@ -276,7 +278,7 @@ export class HermesImporter {
         if (known && known.mtime === cur.mtime && known.size === cur.size) continue; // 未变
         changedIds.add(r.id);
       }
-      const fpToRecord: Array<{ path: string; mtime: number; size: number }> = [];
+      fpToRecord.length = 0; // 复用外层声明
 
       for (const rowRaw of hermesRows) {
         const row = rowRaw as unknown as HermesSessionRow;
@@ -340,6 +342,9 @@ export class HermesImporter {
     } finally {
       hermesDb.close();
     }
+
+    // 记录本轮指纹（只记变化过的；未变的上一轮已经记过）
+    this.store.markFilesScanned(fpToRecord);
 
     // —— 第二遍：subagent → parent spawned_by（仅可验证父）——
     for (const sub of subRecords) {
