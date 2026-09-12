@@ -36,6 +36,8 @@ export interface SourceScanResult {
   inserted: number;
   updated: number;
   skipped: boolean;
+  /** 增量跳过的条数（未变、没读文件）。0 说明全量重读了 —— 排查性能时看这个 */
+  unchanged?: number;
   error?: string;
 }
 
@@ -337,11 +339,24 @@ export class YondermeshDaemon {
         continue;
       }
       const t = Date.now();
-      results.push(...step.run());
+      const produced = step.run();
+      results.push(...produced);
       const took = Date.now() - t;
-      // 只对慢的来源打日志（快的别刷屏）
-      if (took > 2000) {
-        process.stderr.write(`[yondermesh] 扫描 ${step.source}: ${took}ms\n`);
+      // 失败**必须**报出来 —— 之前这里只记录耗时，而 scanClaude/scanCodex 等
+      // 会把异常吞成 `skipped:true, error`，于是「扫描 claude: 2142ms」
+      // 看起来像正常变慢，实际是在报错（实测踩到，查了很久）。
+      const failed = produced.find((r) => r.error);
+      if (failed) {
+        process.stderr.write(`[yondermesh] 扫描 ${step.source} 失败（${took}ms）: ${failed.error}\n`);
+      } else if (took > 2000) {
+        // 只对慢的来源打日志（快的别刷屏）。
+        // 带上 unchanged：如果它是 0，说明一个都没跳过 —— 那才是真的慢；
+        // 如果 unchanged 接近 scanned，说明增量生效了，慢在别处。
+        const s0 = produced[0];
+        const detail = s0?.unchanged !== undefined ? `，跳过 ${s0.unchanged}` : '';
+        process.stderr.write(
+          `[yondermesh] 扫描 ${step.source}: ${took}ms（共 ${s0?.scanned ?? '?'}${detail}）\n`,
+        );
       }
       await yieldToLoop();
     }
@@ -469,6 +484,7 @@ export class YondermeshDaemon {
         scanned: stats.scanned,
         inserted: stats.inserted,
         updated: stats.updated,
+        unchanged: stats.unchanged,
         skipped: false,
       };
     } catch (err) {
@@ -584,6 +600,7 @@ export class YondermeshDaemon {
         scanned: stats.scanned,
         inserted: stats.inserted,
         updated: stats.updated,
+        unchanged: stats.unchanged,
         skipped: false,
       };
     } catch (err) {

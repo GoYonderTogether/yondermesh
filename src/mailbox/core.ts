@@ -137,6 +137,12 @@ export class MailboxCore {
   ) {
     this.db = new DatabaseSync(dbPath);
     this.db.exec('PRAGMA foreign_keys = ON');
+    // 与 SessionStore 对齐的连接设置。
+    // 不设 busy_timeout 的后果实测过：daemon 里 mailbox 连接与 store 连接同库并发时，
+    // mailbox 的写会**立刻**抛 "database is locked"（而不是等一会儿重试），
+    // 表现为投递/扫描随机失败。
+    this.db.exec('PRAGMA busy_timeout = 5000');
+    this.db.exec('PRAGMA journal_mode = WAL');
     this.dataDir = dataDir;
     this.triggerAdapter = triggerAdapter ?? new TriggerAdapter();
     this.replyAdapter = replyAdapter ?? new ReplyAdapter();
