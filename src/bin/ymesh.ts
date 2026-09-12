@@ -500,6 +500,14 @@ const AGENT_TABLE: AgentEntry[] = [
 ];
 
 /** canonical source → CLI_REGISTRY id 映射 */
+/**
+ * agent 名 → mount registry id 的**例外**映射。
+ *
+ * 注意：这里只需写「名字与 registry id 不同」的例外（如 claude → claude-code）。
+ * 同名的一律走下面的 `?? entry.name` 兜底查找——
+ * 之前只查这张表，导致表里没写的 agent（pi / omp / copilot / kimi / …）
+ * 全部被误报成「不支持挂载」，而实际上它们早就挂载好了（实测 pi 4 项全 MOUNTED）。
+ */
 const REGISTRY_ID_MAP: Record<string, string> = {
   'claude': 'claude-code',
   'codex': 'codex',
@@ -512,6 +520,7 @@ const REGISTRY_ID_MAP: Record<string, string> = {
   'factory': 'factory',
   'vibe': 'vibe',
   'codebuddy': 'codebuddy',
+  'trae_cli': 'trae-cli', // agent 名用下划线，registry id 用连字符
 };
 
 /** 有 wrapper.ts 的 agent 集合（claude/codex/chatgpt 无 wrapper） */
@@ -598,7 +607,8 @@ function detectAllAgents(dbPath: string): AgentDetection[] {
     const installed = !!configDir || !!cliBinary || (!!entry.appPath && existsSync(entry.appPath));
 
     const registryId = REGISTRY_ID_MAP[entry.name];
-    const mountSupport = registryId ? !!findCli(registryId) : false;
+    // 先查例外表，再按同名兜底（多数 agent 名字 == registry id）
+    const mountSupport = !!findCli(registryId ?? entry.name);
     const wrapperSupport = WRAPPER_SUPPORTED.has(entry.name);
     const sessionCount = sessionCounts.get(entry.name) ?? 0;
 
@@ -738,7 +748,7 @@ function cmdAgents(flags: Record<string, string | boolean>): number {
 
   console.log('\nDetected Agents:\n');
   console.log(
-    `  ${'AGENT'.padEnd(14)} ${'STATUS'.padEnd(8)} ${'COLL'.padEnd(5)} ${'MOUNT'.padEnd(6)} ${'WRAPPER'.padEnd(8)} ${'SESSIONS'.padStart(8)}`,
+    `  ${'AGENT'.padEnd(14)} ${'STATUS'.padEnd(8)} ${'COLL'.padEnd(5)} ${'CAN-MT'.padEnd(6)} ${'WRAPPER'.padEnd(8)} ${'SESSIONS'.padStart(8)}`,
   );
   for (const d of detections) {
     console.log(
