@@ -75,6 +75,18 @@ export interface RetainReport {
   projectedRemainingMessages: number;
   /** 综合预期：筛除后剩余字节数 */
   projectedRemainingBytes: number;
+  /**
+   * 是否为**抽样估算**（大库）。
+   *
+   * 为什么需要：本机 messages 有 15.4M 行、content 总量 4.4GB。精确分析的每一趟
+   * 都要把 content 全读一遍，实测单趟 `SUM(length(content))` 就 132 秒、
+   * 5 趟合计 8~9 分钟 —— 交互上等于不可用。
+   * 所以大库改为「抽 K 条样本 → 算比例 → 外推」，并在报告里**明确标注**
+   * 这是估算，附样本量，别让人误当成精确值。
+   */
+  sampled: boolean;
+  /** 抽样条数（sampled=true 时有效） */
+  sampleSize: number;
 }
 
 /**
@@ -91,6 +103,14 @@ export interface RetainReport {
  * 大库优化：content GROUP BY 会全表扫，但只取 (content, COUNT, SUM(length))，
  * 不取正文本身（除短内容），内存可控。
  */
+/**
+ * 超过这个行数就走抽样估算。
+ * 50 万行以下精确分析仍在秒级，没必要牺牲准确性。
+ */
+const SAMPLE_THRESHOLD_ROWS = 500_000;
+/** 抽样条数：太少外推不稳，太多又慢（这几千次是按主键查，很快） */
+const SAMPLE_SIZE = 5_000;
+
 export function analyze(
   dbPath: string,
   policy: RetainPolicy,
@@ -99,6 +119,16 @@ export function analyze(
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const compiledRules = compiled ?? compileNoiseRules(policy.noise);
+
+    // 大库快路径：MAX(rowid) 是 O(1)（实测 0.038s，而 COUNT(*) 要 22.5s）。
+    // 用它判断规模，超阈值就走抽样 —— 精确分析在这个量级上要 8~9 分钟。
+    const maxRowidRow = db
+      .prepare('SELECT COALESCE(MAX(rowid), 0) AS m FROM messages')
+      .get() as { m: number };
+    const approxRows = maxRowidRow.m ?? 0;
+    if (approxRows > SAMPLE_THRESHOLD_ROWS) {
+      return analyzeSampled(db, policy, compiledRules, approxRows);
+    }
 
     // 总览
     const totalRow = db
@@ -160,6 +190,8 @@ export function analyze(
       session: sessionClassification,
       projectedRemainingMessages,
       projectedRemainingBytes,
+      sampled: false,
+      sampleSize: 0,
     };
   } finally {
     db.close();
@@ -339,5 +371,157 @@ function scanArchive(
     bytesAffected: row.bytes,
     oldestStartedAt: row.oldest,
     cutoffTimestamp: cutoff,
+  };
+}
+
+/**
+ * 大库抽样估算。
+ *
+ * 做法：在 [1, maxRowid] 里随机取 K 个 rowid（主键查找，几千次很快），
+ * 对样本跑**与精确路径完全相同的规则**，得到「样本里各类占比」，
+ * 再按 `maxRowid / 样本实际命中数` 外推到全库。
+ *
+ * 诚实性：报告里 sampled=true + sampleSize，CLI 会打印「这是估算」。
+ * 想要精确值用 `--exact`（会跑 8~9 分钟）。
+ *
+ * 口径说明：用 MAX(rowid) 当总量而不是 COUNT(*)——
+ * 后者在这个量级要 22.5 秒。若库里有大量删除导致 rowid 稀疏，
+ * 估算会偏高；报告里同时给出样本量的置信说明。
+ */
+function analyzeSampled(
+  db: DatabaseSync,
+  policy: RetainPolicy,
+  compiled: CompiledNoiseRule[],
+  maxRowid: number,
+): RetainReport {
+  // 1) 抽 rowid（去重，避免重复计数）
+  const picked = new Set<number>();
+  while (picked.size < SAMPLE_SIZE) picked.add(1 + Math.floor(Math.random() * maxRowid));
+  const ids = [...picked];
+  const marks = ids.map(() => '?').join(',');
+
+  const rows = db
+    .prepare(
+      `SELECT rowid AS rid, role, length(content) AS len, content
+         FROM messages WHERE rowid IN (${marks})`,
+    )
+    .all(...ids) as Array<{ rid: number; role: string; len: number; content: string }>;
+
+  const scale = rows.length > 0 ? maxRowid / rows.length : 0;
+
+  // 2) 在样本上跑规则
+  let noiseMsgs = 0;
+  let noiseBytes = 0;
+  let shortMsgs = 0;
+  let shortBytes = 0;
+  let truncMsgs = 0;
+  let truncBytes = 0;
+  let totalBytes = 0;
+  const shortFreq = new Map<string, number>();
+  const perRule = new Map<string, { messages: number; bytes: number }>();
+  const truncPerRule: Array<{ role: string; maxBytes: number; keepBytes: number; messages: number; savedBytes: number }> =
+    policy.truncate.map((t) => ({ role: t.role, maxBytes: t.maxBytes, keepBytes: t.keepBytes, messages: 0, savedBytes: 0 }));
+
+  for (const r of rows) {
+    totalBytes += r.len;
+    if (r.len < policy.noiseShortBytes) {
+      shortMsgs++;
+      shortBytes += r.len;
+      shortFreq.set(r.content, (shortFreq.get(r.content) ?? 0) + 1);
+      for (const rule of compiled) {
+        if (rule.match(r.content)) {
+          noiseMsgs++;
+          noiseBytes += r.len;
+          const prev = perRule.get(rule.name) ?? { messages: 0, bytes: 0 };
+          perRule.set(rule.name, { messages: prev.messages + 1, bytes: prev.bytes + r.len });
+          break;
+        }
+      }
+    }
+    // 截断：按 role 对应的规则
+    const tr = truncPerRule.find((t) => t.role === r.role);
+    if (tr && r.len > tr.maxBytes) {
+      truncMsgs++;
+      const saved = r.len - tr.keepBytes;
+      truncBytes += saved;
+      tr.messages++;
+      tr.savedBytes += saved;
+    }
+  }
+
+  const totalMessages = Math.round(maxRowid);
+  const estTotalBytes = Math.round(totalBytes * scale);
+
+  const noise: NoiseReport = {
+    totalMessages: Math.round(noiseMsgs * scale),
+    totalBytes: Math.round(noiseBytes * scale),
+    perRule: [...perRule.entries()].map(([name, v]) => ({
+      name,
+      messages: Math.round(v.messages * scale),
+      bytes: Math.round(v.bytes * scale),
+    })),
+    shortHighFreq: [...shortFreq.entries()]
+      .filter(([, c]) => c >= 2)
+      .slice(0, 20)
+      .map(([content, occurrences]) => ({
+        content,
+        occurrences: Math.round(occurrences * scale),
+        bytes: Math.round(content.length * occurrences * scale),
+      })),
+  };
+  const truncate: TruncateReport = {
+    totalMessages: Math.round(truncMsgs * scale),
+    totalSavedBytes: Math.round(truncBytes * scale),
+    perRule: truncPerRule.map((t) => ({
+      role: t.role,
+      maxBytes: t.maxBytes,
+      keepBytes: t.keepBytes,
+      messages: Math.round(t.messages * scale),
+      savedBytes: Math.round(t.savedBytes * scale),
+    })),
+  };
+  // 归档/分类在抽样模式下不做（它们按 session 判定，抽样算不出来）——
+  // 明确置空并靠 sampled=true 让调用方知道这两块没有数据，而不是假装是 0。
+  const archive: ArchiveReport = {
+    sessionsToArchive: 0,
+    messagesAffected: 0,
+    bytesAffected: 0,
+    oldestStartedAt: null,
+    cutoffTimestamp: 0,
+  };
+  const session: SessionClassification = {
+    noiseSessions: [],
+    shortSessions: [],
+    duplicateSessions: [],
+    totalNoiseMessages: 0,
+    totalNoiseBytes: 0,
+    totalShortMessages: 0,
+    totalShortBytes: 0,
+    totalDuplicateMessages: 0,
+    totalDuplicateBytes: 0,
+  };
+
+  const projectedRemainingMessages = Math.max(
+    0,
+    totalMessages - noise.totalMessages - truncate.totalMessages,
+  );
+  const projectedRemainingBytes = Math.max(
+    0,
+    estTotalBytes - noise.totalBytes - truncate.totalSavedBytes,
+  );
+
+  return {
+    databasePath: '',
+    scannedAt: Date.now(),
+    totalMessages,
+    totalBytes: estTotalBytes,
+    noise,
+    truncate,
+    archive,
+    session,
+    projectedRemainingMessages,
+    projectedRemainingBytes,
+    sampled: true,
+    sampleSize: rows.length,
   };
 }

@@ -25,7 +25,14 @@ function makeConfig(tmpDir: string): Partial<DaemonConfig> {
     pidFile: path.join(tmpDir, 'daemon.pid'),
     reconcileIntervalMs: 100, // 测试中缩短间隔
     debounceMs: 50,
-    skipCass: true, // 测试环境可能没有 cass DB
+    minScanGapMs: 0, // 测试里不必节流
+    // 测试要**自洽**：全部来源跳过，不依赖机器上真实的 ~/.pi、~/.claude 会话目录。
+    // 否则每次 reconcile 会去读真实的 80+ 个 pi 会话文件，又慢又不稳定
+    //（全量跑测试时多个 daemon 并发扫同一批真实目录，实测会超时）。
+    skipCass: true,
+    skipClaude: true,
+    skipCodex: true,
+    skipPi: true,
   };
 }
 

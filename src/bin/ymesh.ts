@@ -2896,6 +2896,14 @@ async function cmdRetain(flags: Record<string, string | boolean>): Promise<numbe
       if (b > 1_000) return `${(b / 1_000).toFixed(1)} KB`;
       return `${b} B`;
     };
+    if (report.sampled) {
+      console.log(
+        `\n⚠️  这是**抽样估算**（样本 ${report.sampleSize.toLocaleString()} 条 / 全库约 ${report.totalMessages.toLocaleString()} 条）。` +
+          `\n    大库精确分析要 8~9 分钟（15M 行 × 4.4GB 文本），所以按比例外推。` +
+          `\n    归档 / session 级分类在抽样模式下不做（它们按 session 判定，抽样算不出来）。`,
+      );
+    }
+
     const fmtPct = (n: number, total: number) =>
       total > 0 ? `${((n / total) * 100).toFixed(1)}%` : '0%';
 
