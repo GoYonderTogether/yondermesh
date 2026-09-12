@@ -422,7 +422,8 @@ function treeView(store: SessionStore, input: ObserveInput): ObserveResult {
     if (s && !TREE_RELIABLE_SOURCES.has(s.source)) {
       lines.push(
         s.source === 'pi'
-          ? '     ℹ️ pi 没有子代理机制（它的工具里没有 task 类工具）——"没有下属"是事实，不是采集缺失'
+          ? '     ℹ️ pi 没有**原生**子代理机制（工具里没有 task 类工具），所以手工起的进程之间没有血缘；'
+            + '\n        经 `orchestrate spawn` 由 ymesh 编排启动的会话会补记血缘。'
           : `     ℹ️ ${s.source} 的子代理不落独立会话文件，拿不到树边`,
       );
     }

@@ -29,7 +29,9 @@ import {
   DEFAULT_PRIOR_ATTEMPTS_MIN_SCORE,
   type PriorAttemptSession,
 } from '../derive/prior-attempts.js';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
+import { realpathSync } from 'node:fs';
+import { getAdapter } from '../adapters/registry.js';
 import { join } from 'node:path';
 
 export type OrchestrateAction =
@@ -81,11 +83,11 @@ export async function orchestrate(
   deps: { store: SessionStore; core: MailboxCore },
   input: OrchestrateInput,
 ): Promise<OrchestrateResult> {
-  const { store, core } = deps;
+  const { store } = deps;
   try {
     switch (input.action) {
       case 'spawn':
-        return await doSpawn(core, input);
+        return await doSpawn(deps, input);
       case 'assign':
         return await doAssign(deps, input);
       case 'handoff':
@@ -113,7 +115,102 @@ export async function orchestrate(
 
 // ─── spawn ──────────────────────────────────────────────────────────────
 
-async function doSpawn(core: MailboxCore, input: OrchestrateInput): Promise<OrchestrateResult> {
+/**
+ * spawn 之后补记「父子血缘」。
+ *
+ * 为什么需要：pi **没有子代理机制**（工具集里没有 task 类工具，session header
+ * 也没有 parent 字段），所以它自己永远不会产生 spawned_by 边。
+ * 但**ymesh 自己 launch 的会话是知道父子关系的** —— 触发器会回传
+ * `newSessionId`。于是这里把它补成一条真实的关系记录，
+ * 让编排出来的会话在 `observe scope=tree` 里能看出归属。
+ *
+ * 覆盖范围说明（诚实）：只覆盖**经 ymesh 编排启动**的会话；
+ * 你在终端手工起的 pi 进程，父子之间没有任何记录可依，补不了。
+ */
+async function recordSpawnLineage(
+  store: SessionStore,
+  opts: {
+    cli: string;
+    newSessionId?: string;
+    parentSessionId?: string;
+    cwd?: string;
+    /** spawn 开始的时刻（用于「按时间窗找最新会话」的兜底） */
+    since: number;
+  },
+): Promise<{ childId: string | null; via: 'reported-id' | 'cwd+time' | null }> {
+  const { cli, newSessionId, parentSessionId, cwd, since } = opts;
+  if (!parentSessionId) return { childId: null, via: null };
+  try {
+    // 新会话可能还没被扫描入库 → 先对该 CLI 做一次增量刷新（现在是毫秒级）
+    const adapter = getAdapter(cli);
+    if (adapter?.importerLoader) {
+      const mod = (await adapter.importerLoader()) as Record<string, unknown>;
+      for (const key of Object.keys(mod)) {
+        if ((key.endsWith('Importer') || key.endsWith('Extractor')) && typeof mod[key] === 'function') {
+          const Cls = mod[key] as new (s: unknown, o: unknown) => { import?: () => unknown };
+          new Cls(store, { deviceId: hostname() }).import?.();
+          break;
+        }
+      }
+    }
+
+    // 优先用触发器回传的 id
+    let childId: string | null = null;
+    let via: 'reported-id' | 'cwd+time' | null = null;
+    if (newSessionId) {
+      childId = store.resolveSessionId(newSessionId);
+      if (childId) via = 'reported-id';
+    }
+
+    // 兜底：不是所有 CLI 都会回传新会话 id（实测 pi 的 getState 常拿不到）。
+    // 这时用「同一 CLI + 同一 cwd + 启动时间在 spawn 之后」找最新那个。
+    // 这是启发式：同一秒内在同一目录起了两个会话才可能认错；宁可少记也不乱记。
+    if (!childId) {
+      // 路径归一化：macOS 上 /tmp 实际是 /private/tmp，直接字符串比较会对不上
+      //（实测就是栽在这——spawn 传 /tmp，库里存的是 /private/tmp）。
+      const norm = (p: string | null | undefined): string => {
+        if (!p) return '';
+        try {
+          return realpathSync(p);
+        } catch {
+          return p;
+        }
+      };
+      const targetCwd = norm(cwd);
+      const candidates = store
+        .querySessions({ source: cli, limit: 50 } as never)
+        .filter(
+          (x) =>
+            targetCwd !== '' &&
+            (norm(x.projectPath) === targetCwd || norm(x.cwd) === targetCwd) &&
+            (x.startedAt ?? x.lastSeenAt ?? 0) >= since - 5_000 &&
+            x.id !== parentSessionId,
+        )
+        .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+      if (candidates.length > 0) {
+        childId = candidates[0].id;
+        via = 'cwd+time';
+      }
+    }
+
+    if (!childId || childId === parentSessionId) return { childId: null, via: null };
+    store.addRelationship({
+      fromSessionId: childId, // 方向：from=子 → to=父
+      toSessionId: parentSessionId,
+      relationType: 'spawned_by',
+      evidence: via === 'reported-id' ? 'ymesh orchestrate spawn' : 'ymesh orchestrate spawn (cwd+time 推断)',
+    });
+    return { childId, via };
+  } catch {
+    return { childId: null, via: null }; // 血缘补记失败不该影响 spawn 本身
+  }
+}
+
+async function doSpawn(
+  deps: { store: SessionStore; core: MailboxCore },
+  input: OrchestrateInput,
+): Promise<OrchestrateResult> {
+  const { store } = deps;
   const cfg = input.config ?? {};
   if (!cfg.cli) {
     return {
@@ -128,7 +225,8 @@ async function doSpawn(core: MailboxCore, input: OrchestrateInput): Promise<Orch
     return { ok: false, action: 'spawn', text: 'spawn 需要 brief（任务描述）', error: 'missing brief' };
   }
 
-  const res = await core.send({
+  const spawnStartedAt = Date.now();
+  const res = await deps.core.send({
     cli: cfg.cli,
     mode: 'new',
     message: input.brief,
@@ -146,14 +244,41 @@ async function doSpawn(core: MailboxCore, input: OrchestrateInput): Promise<Orch
     res.error ? `  错误：${res.error}` : '',
   ].filter(Boolean);
 
+  // 补记父子血缘（pi 之类没有原生子代理机制的 CLI 也能有树了）
+  let linkedChild: string | null = null;
+  if (res.delivered) {
+    const link = await recordSpawnLineage(store, {
+      cli: cfg.cli,
+      newSessionId: res.newSessionId,
+      parentSessionId: input.selfSessionId,
+      cwd: cfg.cwd,
+      since: spawnStartedAt,
+    });
+    linkedChild = link.childId;
+    if (linkedChild) {
+      lines.push(
+        `  已记血缘：${linkedChild.slice(0, 12)} 由你发起（observe scope=tree 可见）` +
+          (link.via === 'cwd+time' ? '（该 CLI 没回传 id，按 cwd+时间推断的）' : ''),
+      );
+    }
+  }
+
   return {
     ok: res.delivered,
     action: 'spawn',
     text: lines.join('\n'),
-    data: { response: res.response, exitCode: res.exitCode, channel: res.channel },
+    data: {
+      response: res.response,
+      exitCode: res.exitCode,
+      channel: res.channel,
+      newSessionId: res.newSessionId ?? null,
+      linkedChild,
+    },
     error: res.error ?? undefined,
-    hint: res.delivered
-      ? '新会话的树状归属有两种情况：该 CLI 落独立会话文件（claude/hermes/opencode）→ 你能在 tree 里看到它；pi 不落 → 看不到。'
+    hint: res.delivered && !linkedChild
+      ? input.selfSessionId
+        ? '没补上血缘：该会话还没入库，或 cwd 对不上（spawn 时给了 cwd 才容易对上）。'
+        : '没补上血缘：spawn 时没带 self_session_id，不知道谁是父。'
       : undefined,
   };
 }
