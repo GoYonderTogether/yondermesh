@@ -270,12 +270,15 @@ describe('orchestrate 5. 各 action', () => {
   });
   afterEach(() => env.cleanup());
 
-  it('stop 明确说「不支持」，不假装成功', async () => {
+  it('stop 是协作式叫停（不是 kill），且明说为什么不是 kill', async () => {
     const id = env.addSession('s', '/p', [{ role: 'user', content: 'x' }]);
-    const r = await orchestrate({ store: env.store, core: env.core }, { action: 'stop', target: id });
-    expect(r.ok).toBe(false);
-    expect(r.text).toContain('不持有');
-    expect(r.hint).toContain('句柄池');
+    const r = await orchestrate(
+      { store: env.store, core: env.core },
+      { action: 'stop', target: id, brief: '测试' },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.text).toContain('协作式');
+    expect(r.hint).toContain('句柄池'); // 诚实说明为什么不能真 kill
   });
 
   it('await：报告还在跑还是已停', async () => {

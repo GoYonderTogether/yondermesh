@@ -704,7 +704,7 @@ export class McpServer {
           + 'await 等某个会话出结果；'
           + 'discuss 拉多个会话互相讨论（必须给不同 model，否则是同一张嘴说三遍）；'
           + 'prior 这事以前有人试过吗；'
-          + 'stop 暂不支持（ymesh 不持有别的 agent 的进程句柄）。',
+          + 'stop 协作式叫停（不是 kill —— ymesh 不持有进程句柄，让目标自己收手）。',
         inputSchema: {
           type: 'object',
           properties: {

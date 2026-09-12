@@ -180,6 +180,30 @@ function globalView(
   const situation = buildSituation(store, resolveSelf(store, input));
 
   const lines: string[] = [];
+
+  // scope=global + keyword：用 FTS5 找出命中的会话。
+  // 注意（诚实）：FTS 只索引 **user** 消息（v2 策略：14.2M 条 assistant 全量索引
+  // 要多占 ~17GB，不可行）。所以全局关键词搜索覆盖"人说过什么"；
+  // 想搜"AI 说过什么"，用 scope=project / scope=session —— 那两个范围是在
+  // 消息上逐条筛的，assistant 一样能命中（实测）。
+  if (input.filter?.keyword) {
+    const matched = store.querySessions({ keyword: input.filter.keyword, limit } as never);
+    lines.push(`全局关键词「${input.filter.keyword}」命中 ${matched.length} 个会话（**只搜 user 消息**）：`);
+    for (const m of matched) {
+      lines.push(
+        `  ${shortId(m.id)}  ${String(m.source).padEnd(10)} ${agoText(m.fileModifiedAt ?? m.lastSeenAt)}  ${m.projectPath ?? m.cwd ?? ''}`,
+      );
+    }
+    lines.push('  （要搜 AI 的回复：用 scope=project 或 scope=session，那两个范围逐条筛消息）');
+    return {
+      ok: true,
+      scope: 'global',
+      shape,
+      text: attachSituation(lines.join('\n'), situation),
+      data: matched.map((m) => m.id),
+    };
+  }
+
   lines.push(`本机会话总览`);
   lines.push(`  总 session : ${stats.totalSessions}（root ${stats.rootSessions} / subagent ${stats.subagentSessions}）`);
   lines.push(`  总消息     : ${stats.totalMessages}`);

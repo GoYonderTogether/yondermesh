@@ -97,7 +97,7 @@ export async function orchestrate(
       case 'discuss':
         return await doDiscuss(deps, input);
       case 'stop':
-        return doStop(store, input);
+        return await doStop(deps, input);
       case 'prior':
         return doPrior(store, input);
       default:
@@ -432,19 +432,55 @@ async function doDiscuss(
 
 // ─── stop ───────────────────────────────────────────────────────────────
 
-function doStop(_store: SessionStore, input: OrchestrateInput): OrchestrateResult {
+/**
+ * stop —— **协作式叫停**（不是 kill）。
+ *
+ * 为什么不做成真 kill（实测核过触发层）：ymesh 的触发器在拿到回复后就
+ * `handle.stop()` 了 —— 它**从不持有长活的进程句柄**。而别的终端/IDE 里
+ * 跑着的 agent 进程，ymesh 本来就没有句柄。
+ * 所以「杀进程」这条路在当前架构下不存在，硬做只能是假的。
+ *
+ * 能真做到的：**让目标自己停**。发一条明确的叫停指令，
+ * 目标在它的下一轮边界读到并自己收手 —— 这也是编排者叫停下属的常规做法。
+ * 投递时机选 on_reply：如果它正在跑，now 会被双写守卫拒绝；on_reply
+ * 会在它这一轮结束的那一刻送达（最早的安全点）。
+ */
+async function doStop(
+  deps: { store: SessionStore; core: MailboxCore },
+  input: OrchestrateInput,
+): Promise<OrchestrateResult> {
   if (!input.target) {
     return { ok: false, action: 'stop', text: 'stop 需要 target', error: 'missing target' };
   }
-  // ymesh 不拥有别人的进程句柄（除自己 launch 的），所以"停"只能传达意图，不能真的 kill。
+  const reason = input.brief?.trim();
+  const body =
+    '【叫停】请立即停止当前正在进行的工作，不要再继续这一步。' +
+    (reason ? `\n原因：${reason}` : '') +
+    '\n请用一两句话说明：你停在哪一步、已经改动了哪些文件、有没有留下半成品。';
+
+  const r = await agentMessage(deps, {
+    action: 'send',
+    to: input.target,
+    body,
+    delivery: 'on_reply', // 目标在跑时 now 会被拒；on_reply 是它下一轮边界，最早的安全点
+    selfSessionId: input.selfSessionId,
+  });
+  if (r.action !== 'send') {
+    return { ok: false, action: 'stop', text: '内部错误：stop 走到了 check 分支', error: 'internal' };
+  }
   return {
-    ok: false,
+    ok: r.ok,
     action: 'stop',
-    text:
-      '暂不支持：ymesh 不持有其他 agent 的进程句柄，无法真正终止它。\n' +
-      '  可行的替代：给它发一条「停止当前工作」的消息（assign，delivery=on_reply）。',
-    error: 'not supported',
-    hint: '要真的能停，需要 ymesh 自己 launch 并持有句柄（句柄池，尚未实现）。',
+    text: r.ok
+      ? `已发出叫停（协作式）：${r.to?.source ?? ''} ${r.to ? shortId(r.to.sessionId) : input.target}` +
+        '\n  它会在下一轮边界读到并自己收手。'
+      : `叫停失败：${r.error ?? '未知原因'}`,
+    data: r,
+    error: r.error,
+    hint:
+      '这是**协作式**叫停，不是 kill —— ymesh 的触发器拿到回复后就把子进程停了，' +
+      '从不持有长活句柄，所以没有进程可杀。要真正 force-kill，得先做「句柄池」' +
+      '（ymesh 长期托管子进程），那是架构级改动。',
   };
 }
 

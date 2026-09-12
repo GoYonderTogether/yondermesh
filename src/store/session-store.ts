@@ -655,12 +655,20 @@ export class SessionStore {
         if (longTokens.length > 0) {
           // 每个 token 用双引号包裹（phrase，避免 FTS5 语法字符干扰），空格连接（AND）
           const matchExpr = longTokens.map((t) => `"${t}"`).join(' ');
+          // ⚠️ 关联方向决定性能（实测同一台机、13M 消息库）：
+          //   · 从 sessions 侧关联（原写法）：
+          //       EXISTS (... f.session_id = sessions.id AND f.revision_id = sessions.current_revision_id)
+          //     → 对每个 session 重扫整个 FTS 命中集（"yondermesh" 命中 26k 行），
+          //       3255 × 26k = **直接挂住超时**
+          //   · 非关联 IN：1.06s，但丢掉 current_revision 过滤（会召回旧 revision 的内容）
+          //   · **从 FTS 侧关联（现写法）**：3.2s，且保留 current_revision 精确性 ——
+          //     26k 次主键查 sessions 很快，方向反过来就好了
+          // 取第三种：用 2 秒换回正确性。
           conditions.push(
-            `EXISTS (
-              SELECT 1 FROM messages_fts f
+            `sessions.id IN (
+              SELECT f.session_id FROM messages_fts f
               WHERE f.messages_fts MATCH ?
-                AND f.session_id = sessions.id
-                AND f.revision_id = sessions.current_revision_id
+                AND f.revision_id = (SELECT s2.current_revision_id FROM sessions s2 WHERE s2.id = f.session_id)
             )`,
           );
           params.push(matchExpr);
