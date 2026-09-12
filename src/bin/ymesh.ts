@@ -74,7 +74,7 @@ import type {
   SendMode,
   SendTarget,
 } from '../mailbox/index.js';
-import { MAIL_KINDS, MAIL_PRIORITIES, formatSelfSessionFailure } from '../mailbox/index.js';
+import { MAIL_KINDS, MAIL_PRIORITIES, formatSelfSessionFailure, agentMessage } from '../mailbox/index.js';
 import { loadWrapper as regLoadWrapper, listImporters } from '../adapters/registry.js';
 import { scaffoldAdapter } from '../sdk/scaffold.js';
 import type { ScaffoldOptions } from '../sdk/scaffold.js';
@@ -2027,6 +2027,88 @@ function fmtLocalTime(ms: number): string {
   return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
 }
 
+/**
+ * message 命令 —— 跨 session 通信的统一入口（与 MCP 的 agent_message 同一实现）。
+ *
+ * 用法：
+ *   ymesh message check [--limit N] [--self <sid>]
+ *   ymesh message send --to <sid|all> --body "..." [--delivery now|after_turn|on_reply] [--from <sid>]
+ */
+async function cmdMessage(flags: Record<string, string | boolean>): Promise<number> {
+  const positional = process.argv.slice(process.argv.indexOf('message') + 1);
+  const action = positional[0] === 'send' ? 'send' : positional[0] === 'check' ? 'check' : '';
+  if (!action) {
+    console.error(
+      '用法：\n  ymesh message check [--limit N] [--self <sid>]\n' +
+        '  ymesh message send --to <sid|all> --body "..." [--delivery now|after_turn|on_reply] [--from <sid>]',
+    );
+    return 1;
+  }
+
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  const store = new SessionStore(dbPath);
+  const core = new MailboxCore(dbPath, dataDir);
+  try {
+    const result = await agentMessage(
+      { core, store },
+      {
+        action,
+        to: typeof flags.to === 'string' ? flags.to : undefined,
+        body: typeof flags.body === 'string' ? flags.body : undefined,
+        delivery:
+          flags.delivery === 'after_turn' || flags.delivery === 'on_reply' || flags.delivery === 'now'
+            ? flags.delivery
+            : undefined,
+        replyTo: typeof flags['reply-to'] === 'string' ? Number(flags['reply-to']) : undefined,
+        selfSessionId: typeof flags.self === 'string' ? flags.self : undefined,
+        limit: typeof flags.limit === 'string' ? Number(flags.limit) : undefined,
+        markRead: flags['no-mark-read'] !== true,
+        unreadOnly: flags.all !== true,
+      },
+    );
+
+    if (flags.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return result.ok ? 0 : 1;
+    }
+
+    if (result.action === 'check') {
+      if (!result.ok) {
+        console.error(result.error);
+        return 1;
+      }
+      console.log(`\n未读 ${result.unread ?? 0} 条（共 ${result.total ?? 0} 条）\n`);
+      for (const m of result.messages ?? []) {
+        const from = m.from ? m.from.slice(0, 12) : '匿名';
+        const pending = m.pending ? ' [排队中，未送达]' : '';
+        console.log(`  #${m.id}  来自 ${from}${pending}`);
+        console.log(`    ${m.body.replace(/\n/g, '\n    ')}`);
+        console.log();
+      }
+      return 0;
+    }
+
+    if (!result.ok) {
+      console.error(`[yondermesh] ${result.error}`);
+      if (result.hint) console.error(`  提示：${result.hint}`);
+      return 1;
+    }
+    const t = result.to ? `${result.to.source} ${result.to.sessionId.slice(0, 12)}` : '广播';
+    if (result.delivery === 'now') {
+      console.log(`[yondermesh] 已发给 ${t}（同步）`);
+      if (result.response) console.log(`\n回复：\n${result.response}`);
+    } else {
+      console.log(`[yondermesh] 已排队给 ${t}（${result.delivery}），daemon 会在合适时机投递`);
+      if (result.hint) console.log(`  ${result.hint}`);
+    }
+    return 0;
+  } finally {
+    core.close();
+    store.close();
+  }
+}
+
 /** mailbox 命令：跨 session 消息总线入口 */
 function cmdMailbox(flags: Record<string, string | boolean>): number {
   const positional = process.argv.slice(process.argv.indexOf('mailbox') + 1);
@@ -3205,6 +3287,9 @@ async function main(): Promise<number> {
 
     case 'state':
       return cmdState(flags);
+
+    case 'message':
+      return await cmdMessage(flags);
 
     case 'mailbox':
       return cmdMailbox(flags);

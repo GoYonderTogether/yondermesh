@@ -38,6 +38,8 @@ import type {
   SendTarget,
   TrayNotice,
   UnreadCount,
+  DeliveryPolicy,
+  PendingDelivery,
 } from './types.js';
 import { MAIL_KINDS, MAIL_PRIORITIES, NoopNotifier } from './types.js';
 
@@ -206,8 +208,8 @@ export class MailboxCore {
       .prepare(
         `INSERT INTO agent_messages
           (to_session_id, to_project, from_session_id, body, kind, created_at, read_at,
-           priority, expires_at, thread_id, reply_to_id)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+           priority, expires_at, thread_id, reply_to_id, deliver_on, delivered_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.toSessionId ?? null,
@@ -220,12 +222,19 @@ export class MailboxCore {
         input.expiresAt ?? null,
         threadId,
         input.replyToId ?? null,
+        input.deliverOn ?? null,
+        // 非队列消息：一写入就算“已投递”（只是存着供收件人读）
+        input.deliverOn ? null : now,
       );
 
     const id = Number(result.lastInsertRowid);
-    const message = this.getMessage(id);
-    if (message) {
-      this.notifier.notifyNewMessage(message);
+    // 队列消息（deliverOn）先不通知收件人——它还不到时候。
+    // 真正送出时由 flush 路径调用 notifyDelivered() 再通知。
+    if (!input.deliverOn) {
+      const message = this.getMessage(id);
+      if (message) {
+        this.notifier.notifyNewMessage(message);
+      }
     }
     return id;
   }
@@ -784,6 +793,109 @@ export class MailboxCore {
       expiresAt: (r.expires_at as number | null) ?? null,
       threadId: (r.thread_id as string | null) ?? null,
       replyToId: (r.reply_to_id as number | null) ?? null,
+      deliverOn: (r.deliver_on as DeliveryPolicy | null) ?? null,
+      deliveredAt: (r.delivered_at as number | null) ?? null,
     };
+  }
+
+  // ─── 投递队列（unified agent_message）──────────────────────────────
+
+  /**
+   * 取出待投递的队列消息。
+   *
+   * @param deliverOn  投递时机
+   * @param sessionId  对 sender_idle 而言是**发送方**；对 target_idle 而言是**目标**
+   */
+  pendingDeliveries(deliverOn: DeliveryPolicy, sessionId: string): PendingDelivery[] {
+    const column = deliverOn === 'sender_idle' ? 'from_session_id' : 'to_session_id';
+    const rows = this.db
+      .prepare(
+        `SELECT id, to_session_id, from_session_id, body, deliver_on, created_at,
+                COALESCE(delivery_attempts, 0) AS attempts
+           FROM agent_messages
+          WHERE deliver_on = ? AND delivered_at IS NULL AND ${column} = ?
+          ORDER BY created_at ASC`,
+      )
+      .all(deliverOn, sessionId) as Row[];
+    return rows.map((r) => ({
+      id: r.id as number,
+      toSessionId: (r.to_session_id as string | null) ?? null,
+      fromSessionId: (r.from_session_id as string | null) ?? null,
+      body: r.body as string,
+      deliverOn: r.deliver_on as DeliveryPolicy,
+      createdAt: r.created_at as number,
+      attempts: (r.attempts as number) ?? 0,
+    }));
+  }
+
+  /**
+   * 取某个投递时机的**全部**待投消息（不按 session 过滤）。
+   *
+   * 供 DeliveryFlusher 用：它要自己判断「哪一侧已经 idle」，
+   * 所以先拿全量再在内存里分组（队列规模本来就小，不值得下推成 SQL）。
+   */
+  pendingDeliveriesAll(deliverOn: DeliveryPolicy): PendingDelivery[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, to_session_id, from_session_id, body, deliver_on, created_at,
+                COALESCE(delivery_attempts, 0) AS attempts
+           FROM agent_messages
+          WHERE deliver_on = ? AND delivered_at IS NULL
+          ORDER BY created_at ASC`,
+      )
+      .all(deliverOn) as Row[];
+    return rows.map((r) => ({
+      id: r.id as number,
+      toSessionId: (r.to_session_id as string | null) ?? null,
+      fromSessionId: (r.from_session_id as string | null) ?? null,
+      body: r.body as string,
+      deliverOn: r.deliver_on as DeliveryPolicy,
+      createdAt: r.created_at as number,
+      attempts: (r.attempts as number) ?? 0,
+    }));
+  }
+
+  /** 记录一次投递尝试（成功与否都算；用于给重试设上限）。 */
+  recordDeliveryAttempt(ids: number[]): void {
+    if (ids.length === 0) return;
+    const stmt = this.db.prepare(
+      'UPDATE agent_messages SET delivery_attempts = COALESCE(delivery_attempts, 0) + 1 WHERE id = ?',
+    );
+    for (const id of ids) stmt.run(id);
+  }
+
+  /**
+   * 放弃投递（尝试超限）：标记 delivered_at 让它退出队列，但**不删消息**，
+   * 也不标记已读——人还能在库里看到它、知道没送出去。
+   */
+  abandonDelivery(ids: number[]): void {
+    if (ids.length === 0) return;
+    const now = Date.now();
+    const stmt = this.db.prepare('UPDATE agent_messages SET delivered_at = ? WHERE id = ?');
+    for (const id of ids) stmt.run(now, id);
+  }
+
+  /** 把队列消息标记为已投递（幂等；只有仍在队列里的会被标记）。 */
+  markDelivered(ids: number[]): number {
+    if (ids.length === 0) return 0;
+    const now = Date.now();
+    const stmt = this.db.prepare(
+      'UPDATE agent_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL',
+    );
+    let changed = 0;
+    const delivered: number[] = [];
+    for (const id of ids) {
+      const r = stmt.run(now, id);
+      if (Number(r.changes) > 0) {
+        changed += 1;
+        delivered.push(id);
+      }
+    }
+    // 送出后才通知收件人（入队时故意没通知）
+    for (const id of delivered) {
+      const m = this.getMessage(id);
+      if (m) this.notifier.notifyNewMessage(m);
+    }
+    return changed;
   }
 }

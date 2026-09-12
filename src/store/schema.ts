@@ -154,6 +154,8 @@ CREATE INDEX IF NOT EXISTS idx_msg_created            ON agent_messages(created_
 CREATE INDEX IF NOT EXISTS idx_msg_unread             ON agent_messages(read_at, to_session_id);
 CREATE INDEX IF NOT EXISTS idx_msg_thread             ON agent_messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_msg_expires            ON agent_messages(expires_at);
+-- 投递队列：按 (投递时机, 未投递) 找待发消息
+CREATE INDEX IF NOT EXISTS idx_msg_queue              ON agent_messages(deliver_on, delivered_at);
 `;
 
 /**
@@ -250,6 +252,11 @@ export const MIGRATION_COLUMNS: { table: string; column: string; type: string }[
   { table: 'agent_messages', column: 'expires_at', type: 'INTEGER' },
   { table: 'agent_messages', column: 'thread_id', type: 'TEXT' },
   { table: 'agent_messages', column: 'reply_to_id', type: 'INTEGER' },
+  // 投递队列（unified agent_message）：决定这条消息什么时候、以什么口吻送出去
+  { table: 'agent_messages', column: 'deliver_on', type: 'TEXT' },
+  { table: 'agent_messages', column: 'delivered_at', type: 'INTEGER' },
+  // 投递尝试次数：目标一直不可达时限次放弃（消息仍留在库里，只是不再重试）
+  { table: 'agent_messages', column: 'delivery_attempts', type: 'INTEGER NOT NULL DEFAULT 0' },
 ];
 
 /**

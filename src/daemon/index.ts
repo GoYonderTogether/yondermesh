@@ -24,6 +24,8 @@ import { mountAll } from '../mount/index.js';
 import { getAdapter } from '../adapters/registry.js';
 import { resolvePiFlavors } from '../pi/index.js';
 import { BriefingScheduler } from './briefing-scheduler.js';
+import { DeliveryFlusher } from './delivery.js';
+import { MailboxCore } from '../mailbox/index.js';
 import type { DaemonConfig } from './config.js';
 import { defaultDaemonConfig } from './config.js';
 
@@ -79,7 +81,24 @@ export class YondermeshDaemon {
   /** registry 动态加载的 importer 模块缓存（避免每轮重复 import） */
   private importerModuleCache = new Map<string, Record<string, unknown>>();
   private reconcileTimer?: ReturnType<typeof setInterval>;
+  /** 队列投递器：after_turn / on_reply 的排队消息在 session 变 idle 时送出 */
+  private deliveryFlusher?: DeliveryFlusher;
+  private mailboxFlusher?: MailboxCore;
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * 每个来源上次真正扫描的时间。
+   *
+   * 为什么需要：`fs.watch` 监听的是**正在被写入**的目录——尤其 pi，
+   * 干活的那个 agent 本身就在不停写自己的 session 文件。每次改动都触发
+   * 一次「全量重读该来源所有 session 文件」的同步扫描，于是变成
+   * 扫描(N 秒) → 1s debounce → 扫描 → …… 的**热循环**，
+   * 事件循环被占满，60s 的 reconcile 定时器直接被饿死（实测 profiler
+   * 显示主线程 100% 在 uv__run_timers 里 ReadFileUtf8）。
+   *
+   * 加一个最小间隔即可把循环变成「有上限的轮询」：无论目录多吵，
+   * 每来源最快 minScanGapMs 才扫一次。
+   */
+  private lastScanAt = new Map<string, number>();
   private briefingScheduler?: BriefingScheduler;
 
   constructor(config?: Partial<DaemonConfig>) {
@@ -127,15 +146,28 @@ export class YondermeshDaemon {
     // 持久化 watchedPaths 供 cmdStatus 读取（daemon 与 CLI 是两个进程）
     this.persistWatchedPaths();
 
+    // 队列投递器：复用 reconcile 节奏，检测 live→idle 后投递排队消息。
+    // 复用而非新起定时器/进程——daemon 本来就在定期扫描 session 状态。
+    this.mailboxFlusher = new MailboxCore(this.config.dbPath, this.config.dataDir);
+    this.deliveryFlusher = new DeliveryFlusher(this.store, this.mailboxFlusher, (line) =>
+      process.stderr.write(`${line}\n`),
+    );
+
     // 启动定时 reconcile
     this.reconcileTimer = setInterval(() => {
       this.fullScan()
-        .then(() => {
+        .then(async () => {
           // 层 1：reconcile 后自动挂载（幂等：mountAll 内部策略先 remove 再 add）
           if (this.config.autoMount) this.autoMount('reconcile');
+          // 层 2：投递队列（after_turn / on_reply）
+          await this.deliveryFlusher?.onScanned();
         })
         .catch((err) => {
-          this.watchErrors.push(`reconcile error: ${String(err)}`);
+          // 失败永不静默：reconcile 出错只 push 进 watchErrors 是没人看的，
+          // 会导致「daemon 活着但什么都不干」而无人察觉（实测踩到）。
+          const line = `reconcile error: ${String(err)}`;
+          this.watchErrors.push(line);
+          process.stderr.write(`[yondermesh] ${line}\n`);
         });
     }, this.config.reconcileIntervalMs);
 
@@ -465,7 +497,7 @@ export class YondermeshDaemon {
   }
 
   /** debounce 后触发对应来源的增量扫描；新增 session 时打印单行日志 */
-  private scheduleDebouncedScan(key: string): void {
+  private scheduleDebouncedScan(key: string, extraDelayMs = 0): void {
     const existing = this.debounceTimers.get(key);
     if (existing) {
       clearTimeout(existing);
@@ -473,6 +505,16 @@ export class YondermeshDaemon {
 
     const timer = setTimeout(() => {
       this.debounceTimers.delete(key);
+
+      // 节流：距上次真正扫描不足 minScanGapMs 就顺延（见 lastScanAt 注释）。
+      // 不这么做，持续写入的目录会把事件循环占满，饿死 reconcile 定时器。
+      const gap = this.config.minScanGapMs ?? 15_000;
+      const since = Date.now() - (this.lastScanAt.get(key) ?? 0);
+      if (since < gap) {
+        this.scheduleDebouncedScan(key, gap - since);
+        return;
+      }
+      this.lastScanAt.set(key, Date.now());
       // 增量扫描只扫对应来源
       const beforeTs = Date.now();
       let result: SourceScanResult | undefined;
@@ -496,7 +538,7 @@ export class YondermeshDaemon {
           if (this.config.autoMount) this.autoMount(`session-hook:${key}`);
         }
       }
-    }, this.config.debounceMs);
+    }, this.config.debounceMs + extraDelayMs);
 
     this.debounceTimers.set(key, timer);
   }

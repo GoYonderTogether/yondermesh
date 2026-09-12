@@ -33,3 +33,19 @@ export type {
 } from './types.js';
 export { formatSelfSessionFailure } from './core.js';
 export type { SelfSessionDiagnosis, SelfSessionFailureReason } from './core.js';
+export {
+  agentMessage,
+  coalesce,
+  wrapForDelivery,
+  toDeliveryPolicy,
+  fromDeliveryPolicy,
+  resolveTarget,
+} from './unified.js';
+export type {
+  AgentMessageInput,
+  AgentMessageResult,
+  AgentMessageSendResult,
+  AgentMessageCheckResult,
+  AgentMessageTarget,
+  DeliveryChoice,
+} from './unified.js';

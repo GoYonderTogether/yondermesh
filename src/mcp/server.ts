@@ -28,6 +28,7 @@ import {
 } from './tool-hints.js';
 import { findTool as findNewTool, MCP_TOOLS } from './tools.js';
 import { MailboxCore } from '../mailbox/index.js';
+import { agentMessage } from '../mailbox/unified.js';
 import { defaultDaemonConfig } from '../daemon/index.js';
 
 /** 安全获取 daemon 配置（避免循环依赖问题） */
@@ -341,41 +342,28 @@ export class McpServer {
        },
      },
      {
-       name: 'send',
-       description: '同步向目标 agent CLI 会话注入一条用户消息并拿到回复。三种模式: new(新建会话)/running(注入运行中会话)/stopped(恢复已停止会话)。合并旧版 yondermesh_send + launch_agent + inject_session + transfer_session。',
+       name: 'agent_message',
+       description:
+         '跟其他 agent 会话通信的唯一入口。action=send 发消息，action=check 看发给我的消息。' +
+         '不需要知道对方是哪个 CLI，只给 session id（支持 hash / native id / 唯一前缀）。' +
+         'delivery 决定什么时候送到：now=立刻（目标在跑则拒绝，因为外部注入会和它自己双写）；' +
+         'after_turn=等我这轮结束再发（同一目标的积压会合并成一条，省 token）；' +
+         'on_reply=等对方回复完用户那一刻、以用户口吻发给它（适合对正在干活的 agent 提要求）。' +
+         '合并旧版 send + mailbox + yondermesh_send + yondermesh_mailbox_* + post_message + get_messages。',
        inputSchema: {
          type: 'object',
          properties: {
-           cli: { type: 'string', description: '目标 CLI id(如 hermes/claude/opencode)' },
-           message: { type: 'string', description: '用户消息' },
-           mode: { type: 'string', enum: ['new', 'running', 'stopped'], description: '投递模式,默认 new', default: 'new' },
-           session_id: { type: 'string', description: 'stopped/running 模式必填的目标 session id' },
-           model: { type: 'string', description: '模型 id(可选)' },
-           effort: { type: 'string', description: '推理强度(可选)' },
-           cwd: { type: 'string', description: '工作目录(可选)' },
-           timeout_ms: { type: 'number', description: '超时毫秒,默认 60000' },
-           from_session_id: { type: 'string', description: '发送方 session id(审计用)' },
+           action: { type: 'string', enum: ['send', 'check'], description: 'send=发/check=看，默认 check', default: 'check' },
+           to: { type: 'string', description: 'send: 目标 session id，或 "all" 广播' },
+           body: { type: 'string', description: 'send: 消息正文' },
+           delivery: { type: 'string', enum: ['now', 'after_turn', 'on_reply'], description: 'send: 投递时机，默认 now', default: 'now' },
+           reply_to: { type: 'number', description: 'send: 回复某条消息的 id（自动串 thread）' },
+           limit: { type: 'number', description: 'check: 最多返回几条，默认 20', default: 20 },
+           mark_read: { type: 'boolean', description: 'check: 读完标记已读，默认 true', default: true },
+           unread_only: { type: 'boolean', description: 'check: 只看未读，默认 true', default: true },
+           self_session_id: { type: 'string', description: 'check: 显式指定自己的 session（不传则自动解析）' },
          },
-         required: ['cli', 'message'],
-       },
-     },
-     {
-       name: 'mailbox',
-       description: '异步留言读写。通过 action 选择操作: post(发消息/广播)/check(读未读)/reply(回复)/get(查收)。合并旧版 post_message + get_messages + yondermesh_mailbox_*。',
-       inputSchema: {
-         type: 'object',
-         properties: {
-           action: { type: 'string', enum: ['post', 'check', 'reply', 'get'], description: '操作,默认 check', default: 'check' },
-           to_session_id: { type: 'string', description: 'post: 目标 session' },
-           to_project: { type: 'string', description: 'post: 目标项目(广播)' },
-           from_session_id: { type: 'string', description: 'post/reply: 发送方' },
-           body: { type: 'string', description: 'post/reply: 正文' },
-           kind: { type: 'string', enum: ['info', 'warning', 'question', 'task_update'], description: '消息类型', default: 'info' },
-           priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'], description: '优先级', default: 'normal' },
-           reply_to_id: { type: 'number', description: 'reply: 被回复消息 ID' },
-           self_session_id: { type: 'string', description: 'check/get: 显式自身 session' },
-           mark_read: { type: 'boolean', description: 'check: 标记已读,默认 true', default: true },
-         },
+         required: ['action'],
        },
      },
      {
@@ -585,6 +573,15 @@ export class McpServer {
    if (refinedResult) {
      result = refinedResult;
    } else {
+   // 旧通信工具名（send / mailbox_* / post_message / get_messages）统一翻译到
+   // agent_message —— 保证「一套逻辑」，旧名只是入口别名，不再各走一套实现。
+   const commResult = await this.forwardLegacyComm(name, args);
+   if (commResult) {
+     result = commResult;
+   } else if (name === 'send') {
+     // send --mode new / 只给 cli：走旧的启动路径（创建新会话）
+     result = await this.forwardTo('yondermesh_send', args);
+   } else {
    const legacyResult = await this.tryLegacyTool(name, args);
    if (legacyResult) {
      result = legacyResult;
@@ -601,11 +598,13 @@ export class McpServer {
      };
    }
    }
+   }
 
    // Channel A: 非 mailbox 工具调用后注入 unread hint
    if (
      !name.startsWith('yondermesh_mailbox_') &&
      !name.startsWith('yondermesh_whoami') &&
+     name !== 'agent_message' &&
      name !== 'mailbox' &&
      name !== 'send' &&
      !result.isError
@@ -632,10 +631,8 @@ export class McpServer {
         return this.getOverview(args);
       case 'handoff':
         return this.getSessionHandoff(args);
-      case 'send':
-        return this.forwardTo('yondermesh_send', args);
-      case 'mailbox':
-        return this.refinedMailbox(args);
+      case 'agent_message':
+        return this.refinedAgentMessage(args);
       case 'agents':
         return this.refinedAgents(args);
       default:
@@ -694,22 +691,91 @@ export class McpServer {
   }
 
   /** mailbox: action 参数分发到旧 mailbox/post_message 工具 */
-  private async refinedMailbox(args: Record<string, unknown>): Promise<McpToolResult> {
-    const action = typeof args.action === 'string' ? args.action : 'check';
-    switch (action) {
-      case 'post':
-      case 'reply':
-        // reply 需要 reply_to_id,走 mailbox_reply;否则走 mailbox_post
-        if (typeof args.reply_to_id === 'number') {
-          return this.forwardTo('yondermesh_mailbox_reply', args);
-        }
-        return this.forwardTo('yondermesh_mailbox_post', args);
-      case 'check':
-      case 'get':
-        return this.forwardTo('yondermesh_mailbox_check', args);
-      default:
-        return { content: `无效 action: ${action}（合法: post | check | reply | get）`, isError: true };
+  /**
+   * agent_message —— 跨 session 通信的唯一入口。
+   *
+   * 旧的 send / mailbox 不再是独立逻辑，而是把参数翻译成这里的一次调用
+   * （见 translateLegacyCommArgs）。这样「邮箱」不再是一套要和 send 对齐的
+   * 平行语义，收敛成一个动作面：发消息 / 看消息 + 投递时机。
+   */
+  private async refinedAgentMessage(args: Record<string, unknown>): Promise<McpToolResult> {
+    return this.runAgentMessage(args);
+  }
+
+  /** 把统一入参跑一遍，返回 MCP 结果 */
+  private async runAgentMessage(args: Record<string, unknown>): Promise<McpToolResult> {
+    const action = args.action === 'send' ? 'send' : 'check';
+    const input = {
+      action: action as 'send' | 'check',
+      to: typeof args.to === 'string' ? args.to : undefined,
+      body: typeof args.body === 'string' ? args.body : undefined,
+      delivery:
+        args.delivery === 'after_turn' || args.delivery === 'on_reply' || args.delivery === 'now'
+          ? (args.delivery as 'now' | 'after_turn' | 'on_reply')
+          : undefined,
+      replyTo: typeof args.reply_to === 'number' ? args.reply_to : undefined,
+      limit: typeof args.limit === 'number' ? args.limit : undefined,
+      markRead: args.mark_read !== false,
+      unreadOnly: args.unread_only !== false,
+      selfSessionId:
+        typeof args.self_session_id === 'string' ? args.self_session_id : undefined,
+    };
+
+    const config = defaultDaemonConfigSafe();
+    const core = new MailboxCore(config.dbPath, config.dataDir);
+    try {
+      const result = await agentMessage({ core, store: this.store }, input);
+      return { content: JSON.stringify(result, null, 2), isError: result.ok === false };
+    } finally {
+      core.close();
     }
+  }
+
+  /**
+   * 旧通信工具名 → agent_message 的翻译层（保持向后兼容，但不再是独立逻辑）。
+   *
+   * 映射：
+   *   send                       → action=send，delivery=now
+   *   mailbox / *_mailbox_*      → action=check/post…
+   *   post_message / get_messages→ 同上
+   */
+  private async forwardLegacyComm(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<McpToolResult | null> {
+    const unified: Record<string, unknown> = {};
+    switch (name) {
+      case 'send':
+      case 'yondermesh_send':
+        // 「起一个新会话」不是"跟已有 session 通信"，统一工具不覆盖它
+        //（新会话没有 session id，必须先知道用哪个 CLI）→ 交回旧 handler。
+        if (args.mode === 'new' || (!args.session_id && args.cli)) return null;
+        unified.action = 'send';
+        unified.body = args.message ?? args.body;
+        unified.to = args.session_id ?? args.to;
+        unified.delivery = args.delivery ?? 'now';
+        break;
+      case 'mailbox':
+        // 统一工具自己的名字：直接透传
+        return this.runAgentMessage(args);
+      case 'yondermesh_mailbox_check':
+        unified.action = 'check';
+        unified.self_session_id = args.self_session_id ?? args.for_session_id;
+        unified.mark_read = args.mark_read;
+        break;
+      case 'yondermesh_mailbox_post':
+      case 'yondermesh_mailbox_reply':
+        unified.action = 'send';
+        unified.body = args.body;
+        unified.to = args.to_session_id ?? args.to_project ?? 'all';
+        unified.reply_to = args.reply_to_id;
+        unified.self_session_id = args.from_session_id;
+        unified.delivery = args.delivery ?? 'after_turn';
+        break;
+      default:
+        return null;
+    }
+    return this.runAgentMessage(unified);
   }
 
   /** agents: 合并 list_agents + mount_status */

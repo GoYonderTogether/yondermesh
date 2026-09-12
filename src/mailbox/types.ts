@@ -37,6 +37,28 @@ export interface PostMessageInput {
   threadId?: string;
   /** 回复的消息 id（自动派生 threadId 若未提供） */
   replyToId?: number;
+  /**
+   * 投递时机（unified agent_message 的队列语义）：
+   *   · undefined   — 立即（默认，等同旧 postMessage 行为）
+   *   · sender_idle — 等**发送方**本轮结束再发（由 daemon 合并同目标的积压一起投）
+   *   · target_idle — 等**目标**回复完用户那一刻再发，且以用户口吻（不暴露是别的 agent）
+   */
+  deliverOn?: DeliveryPolicy;
+}
+
+/** 投递时机策略 */
+export type DeliveryPolicy = 'sender_idle' | 'target_idle';
+
+/** 一条队列里待投递的消息（合并口径用） */
+export interface PendingDelivery {
+  id: number;
+  toSessionId: string | null;
+  fromSessionId: string | null;
+  body: string;
+  deliverOn: DeliveryPolicy;
+  createdAt: number;
+  /** 已尝试投递次数（用于限次，避免目标不可达时无限重试） */
+  attempts: number;
 }
 
 /** 持久化的消息记录 */
@@ -53,6 +75,10 @@ export interface MailboxMessage {
   expiresAt: number | null;
   threadId: string | null;
   replyToId: number | null;
+  /** 投递时机；null = 已直接投递/普通留言 */
+  deliverOn: DeliveryPolicy | null;
+  /** 队列消息真正被送出去的时间；null = 还在队列里 */
+  deliveredAt: number | null;
 }
 
 /** 查询消息的过滤条件 */

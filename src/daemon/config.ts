@@ -20,6 +20,8 @@ export interface DaemonConfig {
   reconcileIntervalMs: number;
   /** watch debounce 延迟（毫秒），默认 1 秒 */
   debounceMs: number;
+  /** 每来源两次实时扫描之间的最小间隔（防持续写入的目录把事件循环占满） */
+  minScanGapMs?: number;
   /** 设备 id，默认 os.hostname() */
   deviceId?: string;
   /** 是否跳过 cass 全量导入（cass DB 不存在时自动跳过） */
@@ -55,6 +57,7 @@ export function defaultDaemonConfig(): DaemonConfig {
     pidFile: join(dataDir, 'daemon.pid'),
     reconcileIntervalMs: 60 * 1000, // 1 分钟
     debounceMs: 1_000, // 1 秒
+    minScanGapMs: 15_000, // 15 秒：实时监听的最小扫描间隔（防热循环饿死 reconcile）
     autoMount: true,
     briefingEnabled: true,
     briefingIntervalMs: 60 * 60 * 1000, // 1 小时
