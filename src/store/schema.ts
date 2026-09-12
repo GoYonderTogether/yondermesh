@@ -112,6 +112,18 @@ CREATE TABLE IF NOT EXISTS scan_runs (
   FOREIGN KEY (source_instance_id) REFERENCES source_instances(id)
 );
 
+-- 6.5 workspaces：工作目录的归属与分组（**人为判断**，机器推不出来）
+-- 为什么需要单独一张表：project_path 只能从 CLI 的 cwd 自动推导，
+-- 但「这几个目录属于同一摊事」「这个目录叫什么」是用户的判断，必须能写。
+CREATE TABLE IF NOT EXISTS workspaces (
+  path        TEXT PRIMARY KEY,
+  label       TEXT,
+  group_name  TEXT,
+  note        TEXT,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
 -- 7. agent_messages：跨 session 消息总线
 CREATE TABLE IF NOT EXISTS agent_messages (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,

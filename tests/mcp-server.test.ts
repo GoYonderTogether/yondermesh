@@ -132,19 +132,32 @@ describe('LOOP-011 验收门 1: listTools', () => {
     mcp = new McpServer(new SessionStore(':memory:'));
   });
 
- it('返回工具列表（精简集 + legacy + yondermesh_，共 32 个）', () => {
+ it('对外只暴露 4 个职能工具（看/说/管/标）', () => {
     const tools = mcp.listTools();
-  expect(tools).toHaveLength(32);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'message',
+      'observe',
+      'orchestrate',
+      'workspace',
+    ]);
   });
 
-  it('工具名称正确', () => {
-    const tools = mcp.listTools();
-    const names = tools.map((t) => t.name);
-    expect(names).toContain('search_sessions');
-    expect(names).toContain('get_session_detail');
-    expect(names).toContain('get_session_handoff');
-    expect(names).toContain('get_session_relations');
-    expect(names).toContain('get_overview');
+  it('旧工具名不再列出，但仍可调用（可见性 ≠ 可调用性）', async () => {
+    const names = mcp.listTools().map((t) => t.name);
+    expect(names).not.toContain('search_sessions');
+    expect(names).not.toContain('who_is_waiting');
+    // 但路由还在
+    const r = await mcp.callTool('who_is_waiting', {});
+    expect(r.content).not.toContain('未知工具');
+  });
+
+  it('工具名称正确（收敛后只有 4 个职能工具）', () => {
+    const names = mcp.listTools().map((t) => t.name);
+    expect(names).toContain('observe');   // 看：合并 search_sessions/get_session/list_active/overview/…
+    expect(names).toContain('message');   // 说：合并 send/mailbox/post_message/get_messages
+    expect(names).toContain('orchestrate'); // 管：合并 handoff/launch/inject/transfer/prior
+    expect(names).toContain('workspace'); // 标：工作目录归属（新增）
+    expect(names).toHaveLength(4);
   });
 
   it('每个工具有 description 和 inputSchema', () => {
@@ -363,7 +376,7 @@ describe('LOOP-011 验收门 9: stdio 协议', () => {
       id: 2,
       method: 'tools/list',
     });
-  expect(resp.result.tools).toHaveLength(32);
+  expect(resp.result.tools).toHaveLength(4);
   });
 
   it('handleMessage 处理 tools/call 请求', async () => {

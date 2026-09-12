@@ -27,25 +27,30 @@ import type { Extension, MountResult, MountStatus, CliTarget } from './types.js'
 
 /** 生成 awareness 段落内容 */
 function generateContextBlock(): string {
+  // 这段会被注入到每个 CLI 的指令文件里，每次会话都占 token —— 保持短。
+  // 只放「必须知道才能用对」的东西：4 个工具 + 3 条铁律 + 1 条禁忌。
+  // 详细场景规则见 skills/yondermesh-agent-bus/SKILL.md。
   return [
-    '## yondermesh',
+    '## yondermesh（本机的 Agent 上下文总线）',
     '',
-    'yondermesh is installed on this machine. It indexes all CLI agent sessions (Claude Code, Codex, cass) into a local SQLite vault.',
+    '本机所有 CLI agent 的会话都汇总在本地 SQLite 里。你有 **4 个工具**：',
     '',
-    'Available capabilities:',
-    '- **MCP tools**: query sessions by time/project/source/topology (if MCP server is mounted)',
-    '- **CLI**: run `ymesh help` for commands (scan, status, sessions, doctor, mount)',
-    '- **Skill**: `$yondermesh-diagnose` for system health checks',
-    '- **Session query**: `ymesh sessions --json --limit 10` to see recent work',
-    '- **Mailbox**: cross-session messaging via `ymesh mailbox check` (CLI) or `yondermesh_mailbox_check` (MCP). Other agents can send you messages; call `mailbox check` at task start to see if you have unread.',
+    '- **`observe`** —— 看。scope 选看哪儿（me/global/project/session/active/tree），filter 只要什么，shape 决定形态。',
+    '  筛选用参数，不要后处理：`roles:["user"]` 只看人的话；`min_length:200` 只要长需求；`exclude:["tool"]` 排掉工具链。',
+    '- **`message`** —— 说。`delivery`: `now` 立刻发（目标在跑会被拒绝）；`after_turn` 等我这轮结束；`on_reply` 等对方回复完用户、以用户口吻发给它。',
+    '- **`orchestrate`** —— 管。`action`: spawn 起新会话 / assign 派活给已有会话 / handoff 接力 / await 等结果 / discuss 多方讨论 / prior 这事以前有人试过吗。',
+    '- **`workspace`** —— 标。工作目录的归属分组（`status` 看某目录下现在有哪些 agent 在跑）。',
     '',
-    'Mailbox usage:',
-    '- Check your inbox: `ymesh mailbox check` or MCP `yondermesh_mailbox_check`',
-    '- Post to another agent: `ymesh mailbox post --to <sid> --body "<msg>"` or MCP `yondermesh_mailbox_post`',
-    '- Reply to a message: `ymesh mailbox post --reply-to <id> --body "<msg>"` or MCP `yondermesh_mailbox_reply`',
-    '- Find your own session id: `ymesh mailbox whoami` or MCP `yondermesh_whoami`',
+    '**三条铁律**：',
+    '1. 动手前先 `observe` —— 不知道现状就 spawn，会起一堆重复会话。',
+    '2. 能 `assign` 就不要 `spawn` —— 重复会话是上下文分裂的头号来源。',
+    '3. `discuss` 必须配不同 model —— 同模型讨论等于同一张嘴说三遍。',
     '',
-    'Use these to recall prior work context, check what other agents did, or diagnose issues.',
+    '**禁忌**：不要用 `message` 的 `now` 给**正在跑**的会话发消息（外部注入会与它自己的进程双写，损坏会话）。用 `on_reply`。',
+    '',
+    '**开工先 `message({action:"check"})`** 看有没有别的 agent 给你留言。每个工具响应末尾都带一小块「现状」，不用另外查全局。',
+    '',
+    'CLI 等价入口：`ymesh observe` / `ymesh message` / `ymesh orchestrate` / `ymesh workspace`（整机诊断 `$yondermesh-diagnose`）。',
   ].join('\n');
 }
 
@@ -82,6 +87,26 @@ export function defaultExtensions(_home?: string): Extension[] {
       type: 'skill',
       name: 'trae-awareness',
       skillPath: traeAwarenessSkillPath,
+    });
+  }
+
+  // agent-bus skill：4 个职能工具的完整场景规则表（always-on 只放铁律，细节在这）
+  const agentBusSkillPath = join(resolveCurrentSymlink(), 'skills', 'yondermesh-agent-bus');
+  if (existsSync(agentBusSkillPath)) {
+    exts.push({
+      type: 'skill',
+      name: 'yondermesh-agent-bus',
+      skillPath: agentBusSkillPath,
+    });
+  }
+
+  // mailbox skill：跨会话消息的具体用法
+  const mailboxSkillPath = join(resolveCurrentSymlink(), 'skills', 'yondermesh-mailbox');
+  if (existsSync(mailboxSkillPath)) {
+    exts.push({
+      type: 'skill',
+      name: 'yondermesh-mailbox',
+      skillPath: mailboxSkillPath,
     });
   }
 

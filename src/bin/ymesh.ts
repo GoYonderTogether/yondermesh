@@ -75,6 +75,9 @@ import type {
   SendTarget,
 } from '../mailbox/index.js';
 import { MAIL_KINDS, MAIL_PRIORITIES, formatSelfSessionFailure, agentMessage } from '../mailbox/index.js';
+import { observe } from '../mcp/observe.js';
+import { orchestrate } from '../mcp/orchestrate.js';
+import { workspace as workspaceCmd } from '../mcp/workspace.js';
 import { loadWrapper as regLoadWrapper, listImporters } from '../adapters/registry.js';
 import { scaffoldAdapter } from '../sdk/scaffold.js';
 import type { ScaffoldOptions } from '../sdk/scaffold.js';
@@ -2028,6 +2031,127 @@ function fmtLocalTime(ms: number): string {
 }
 
 /**
+ * observe 命令 —— 看（与 MCP 的 observe 同一实现）。
+ *
+ * 用法：
+ *   ymesh observe [--scope me|global|project|session|active|tree] [--target <id|path>]
+ *                 [--shape list|detail|summary|tree|stats] [--roles user,assistant]
+ *                 [--exclude tool] [--min-length 200] [--keyword X] [--since 7d] [--limit N]
+ */
+async function cmdObserve(flags: Record<string, string | boolean>): Promise<number> {
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  const store = new SessionStore(dbPath);
+  try {
+    const csv = (v: unknown): string[] | undefined =>
+      typeof v === 'string' ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined;
+    const res = await observe(
+      { store },
+      {
+        scope: (typeof flags.scope === 'string' ? flags.scope : 'global') as never,
+        target: typeof flags.target === 'string' ? flags.target : undefined,
+        shape: typeof flags.shape === 'string' ? (flags.shape as never) : undefined,
+        filter: {
+          roles: csv(flags.roles),
+          exclude: csv(flags.exclude),
+          minLength: typeof flags['min-length'] === 'string' ? Number(flags['min-length']) : undefined,
+          keyword: typeof flags.keyword === 'string' ? flags.keyword : undefined,
+          since: typeof flags.since === 'string' ? flags.since : undefined,
+          until: typeof flags.until === 'string' ? flags.until : undefined,
+        },
+        limit: typeof flags.limit === 'string' ? Number(flags.limit) : undefined,
+        offset: typeof flags.offset === 'string' ? Number(flags.offset) : undefined,
+        includeAgents: flags.agents === true,
+        selfSessionId: typeof flags.self === 'string' ? flags.self : undefined,
+      },
+    );
+    if (flags.json) console.log(JSON.stringify(res, null, 2));
+    else console.log(res.text);
+    return res.ok ? 0 : 1;
+  } finally {
+    store.close();
+  }
+}
+
+/**
+ * orchestrate 命令 —— 管（与 MCP 的 orchestrate 同一实现）。
+ *
+ * 用法：ymesh orchestrate <action> [--target <id>] [--brief "..."] [--query "..."]
+ *                              [--to a,b] [--cli <cli>] [--model <m>] [--cwd <path>]
+ */
+async function cmdOrchestrate(flags: Record<string, string | boolean>): Promise<number> {
+  const positional = process.argv.slice(process.argv.indexOf('orchestrate') + 1);
+  const action = positional[0] ?? '';
+  if (!action) {
+    console.error(
+      '用法：ymesh orchestrate <spawn|assign|handoff|await|discuss|prior|stop> [选项]\n' +
+        '  --target <id>  --brief "..."  --query "..."  --to a,b\n' +
+        '  --cli <cli>  --model <m>  --effort <e>  --cwd <path>',
+    );
+    return 1;
+  }
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  const store = new SessionStore(dbPath);
+  const core = new MailboxCore(dbPath, dataDir);
+  try {
+    const res = await orchestrate(
+      { store, core },
+      {
+        action: action as never,
+        target: typeof flags.target === 'string' ? flags.target : undefined,
+        brief: typeof flags.brief === 'string' ? flags.brief : undefined,
+        query: typeof flags.query === 'string' ? flags.query : undefined,
+        to: typeof flags.to === 'string' ? flags.to.split(',').map((x) => x.trim()) : undefined,
+        delivery: typeof flags.delivery === 'string' ? (flags.delivery as never) : undefined,
+        config: {
+          cli: typeof flags.cli === 'string' ? flags.cli : undefined,
+          model: typeof flags.model === 'string' ? flags.model : undefined,
+          effort: typeof flags.effort === 'string' ? flags.effort : undefined,
+          cwd: typeof flags.cwd === 'string' ? flags.cwd : undefined,
+        },
+        limit: typeof flags.limit === 'string' ? Number(flags.limit) : undefined,
+        selfSessionId: typeof flags.self === 'string' ? flags.self : undefined,
+      } as never,
+    );
+    if (flags.json) console.log(JSON.stringify(res, null, 2));
+    else console.log(res.text);
+    return res.ok ? 0 : 1;
+  } finally {
+    core.close();
+    store.close();
+  }
+}
+
+/**
+ * workspace 命令 —— 标（与 MCP 的 workspace 同一实现）。
+ *
+ * 用法：ymesh workspace <list|add|update|remove|status> [--path P] [--label L] [--group G] [--note N]
+ */
+function cmdWorkspace(flags: Record<string, string | boolean>): number {
+  const positional = process.argv.slice(process.argv.indexOf('workspace') + 1);
+  const action = positional[0] ?? 'list';
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  const store = new SessionStore(dbPath);
+  try {
+    const res = workspaceCmd(store, {
+      action: action as never,
+      path: typeof flags.path === 'string' ? flags.path : positional[1],
+      label: typeof flags.label === 'string' ? flags.label : undefined,
+      group: typeof flags.group === 'string' ? flags.group : undefined,
+      note: typeof flags.note === 'string' ? flags.note : undefined,
+      withinMinutes: typeof flags['within-minutes'] === 'string' ? Number(flags['within-minutes']) : undefined,
+    });
+    if (flags.json) console.log(JSON.stringify(res, null, 2));
+    else console.log(res.text);
+    return res.ok ? 0 : 1;
+  } finally {
+    store.close();
+  }
+}
+
+/**
  * message 命令 —— 跨 session 通信的统一入口（与 MCP 的 agent_message 同一实现）。
  *
  * 用法：
@@ -3288,6 +3412,12 @@ async function main(): Promise<number> {
     case 'state':
       return cmdState(flags);
 
+    case 'observe':
+      return await cmdObserve(flags);
+    case 'orchestrate':
+      return await cmdOrchestrate(flags);
+    case 'workspace':
+      return cmdWorkspace(flags);
     case 'message':
       return await cmdMessage(flags);
 

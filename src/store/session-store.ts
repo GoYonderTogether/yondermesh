@@ -1185,6 +1185,93 @@ export class SessionStore {
     );
   }
 
+
+  // ─── workspaces：工作目录的归属与分组（人为判断） ─────────────────────
+
+  /** 列出所有已标记的工作目录。 */
+  listWorkspaces(): Array<{
+    path: string;
+    label: string | null;
+    groupName: string | null;
+    note: string | null;
+    createdAt: number;
+    updatedAt: number;
+  }> {
+    const rows = this.db
+      .prepare('SELECT * FROM workspaces ORDER BY group_name NULLS LAST, path')
+      .all() as Row[];
+    return rows.map((r) => ({
+      path: r.path as string,
+      label: (r.label as string | null) ?? null,
+      groupName: (r.group_name as string | null) ?? null,
+      note: (r.note as string | null) ?? null,
+      createdAt: r.created_at as number,
+      updatedAt: r.updated_at as number,
+    }));
+  }
+
+  /** 取一个工作目录的标记。 */
+  getWorkspace(path: string): {
+    path: string;
+    label: string | null;
+    groupName: string | null;
+    note: string | null;
+  } | null {
+    const r = this.db.prepare('SELECT * FROM workspaces WHERE path = ?').get(path) as
+      | Row
+      | undefined;
+    if (!r) return null;
+    return {
+      path: r.path as string,
+      label: (r.label as string | null) ?? null,
+      groupName: (r.group_name as string | null) ?? null,
+      note: (r.note as string | null) ?? null,
+    };
+  }
+
+  /** 新增/更新一个工作目录标记（部分字段缺省则保留原值）。 */
+  upsertWorkspace(input: {
+    path: string;
+    label?: string | null;
+    groupName?: string | null;
+    note?: string | null;
+  }): void {
+    const now = Date.now();
+    const existing = this.getWorkspace(input.path);
+    if (existing) {
+      this.db
+        .prepare(
+          'UPDATE workspaces SET label = ?, group_name = ?, note = ?, updated_at = ? WHERE path = ?',
+        )
+        .run(
+          input.label !== undefined ? input.label : existing.label,
+          input.groupName !== undefined ? input.groupName : existing.groupName,
+          input.note !== undefined ? input.note : existing.note,
+          now,
+          input.path,
+        );
+      return;
+    }
+    this.db
+      .prepare(
+        'INSERT INTO workspaces (path, label, group_name, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run(
+        input.path,
+        input.label ?? null,
+        input.groupName ?? null,
+        input.note ?? null,
+        now,
+        now,
+      );
+  }
+
+  /** 删掉一个工作目录标记（只删标记，不动任何 session）。 */
+  removeWorkspace(path: string): boolean {
+    const r = this.db.prepare('DELETE FROM workspaces WHERE path = ?').run(path);
+    return Number(r.changes) > 0;
+  }
+
   /** 关闭数据库 */
   close(): void {
     this.db.close();

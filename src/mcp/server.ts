@@ -29,6 +29,10 @@ import {
 import { findTool as findNewTool, MCP_TOOLS } from './tools.js';
 import { MailboxCore } from '../mailbox/index.js';
 import { agentMessage } from '../mailbox/unified.js';
+import { observe, pickFilter } from './observe.js';
+import { orchestrate } from './orchestrate.js';
+import { workspace as workspaceCmd } from './workspace.js';
+import { buildSituation, attachSituation } from './situation.js';
 import { defaultDaemonConfig } from '../daemon/index.js';
 
 /** 安全获取 daemon 配置（避免循环依赖问题） */
@@ -560,7 +564,17 @@ export class McpServer {
      };
    });
 
-   return [...refined, ...legacy, ...newTools];
+   // ── 对外只暴露 4 个职能工具（看 / 说 / 管 / 标）────────────────────
+   //
+   // 为什么不再平铺 30 个：它们大多是同一个职能的不同切法（scope/shape 的差别）。
+   // 工具面越小、越正交，模型选错的概率越低。
+   //
+   // 旧的 30 个名字**仍然可以调用**（callTool 的路由没动），只是不再列出来 ——
+   // 「可见性 ≠ 可调用性」：不破坏既有调用方，但新会话只看到 4 个。
+   void refined;
+   void legacy;
+   void newTools;
+   return this.canonicalTools();
   }
 
   // -- 工具执行 -----------------------------------------------------------
@@ -618,6 +632,129 @@ export class McpServer {
    return result;
  }
 
+  /**
+   * 4 个职能工具：看(observe) / 说(message) / 管(orchestrate) / 标(workspace)。
+   *
+   * 收敛依据见 Obsidian `yondermesh/2-静态资料-static/03 设计-Agent接口收敛`。
+   * 每个职能展开后有很多可配场景（见各自 schema），但**动作面只有 4 个**。
+   * 每个响应都带一小块「现状」信封（见 situation.ts），模型不用主动查全局。
+   */
+  private canonicalTools(): McpToolDef[] {
+    return [
+      {
+        name: 'observe',
+        description:
+          '看——统一的查询与分析入口。scope 选看哪儿（me 我自己 / global 全局总览 / project 整个项目 / session 某个会话 / '
+          + 'active 谁在干活 / tree 会话树），filter 只要什么，shape 决定形态。'
+          + '筛选是查询的一部分，不用后处理：只看人的话用 roles:["user","assistant"]；'
+          + '只要长需求用 min_length:200；排掉工具噪音用 exclude:["tool"]。'
+          + '合并旧版 search_sessions / get_session / list_active / overview / extract_project_history / '
+          + 'query_user_requirements / query_agent_responses / agents / whoami。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            scope: { type: 'string', enum: ['me', 'global', 'project', 'session', 'active', 'tree'], description: '看哪儿，默认 global' },
+            target: { type: 'string', description: 'scope=session/tree 给 session id；scope=project 给项目路径' },
+            shape: { type: 'string', enum: ['list', 'detail', 'summary', 'tree', 'stats'], description: '要什么形态' },
+            roles: { type: 'array', items: { type: 'string' }, description: '只要这些角色：user / assistant / system / tool' },
+            exclude: { type: 'array', items: { type: 'string' }, description: '排除这些角色，如 ["tool"]' },
+            min_length: { type: 'number', description: '只要内容长度 >= 这个字数的' },
+            keyword: { type: 'string', description: '关键词模糊匹配' },
+            since: { type: 'string', description: '这个时间之后，支持 7d / 24h / 30m 或 ISO' },
+            until: { type: 'string', description: '这个时间之前' },
+            limit: { type: 'number', description: '最多几条，默认 20', default: 20 },
+            offset: { type: 'number', description: '翻页用，默认 0', default: 0 },
+            include_agents: { type: 'boolean', description: 'scope=global 时附带 CLI 列表', default: false },
+            self_session_id: { type: 'string', description: '显式指定自己的 session（scope=me）' },
+          },
+          required: ['scope'],
+        },
+      },
+      {
+        name: 'message',
+        description:
+          '说——跟其他 agent 会话通信的唯一入口。不需要知道对方是哪个 CLI，只给 session id。'
+          + 'action=send 发 / check 看发给我的。delivery 决定时机：'
+          + 'now 立刻发（目标正在跑会被拒绝，外部注入会与它自己双写损坏会话）；'
+          + 'after_turn 等我这轮结束再发（积压合并成一条）；'
+          + 'on_reply 等对方回复完用户那一刻、以用户口吻发给它。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['send', 'check'], description: 'send=发 / check=看，默认 check', default: 'check' },
+            to: { type: 'string', description: 'send: 目标 session id（支持 hash / native / 前缀），或 "all" 广播' },
+            body: { type: 'string', description: 'send: 消息正文' },
+            delivery: { type: 'string', enum: ['now', 'after_turn', 'on_reply'], description: 'send: 投递时机，默认 now', default: 'now' },
+            reply_to: { type: 'number', description: 'send: 回复某条消息的 id' },
+            limit: { type: 'number', description: 'check: 最多几条，默认 20', default: 20 },
+            mark_read: { type: 'boolean', description: 'check: 读完标已读，默认 true', default: true },
+            unread_only: { type: 'boolean', description: 'check: 只看未读，默认 true', default: true },
+            self_session_id: { type: 'string', description: 'check: 显式自己的 session' },
+          },
+          required: ['action'],
+        },
+      },
+      {
+        name: 'orchestrate',
+        description:
+          '管——我作为上级对下属 agent 的动作。action 选树上的操作：'
+          + 'spawn 起新会话（可编排 config.cli/model/effort/cwd，cwd 强烈建议给）；'
+          + 'assign 把活派给已有会话（别重复起新的）；'
+          + 'handoff 生成接力包交给另一个 agent；'
+          + 'await 等某个会话出结果；'
+          + 'discuss 拉多个会话互相讨论（必须给不同 model，否则是同一张嘴说三遍）；'
+          + 'prior 这事以前有人试过吗；'
+          + 'stop 暂不支持（ymesh 不持有别的 agent 的进程句柄）。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['spawn', 'assign', 'handoff', 'await', 'discuss', 'stop', 'prior'], description: '要做什么' },
+            target: { type: 'string', description: 'assign/await/handoff 的目标 session id' },
+            brief: { type: 'string', description: '任务描述（spawn/assign/discuss 用）' },
+            to: { type: 'array', items: { type: 'string' }, description: 'discuss: 拉哪几个会话进来（>=2）' },
+            query: { type: 'string', description: 'prior: 要查的任务/报错文本' },
+            delivery: { type: 'string', enum: ['now', 'after_turn', 'on_reply'], description: 'assign/discuss 的投递时机，默认 on_reply' },
+            config: {
+              type: 'object',
+              description: 'spawn 的执行配置',
+              properties: {
+                cli: { type: 'string', description: '用哪个 CLI 起（spawn 必填）' },
+                model: { type: 'string', description: '模型 id' },
+                effort: { type: 'string', description: '推理强度 low/medium/high' },
+                cwd: { type: 'string', description: '工作目录（强烈建议给）' },
+                timeout_ms: { type: 'number', description: '超时毫秒' },
+              },
+            },
+            limit: { type: 'number', description: 'tail/handoff 条数，默认 30' },
+            self_session_id: { type: 'string', description: '发送方 session id' },
+          },
+          required: ['action'],
+        },
+      },
+      {
+        name: 'workspace',
+        description:
+          '标——工作目录的归属与分组（写人的判断，不是读 agent 状态）。'
+          + 'project_path 只能从 CLI 的 cwd 自动推出来，但「这几个目录属于同一摊事」「这目录我叫它笔记库」'
+          + '是人的判断，机器推不出来，所以需要能写。'
+          + 'add/update 标记（label 起名 / group 分组 / note 备注）；list 看已标记；'
+          + 'status 看每个标记目录下现在有哪些 agent 在跑；remove 取消标记（不动会话）。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['list', 'add', 'update', 'remove', 'status'], description: '做什么' },
+            path: { type: 'string', description: '工作目录绝对路径' },
+            label: { type: 'string', description: '给它起个名字，如「笔记库」' },
+            group: { type: 'string', description: '归到哪一组，如「个人」/「工作」' },
+            note: { type: 'string', description: '备注' },
+            within_minutes: { type: 'number', description: 'status: 只看最近多久的会话，默认 30', default: 30 },
+          },
+          required: ['action'],
+        },
+      },
+    ];
+  }
+
   // -- T1.3 精简集工具 ---------------------------------------------------
 
   /** 精简集工具路由,未匹配返回 null(旧工具路由随后兜底) */
@@ -631,8 +768,15 @@ export class McpServer {
         return this.getOverview(args);
       case 'handoff':
         return this.getSessionHandoff(args);
+      case 'observe':
+        return this.refinedObserve(args);
+      case 'message':
       case 'agent_message':
         return this.refinedAgentMessage(args);
+      case 'orchestrate':
+        return this.refinedOrchestrate(args);
+      case 'workspace':
+        return this.refinedWorkspace(args);
       case 'agents':
         return this.refinedAgents(args);
       default:
@@ -691,6 +835,83 @@ export class McpServer {
   }
 
   /** mailbox: action 参数分发到旧 mailbox/post_message 工具 */
+  /** observe —— 看（统一查询与分析） */
+  private async refinedObserve(args: Record<string, unknown>): Promise<McpToolResult> {
+    const scope = (typeof args.scope === 'string' ? args.scope : 'global') as
+      | 'me' | 'global' | 'project' | 'session' | 'active' | 'tree';
+    const shape = typeof args.shape === 'string' ? (args.shape as never) : undefined;
+    const res = await observe(
+      { store: this.store },
+      {
+        scope,
+        target: typeof args.target === 'string' ? args.target : undefined,
+        filter: pickFilter(args),
+        shape,
+        limit: typeof args.limit === 'number' ? args.limit : undefined,
+        offset: typeof args.offset === 'number' ? args.offset : undefined,
+        includeAgents: args.include_agents === true,
+        selfSessionId:
+          typeof args.self_session_id === 'string' ? args.self_session_id : undefined,
+      },
+    );
+    return { content: res.text, isError: !res.ok };
+  }
+
+  /** orchestrate —— 管（对下属 agent 的动作） */
+  private async refinedOrchestrate(args: Record<string, unknown>): Promise<McpToolResult> {
+    const action = (typeof args.action === 'string' ? args.action : '') as never;
+    if (!action) {
+      return { content: 'orchestrate 需要 action', isError: true };
+    }
+    const config = (args.config ?? {}) as Record<string, unknown>;
+    const configObj =
+      Object.keys(config).length > 0
+        ? {
+            cli: typeof config.cli === 'string' ? config.cli : undefined,
+            model: typeof config.model === 'string' ? config.model : undefined,
+            effort: typeof config.effort === 'string' ? config.effort : undefined,
+            cwd: typeof config.cwd === 'string' ? config.cwd : undefined,
+            timeoutMs: typeof config.timeout_ms === 'number' ? config.timeout_ms : undefined,
+          }
+        : undefined;
+
+    const config2 = defaultDaemonConfigSafe();
+    const core = new MailboxCore(config2.dbPath, config2.dataDir);
+    try {
+      const res = await orchestrate(
+        { store: this.store, core },
+        {
+          action,
+          target: typeof args.target === 'string' ? args.target : undefined,
+          brief: typeof args.brief === 'string' ? args.brief : undefined,
+          to: Array.isArray(args.to) ? args.to.map(String) : undefined,
+          query: typeof args.query === 'string' ? args.query : undefined,
+          config: configObj,
+          delivery: typeof args.delivery === 'string' ? (args.delivery as never) : undefined,
+          limit: typeof args.limit === 'number' ? args.limit : undefined,
+          selfSessionId:
+            typeof args.self_session_id === 'string' ? args.self_session_id : undefined,
+        } as never,
+      );
+      return { content: res.text, isError: !res.ok };
+    } finally {
+      core.close();
+    }
+  }
+
+  /** workspace —— 标（工作目录的归属与分组） */
+  private async refinedWorkspace(args: Record<string, unknown>): Promise<McpToolResult> {
+    const res = workspaceCmd(this.store, {
+      action: (typeof args.action === 'string' ? args.action : 'list') as never,
+      path: typeof args.path === 'string' ? args.path : undefined,
+      label: typeof args.label === 'string' ? args.label : undefined,
+      group: typeof args.group === 'string' ? args.group : undefined,
+      note: typeof args.note === 'string' ? args.note : undefined,
+      withinMinutes: typeof args.within_minutes === 'number' ? args.within_minutes : undefined,
+    });
+    return { content: res.text, isError: !res.ok };
+  }
+
   /**
    * agent_message —— 跨 session 通信的唯一入口。
    *
@@ -725,7 +946,12 @@ export class McpServer {
     const core = new MailboxCore(config.dbPath, config.dataDir);
     try {
       const result = await agentMessage({ core, store: this.store }, input);
-      return { content: JSON.stringify(result, null, 2), isError: result.ok === false };
+      // 情境包：让模型在通信响应里就看见全局，不用另调一次查询
+      const selfId =
+        result.action === 'check' ? result.selfSessionId : input.selfSessionId;
+      const situation = buildSituation(this.store, selfId ?? null);
+      const body = JSON.stringify(result, null, 2);
+      return { content: attachSituation(body, situation), isError: result.ok === false };
     } finally {
       core.close();
     }

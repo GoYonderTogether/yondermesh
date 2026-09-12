@@ -15,7 +15,7 @@
  *  11. MCP whoIsWaiting：有等待 session 时返回 [REVIEW] 标记和 hint
  *  12. MCP listActiveSessions：返回 JSON 含 _hints 字段
  *  13. MCP whoIsWorking：返回文本含"下一步建议"
- *  14. MCP listTools：包含 who_is_waiting 工具
+ *  14. MCP：who_is_waiting 已从工具列表隐藏，但仍可调用（收敛成 observe）
  */
 
 import { describe, it, expect } from 'vitest';
@@ -279,10 +279,10 @@ describe('MCP whoIsWorking 工具含下一步建议', () => {
 });
 
 describe('MCP listTools 包含 who_is_waiting', () => {
-  it('listTools 返回 who_is_waiting', () => {
+  it('who_is_waiting 已从工具列表隐藏，但仍可调用（收敛进 observe）', async () => {
     const mcp = new McpServer(new SessionStore(':memory:'));
-    const tools = mcp.listTools();
-    const names = tools.map((t) => t.name);
-    expect(names).toContain('who_is_waiting');
+    expect(mcp.listTools().map((t) => t.name)).not.toContain('who_is_waiting');
+    const r = await mcp.callTool('who_is_waiting', {});
+    expect(r.isError).toBeFalsy();
   });
 });
