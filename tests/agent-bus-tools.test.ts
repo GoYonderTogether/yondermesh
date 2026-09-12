@@ -150,20 +150,45 @@ describe('observe 2. scope 各自可用', () => {
   });
 });
 
-describe('observe 3. tree 诚实呈现多父', () => {
-  it('一个会话有 3 个上级时，明说「不是唯一直接父」', async () => {
+describe('observe 3. tree 方向正确 + 上下级渲染', () => {
+  // 方向约定（实测确认）：spawned_by = from(**子**) → to(**父**)。
+  // 之前我把方向读反了，导致「3 个下属」被渲染成「3 个上级」。
+  it('子会话能查到父，父会话能查到子（方向不反）', async () => {
+    const env = makeEnv();
+    try {
+      const parent = env.addSession('parent-native', '/proj/t', [{ role: 'user', content: 'x' }]);
+      const c1 = env.addSession('c1-native', '/proj/t', [{ role: 'user', content: 'y' }]);
+      const c2 = env.addSession('c2-native', '/proj/t', [{ role: 'user', content: 'z' }]);
+      for (const c of [c1, c2]) {
+        // 子 → 父
+        env.store.addRelationship({ fromSessionId: c, toSessionId: parent, relationType: 'spawned_by' });
+      }
+
+      const asParent = await observe({ store: env.store }, { scope: 'tree', target: parent });
+      expect(asParent.text).toContain('起了 2 个下属');
+      expect(asParent.text).toContain('无上级（这是个 root）'); // 父自己不挂在上层
+      expect(asParent.text).not.toContain('个上层');
+
+      const asChild = await observe({ store: env.store }, { scope: 'tree', target: c1 });
+      expect(asChild.text).toContain('由');
+      expect(asChild.text).toContain('发起');
+      expect(asChild.text).toContain('没有下属');
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it('挂在多个上层之下时（嵌套子代理）如实列出', async () => {
     const env = makeEnv();
     try {
       const child = env.addSession('child', '/proj/t', [{ role: 'user', content: 'x' }]);
       for (const p of ['p1-native', 'p2-native', 'p3-native']) {
         const pid = env.addSession(p, '/proj/t', [{ role: 'user', content: 'y' }]);
-        env.store.addRelationship({ fromSessionId: pid, toSessionId: child, relationType: 'spawned_by' });
+        // 子 → 父
+        env.store.addRelationship({ fromSessionId: child, toSessionId: pid, relationType: 'spawned_by' });
       }
       const r = await observe({ store: env.store }, { scope: 'tree', target: child });
-      expect(r.ok).toBe(true);
-      expect(r.text).toContain('记录了 3 个上级');
-      expect(r.text).toContain('不是');
-      expect(r.text).toContain('传递关系');
+      expect(r.text).toContain('3 个上层');
     } finally {
       env.cleanup();
     }
@@ -333,7 +358,8 @@ describe('situation 6. 情境包', () => {
     try {
       const p = env.addSession('parent', '/proj/x', [{ role: 'user', content: 'x' }]);
       const c = env.addSession('child', '/proj/x', [{ role: 'user', content: 'y' }]);
-      env.store.addRelationship({ fromSessionId: p, toSessionId: c, relationType: 'spawned_by' });
+      // 方向：子(c) → 父(p)
+      env.store.addRelationship({ fromSessionId: c, toSessionId: p, relationType: 'spawned_by' });
       const sit = buildSituation(env.store, c);
       // c 的 topology 是 root 但有父 → 必须标出不一致
       expect(sit.text).toContain('不一致');

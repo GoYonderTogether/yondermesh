@@ -56,6 +56,7 @@
  */
 
 import * as fs from 'node:fs';
+import { IncrementalIndex } from '../store/index.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type {
@@ -330,14 +331,47 @@ export class CodexImporter {
   ): Omit<CodexImportStats, 'scanRunId' | 'sourceInstanceId'> {
     const files = this.collectRolloutFiles(rootPath);
 
-    // —— 第一遍：逐文件解析 + 跨文件按 nativeId 聚合 ——
+    // ── 增量跳过（codex 版）────────────────────────────────────────────
+    //
+    // codex 与 claude/pi 不同：它可能把同一 nativeId 的段分散在多个 rollout 文件里，
+    // 逐文件跳会**丢掉没读那些文件的段**（聚合结果不完整 → 数据丢失）。
+    // 所以按「文件名的 session uuid」分组，**整组都未变**才跳。
+    // 实测本机 0 个 nativeId 对应多文件，但这里仍按组处理，避免将来踩坑。
+    const incr = new IncrementalIndex(this.store, files);
+    const groupOf = (absPath: string): string => {
+      const m = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(
+        absPath,
+      );
+      return m ? m[1] : absPath; // 认不出 uuid 就用自己的路径当组（=不跳）
+    };
+    const groupUnchanged = new Map<string, boolean>();
+    const fileStat = new Map<string, { mtimeMs: number; size: number }>();
+    for (const absPath of files) {
+      const st = IncrementalIndex.statFile(absPath);
+      if (!st) continue;
+      fileStat.set(absPath, st);
+      const g = groupOf(absPath);
+      const changed = incr.hasChanged(absPath, st);
+      groupUnchanged.set(g, (groupUnchanged.get(g) ?? true) && !changed);
+      if (changed) incr.mark(absPath, st);
+    }
+
+    // —— 第一遍：逐文件解析 + 跨文件按 nativeId 聚合（整组未变的跳过）——
     const logical = new Map<string, LogicalAccum>();
+    let incrementallySkipped = 0;
+    const skippedGroups = new Set<string>();
     files.forEach((absPath, fileOrder) => {
+      if (groupUnchanged.get(groupOf(absPath)) === true) {
+        incrementallySkipped++;
+        skippedGroups.add(groupOf(absPath));
+        return; // 整组未变 → 不读文件、不解析、不入库
+      }
       const segments = this.parseFile(absPath, rootPath);
       for (const seg of segments) {
         this.mergeSegment(logical, seg, fileOrder);
       }
     });
+    incr.flush();
 
     // 逻辑 session 按 nativeId 稳定遍历（入库顺序对结果无影响，但统计/顺序需确定）
     const logicalList = Array.from(logical.values()).sort((a, b) =>
@@ -359,6 +393,13 @@ export class CodexImporter {
     const subRecords: Array<{ internalId: string; parentNativeId?: string }> = [];
 
     // —— 第二遍：每个逻辑 session 入库一次 ——
+    // codex 的 scanned/unchanged 语义都是「**逻辑 session** 数」，不是文件数。
+    // 所以增量跳过的也要按**组**（= 一个 nativeId）计，不能按文件计 ——
+    // 否则二次扫描会报 scanned=0 / unchanged=2（实测被两条验收门抓到）。
+    void incrementallySkipped;
+    unchanged += skippedGroups.size;
+    scanned += skippedGroups.size;
+
     for (const lg of logicalList) {
       scanned++; // 逻辑 session 计数（含 0 消息）
       if (lg.messages.length === 0) {

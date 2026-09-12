@@ -17,7 +17,7 @@
 
 import type { SessionStore } from '../store/index.js';
 import type { SessionRecord, MessageRole } from '../store/index.js';
-import { buildSituation, attachSituation } from './situation.js';
+import { buildSituation, attachSituation, TREE_RELIABLE_SOURCES } from './situation.js';
 
 export type ObserveScope = 'me' | 'global' | 'project' | 'session' | 'active' | 'tree';
 export type ObserveShape = 'list' | 'detail' | 'summary' | 'tree' | 'stats';
@@ -393,47 +393,57 @@ function treeView(store: SessionStore, input: ObserveInput): ObserveResult {
   lines.push(`会话树（根：${shortId(id)}${s ? ` · ${s.source}` : ''}）`);
 
   const rels = store.queryRelationships(id);
-  const parents = rels.filter((r) => r.relationType === 'spawned_by' && r.direction === 'incoming');
-  const children = rels.filter((r) => r.relationType === 'spawned_by' && r.direction === 'outgoing');
 
-  // ⚠️ 诚实渲染：spawned_by 在实际数据里**不是干净的直接父边**——
-  // 实测 546 个会话有 1 个上级，但也有 2~105 个的（adapter 把传递祖先链也记了进来），
-  // 且同一个会话常同时有 spawned_by / sidechain_of / import_alias_of 三类边。
-  // 所以这里如实报告有几个、不假装是唯一父节点。
-  const uniqueParents = [...new Set(parents.map((p) => p.fromSessionId))];
+  // ⚠️ 方向约定（实测确认，所有 importer 一致）：
+  //   spawned_by 存的是 from=**子** 、to=**父**（子"被谁生"）。
+  //   所以判断时要按这个来，别按字面读 from/to。
+  //   · outgoing（from === 我）→ 我是**子**，to 是我的父
+  //   · incoming（to  === 我）→ 我是**父**，from 是我的子
+  const parents = rels.filter((r) => r.relationType === 'spawned_by' && r.direction === 'outgoing');
+  const children = rels.filter((r) => r.relationType === 'spawned_by' && r.direction === 'incoming');
+
+  const uniqueParents = [...new Set(parents.map((p) => p.toSessionId))];
   if (uniqueParents.length === 0) {
     lines.push('  无上级（这是个 root）');
   } else if (uniqueParents.length === 1) {
     const ps = store.getSession(uniqueParents[0]);
     lines.push(`  ↑ 由 ${shortId(uniqueParents[0])} 发起${ps ? `（${ps.source}）` : ''}`);
   } else {
-    lines.push(`  ↑ 记录了 ${uniqueParents.length} 个上级（**不是**唯一直接父）：`);
+    // 嵌套子代理场景：一个会话可能挂在多个上层之下（实测 520 个 subagent 也是别人的父）
+    lines.push(`  ↑ 有 ${uniqueParents.length} 个上层（嵌套子代理）：`);
     for (const pid of uniqueParents.slice(0, 5)) {
       const ps = store.getSession(pid);
-      lines.push(`      ${shortId(pid)}${ps ? `（${ps.source}）` : ''}`);
+      lines.push(`      ${shortId(pid)}${ps ? `（${ps.source} ${ps.topology}）` : ''}`);
     }
-    if (uniqueParents.length > 5) lines.push(`      … 还有 ${uniqueParents.length - 5} 个`);
-    lines.push('      （spawned_by 含传递关系，不是逐层的直接父边）');
   }
+
   if (children.length === 0) {
     lines.push('  ↓ 没有下属');
-    if (s && !['claude', 'claude-code', 'claude_code', 'hermes', 'opencode', 'codex'].includes(s.source)) {
-      lines.push(`     ⚠️ ${s.source} 的子代理不落独立会话文件，树状归属拿不到（不是"没起过"）`);
+    if (s && !TREE_RELIABLE_SOURCES.has(s.source)) {
+      lines.push(
+        s.source === 'pi'
+          ? '     ℹ️ pi 没有子代理机制（它的工具里没有 task 类工具）——"没有下属"是事实，不是采集缺失'
+          : `     ℹ️ ${s.source} 的子代理不落独立会话文件，拿不到树边`,
+      );
     }
+  } else {
+    lines.push(`  ↓ 起了 ${children.length} 个下属：`);
+    for (const c of children.slice(0, 10)) {
+      const cs = store.getSession(c.fromSessionId);
+      lines.push(
+        `      ${shortId(c.fromSessionId)}${cs ? `（${cs.source} ${cs.topology}）` : ''}  ` +
+          `${cs ? agoText(cs.fileModifiedAt ?? cs.lastSeenAt) : ''}`,
+      );
+    }
+    if (children.length > 10) lines.push(`      … 还有 ${children.length - 10} 个`);
   }
-  for (const c of children) {
-    const cs = store.getSession(c.toSessionId);
-    lines.push(
-      `  ↓ ${shortId(c.toSessionId)}${cs ? `（${cs.source} ${cs.topology}）` : ''}  ` +
-        `${cs ? agoText(cs.fileModifiedAt ?? cs.lastSeenAt) : ''}`,
-    );
-  }
+
   return {
     ok: true,
     scope: 'tree',
     shape: 'tree',
     text: lines.join('\n'),
-    data: { parents: parents.map((p) => p.fromSessionId), children: children.map((c) => c.toSessionId) },
+    data: { parents: uniqueParents, children: children.map((c) => c.fromSessionId) },
   };
 }
 

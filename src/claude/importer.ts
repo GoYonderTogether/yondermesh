@@ -23,6 +23,7 @@
  */
 
 import * as fs from 'node:fs';
+import { IncrementalIndex } from '../store/index.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type {
@@ -192,6 +193,8 @@ export class ClaudeCodeImporter {
     deviceId: string,
   ): Omit<ClaudeImportStats, 'scanRunId' | 'sourceInstanceId'> {
     const files = this.collectJsonlFiles(rootPath);
+    // 增量索引：读文件之前先 stat 比对 mtime/size，未变就整个跳过
+    const incr = new IncrementalIndex(this.store, files.map((f) => f.absPath));
 
     type Item = { absPath: string; relPath: string; isSubagent: boolean };
     const roots: Item[] = [];
@@ -218,11 +221,17 @@ export class ClaudeCodeImporter {
     // —— 第一遍：根 session ——
     for (const item of roots) {
       scanned++;
-      const parsed = this.parseFile(item.absPath, rootPath, false);
-      if (!parsed) {
-        skipped++; // 无有效消息 → 跳过该文件
+      const st = IncrementalIndex.statFile(item.absPath);
+      if (st && !incr.hasChanged(item.absPath, st)) {
+        unchanged++; // 没变 → 不读文件、不解析
         continue;
       }
+      const parsed = this.parseFile(item.absPath, rootPath, false);
+      if (!parsed) {
+        skipped++; // 无有效消息 → 跳过该文件（不写索引，下轮还会重试）
+        continue;
+      }
+      if (st) incr.mark(item.absPath, st);
       const result = this.store.ingestSession({
         deviceId,
         sourceInstanceId,
@@ -246,11 +255,17 @@ export class ClaudeCodeImporter {
     // —— 第二遍：子 agent ——
     for (const item of subs) {
       scanned++;
+      const st = IncrementalIndex.statFile(item.absPath);
+      if (st && !incr.hasChanged(item.absPath, st)) {
+        unchanged++;
+        continue;
+      }
       const parsed = this.parseFile(item.absPath, rootPath, true);
       if (!parsed) {
         skipped++;
         continue;
       }
+      if (st) incr.mark(item.absPath, st);
       const result = this.store.ingestSession({
         deviceId,
         sourceInstanceId,
@@ -301,6 +316,7 @@ export class ClaudeCodeImporter {
       }
     }
 
+    incr.flush(); // 批量落库增量索引
     return { scanned, inserted, updated, unchanged, skipped };
   }
 

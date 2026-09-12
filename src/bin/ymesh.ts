@@ -1223,6 +1223,9 @@ async function cmdDaemon(flags: Record<string, string | boolean>): Promise<numbe
 
   try {
     await daemon.start();
+    // start() 不等首扫（见 daemon.waitInitialScan 注释）。这里显式等一下，
+    // 只是为了能把首轮扫描结果打出来给用户看 —— 期间 watcher/reconcile 已在跑。
+    await daemon.waitInitialScan();
     const status = daemon.getStatus();
     console.log(`[yondermesh] daemon 已启动 (PID ${status.pid})`);
     console.log(`[yondermesh] DB: ${status.dbPath}`);

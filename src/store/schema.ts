@@ -124,6 +124,18 @@ CREATE TABLE IF NOT EXISTS workspaces (
   updated_at  INTEGER NOT NULL
 );
 
+-- 6.6 scanned_files：增量扫描索引（文件 → 上次扫描时的 mtime/size）
+-- 为什么需要：完整扫描的瓶颈是**读文件**（实测 claude 111 个文件读全文 1809ms，
+-- 而 stat 全部只要 1ms）。只有 mtime/size 变了才需要重新读+解析。
+-- 用「文件路径」而不是 native_session_id 做键 —— 后者的格式各 CLI 不同，
+-- 而且必须读文件才知道，起不到「读之前先跳过」的作用。
+CREATE TABLE IF NOT EXISTS scanned_files (
+  path        TEXT PRIMARY KEY,
+  mtime       INTEGER NOT NULL,
+  size        INTEGER NOT NULL,
+  scanned_at  INTEGER NOT NULL
+);
+
 -- 7. agent_messages：跨 session 消息总线
 CREATE TABLE IF NOT EXISTS agent_messages (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,

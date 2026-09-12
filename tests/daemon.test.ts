@@ -53,6 +53,7 @@ describe('LOOP-006: Daemon', () => {
   it('启动后 dataDir 和 DB 文件存在', async () => {
     daemon = new YondermeshDaemon({ ...makeConfig(tmpDir), skipClaude: true, skipCodex: true });
     await daemon.start();
+    await daemon.waitInitialScan();
     expect(fs.existsSync(tmpDir)).toBe(true);
     expect(fs.existsSync(path.join(tmpDir, 'daemon.pid'))).toBe(true);
   });
@@ -60,6 +61,7 @@ describe('LOOP-006: Daemon', () => {
   it('PID 文件写入当前进程 PID', async () => {
     daemon = new YondermeshDaemon({ ...makeConfig(tmpDir), skipClaude: true, skipCodex: true });
     await daemon.start();
+    await daemon.waitInitialScan();
     const pidContent = fs.readFileSync(path.join(tmpDir, 'daemon.pid'), 'utf-8').trim();
     expect(parseInt(pidContent, 10)).toBe(process.pid);
   });
@@ -67,6 +69,7 @@ describe('LOOP-006: Daemon', () => {
   it('单实例锁：第二个实例启动失败', async () => {
     daemon = new YondermeshDaemon({ ...makeConfig(tmpDir), skipClaude: true, skipCodex: true });
     await daemon.start();
+    await daemon.waitInitialScan();
 
     const daemon2 = new YondermeshDaemon({ ...makeConfig(tmpDir), skipClaude: true, skipCodex: true });
     await expect(daemon2.start()).rejects.toThrow(/已在运行/);
@@ -94,6 +97,7 @@ describe('LOOP-006: Daemon', () => {
   it('getStatus 返回正确的运行状态', async () => {
     daemon = new YondermeshDaemon({ ...makeConfig(tmpDir), skipClaude: true, skipCodex: true });
     await daemon.start();
+    await daemon.waitInitialScan();
     const status = daemon.getStatus();
     expect(status.running).toBe(true);
     expect(status.pid).toBe(process.pid);
@@ -106,6 +110,7 @@ describe('LOOP-006: Daemon', () => {
   it('stop 后 PID 文件被清理', async () => {
     daemon = new YondermeshDaemon({ ...makeConfig(tmpDir), skipClaude: true, skipCodex: true });
     await daemon.start();
+    await daemon.waitInitialScan();
     expect(fs.existsSync(path.join(tmpDir, 'daemon.pid'))).toBe(true);
     await daemon.stop();
     expect(fs.existsSync(path.join(tmpDir, 'daemon.pid'))).toBe(false);
@@ -115,6 +120,7 @@ describe('LOOP-006: Daemon', () => {
   it('stop 后 status.running 为 false', async () => {
     daemon = new YondermeshDaemon({ ...makeConfig(tmpDir), skipClaude: true, skipCodex: true });
     await daemon.start();
+    await daemon.waitInitialScan();
     await daemon.stop();
     const status = daemon.getStatus();
     expect(status.running).toBe(false);
@@ -127,6 +133,7 @@ describe('LOOP-006: Daemon', () => {
 
     daemon = new YondermeshDaemon({ ...makeConfig(tmpDir), skipClaude: true, skipCodex: true });
     await daemon.start();
+    await daemon.waitInitialScan();
     // 启动成功说明没有被旧 PID 阻止
     expect(daemon.getStatus().running).toBe(true);
   });
@@ -134,6 +141,7 @@ describe('LOOP-006: Daemon', () => {
   it('reconcile 定时触发全量扫描', async () => {
     daemon = new YondermeshDaemon({ ...makeConfig(tmpDir), skipClaude: true, skipCodex: true });
     await daemon.start();
+    await daemon.waitInitialScan();
     const firstScan = daemon.getStatus().lastScan!;
 
     // 等待至少一次 reconcile（100ms 间隔）

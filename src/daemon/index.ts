@@ -100,6 +100,8 @@ export class YondermeshDaemon {
    */
   private lastScanAt = new Map<string, number>();
   private briefingScheduler?: BriefingScheduler;
+  /** 首轮扫描的 Promise（启动时异步跑，不阻塞 watch/reconcile 起来） */
+  private scanInFlight: Promise<void> | null = null;
 
   constructor(config?: Partial<DaemonConfig>) {
     this.config = { ...defaultDaemonConfig(), ...config };
@@ -123,8 +125,14 @@ export class YondermeshDaemon {
     // 不预热则首次 fullScan 会漏掉 pi，要等下一轮 reconcile）
     await this.prewarmImporterModules();
 
-    // 全量扫描（同步等待完成）
-    await this.fullScan();
+    // ⚠️ 这里**不再** `await fullScan()`。
+    //
+    // 为什么要改：这台机首轮全量扫描要 20~30 秒（cass 11.7s + hermes 8s + codex 4s），
+    // 而它是同步阻塞的 —— 于是 watch / reconcile 定时器全被压在扫描后面，
+    // 启动期 daemon「活着但什么都不干」（实测 profiler 显示主线程 100% 在读文件
+    // 和 JSON.parse）。现在改成：先把监听和 reconcile 起起来，
+    // 首轮扫描异步跑（且按来源分片让出事件循环，见 scanAllKnownSourcesAsync）。
+    this.scanInFlight = this.runInitialScan();
 
     // 启动 watcher：
     // 有标准 jsonl session 目录、可做实时监听的 CLI：claude / codex / pi(及 omp/gsd)。
@@ -155,19 +163,29 @@ export class YondermeshDaemon {
 
     // 启动定时 reconcile
     this.reconcileTimer = setInterval(() => {
-      this.fullScan()
-        .then(async () => {
-          // 层 1：reconcile 后自动挂载（幂等：mountAll 内部策略先 remove 再 add）
-          if (this.config.autoMount) this.autoMount('reconcile');
-          // 层 2：投递队列（after_turn / on_reply）
-          await this.deliveryFlusher?.onScanned();
-        })
+      // **不重入**：上一轮（含首轮）还没跑完就跳过这一轮。
+      // 之前这里写成了 `scanInFlight.then(...)` 的链式空操作，等于没守 ——
+      // 结果是首轮扫描和 reconcile 并发抢同一个 SQLite 库，
+      // 两边都被拖慢（实测 codex 单项从 4s 涨到 53s）。
+      if (this.scanInFlight) {
+        process.stderr.write('[yondermesh] 上一轮扫描未完成，跳过本轮 reconcile\n');
+        return;
+      }
+      this.scanInFlight = (async () => {
+        await yieldToLoop(); // 同样先让出，别把定时器回调本身堵住
+        await this.fullScanAsync();
+        if (this.config.autoMount) this.autoMount('reconcile');
+        await this.deliveryFlusher?.onScanned();
+      })()
         .catch((err) => {
           // 失败永不静默：reconcile 出错只 push 进 watchErrors 是没人看的，
           // 会导致「daemon 活着但什么都不干」而无人察觉（实测踩到）。
           const line = `reconcile error: ${String(err)}`;
           this.watchErrors.push(line);
           process.stderr.write(`[yondermesh] ${line}\n`);
+        })
+        .finally(() => {
+          this.scanInFlight = null;
         });
     }, this.config.reconcileIntervalMs);
 
@@ -182,6 +200,18 @@ export class YondermeshDaemon {
     }
 
     // 确保进程不会因为 watcher 保持存活（调用方自己决定是否 hold）
+  }
+
+  /**
+   * 等首轮扫描跑完（可选）。
+   *
+   * `start()` 现在**不等**首扫（否则 100 秒的 cass 会把 watcher/reconcile 全堵住）。
+   * 但调用方有时确实想知道「首扫扫到了什么」——比如 CLI 要打印扫描摘要。
+   * 那就显式等这一个 Promise：等待期间事件循环是活的（扫描按来源分片让出），
+   * 所以 watcher / reconcile 早就在跑了。
+   */
+  async waitInitialScan(): Promise<void> {
+    if (this.scanInFlight) await this.scanInFlight;
   }
 
   /** 停止 daemon：清理资源 → 释放锁 */
@@ -261,6 +291,65 @@ export class YondermeshDaemon {
    * 依次扫描所有已知的 source（cass / claude / codex）。
    * 未来新增 source 只需在此方法追加一个分支。
    */
+  /**
+   * 把「扫哪些来源」列成一个步骤表 —— 同步和异步两个驱动共用同一份，
+   * 避免两处逻辑漂移。
+   */
+  private sourceSteps(): Array<{ source: string; skip: boolean; run: () => SourceScanResult[] }> {
+    return [
+      {
+        source: 'cass',
+        // cass 是一次性历史导入，不是实时源。持久化标记见 cassImportedOnce。
+        skip: this.config.skipCass || this.cassImported || this.cassEverImported(),
+        run: () => [this.scanCass()],
+      },
+      {
+        source: 'claude',
+        skip: !!this.config.skipClaude,
+        run: () => [this.scanClaude()],
+      },
+      {
+        source: 'codex',
+        skip: !!this.config.skipCodex,
+        run: () => [this.scanCodex()],
+      },
+      {
+        source: 'pi',
+        skip: !!this.config.skipPi,
+        run: () => this.scanPiFlavors(),
+      },
+    ];
+  }
+
+  /**
+   * 异步分片全扫：每扫完一个来源就**让出事件循环**。
+   *
+   * 为什么：单个来源内部是同步的（读文件 + SQLite），一口气跑完会把主线程占满
+   * 20~30 秒，watch / reconcile 定时器全被饿死。按来源切片 + setImmediate 让出，
+   * 定时器就有机会插进来。
+   */
+  async fullScanAsync(): Promise<FullScanResult> {
+    const startedAt = Date.now();
+    const results: SourceScanResult[] = [];
+    for (const step of this.sourceSteps()) {
+      if (step.skip) {
+        results.push({ source: step.source, scanned: 0, inserted: 0, updated: 0, skipped: true });
+        continue;
+      }
+      const t = Date.now();
+      results.push(...step.run());
+      const took = Date.now() - t;
+      // 只对慢的来源打日志（快的别刷屏）
+      if (took > 2000) {
+        process.stderr.write(`[yondermesh] 扫描 ${step.source}: ${took}ms\n`);
+      }
+      await yieldToLoop();
+    }
+    const finishedAt = Date.now();
+    this.lastScan = { results, startedAt, finishedAt };
+    return this.lastScan;
+  }
+
   private scanAllKnownSources(): SourceScanResult[] {
     const results: SourceScanResult[] = [];
 
@@ -295,6 +384,53 @@ export class YondermeshDaemon {
     return results;
   }
 
+  /** 首轮扫描（异步、分片）：不阻塞启动，失败也不影响 daemon 存活 */
+  private async runInitialScan(): Promise<void> {
+    // ⚠️ 关键：先让出事件循环**再**开始扫。
+    // async 函数在第一个 await 之前是**同步执行**的 —— 如果直接开扫，
+    // cass 那 11.7 秒的同步 import 会把 start() 堵在这里，
+    // 后面的 watcher / reconcile 一个都起不来（实测踩到）。
+    await yieldToLoop();
+    try {
+      const t = Date.now();
+      const r = await this.fullScanAsync();
+      process.stderr.write(
+        `[yondermesh] 首轮扫描完成: ${r.results.filter((x) => !x.skipped).length} 个来源，${Date.now() - t}ms\n`,
+      );
+    } catch (err) {
+      process.stderr.write(`[yondermesh] 首轮扫描失败（daemon 继续运行）: ${String(err)}\n`);
+    } finally {
+      this.scanInFlight = null; // 释放：让 reconcile 正常接管
+    }
+  }
+
+  /**
+   * cass 是否在历史任何一次中导入过（**持久化**标记）。
+   *
+   * 为什么必须持久化：cass 是一次性历史导入，实测**每次跑要 100+ 秒**
+   * （3210 个会话、每个都要读全部消息）。而它按设计只该导入一次 ——
+   * 之前只用内存 flag，于是每次 daemon 重启都要白等 100 秒。
+   *
+   * 注意不能靠 `source='cass'` 判断：cass 导入时写的是**原始 agent 的 source**
+   * （claude/hermes/…），库里根本没有 source='cass' 的会话（实测 0 条）。
+   */
+  private cassEverImported(): boolean {
+    try {
+      return this.store.getMeta('cass_imported_at') !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 标记 cass 已导入（持久化） */
+  private markCassImported(): void {
+    try {
+      this.store.setMeta('cass_imported_at', String(Date.now()));
+    } catch {
+      /* 标记写失败不影响导入本身 */
+    }
+  }
+
   private scanCass(): SourceScanResult {
     try {
       const dbPath = resolveCassDbPath();
@@ -304,6 +440,7 @@ export class YondermeshDaemon {
       const importer = new CassImporter(this.store, { deviceId: this.deviceId });
       const stats = importer.import();
       this.cassImported = true;
+      this.markCassImported(); // 持久化：下次启动直接跳过（省 100+ 秒）
       return {
         source: 'cass',
         scanned: stats.scanned,
@@ -677,3 +814,8 @@ export class YondermeshDaemon {
 /** 导出配置类型和默认值 */
 export { defaultDaemonConfig, defaultDataDir } from './config.js';
 export type { DaemonConfig } from './config.js';
+
+/** 让出事件循环一拍：setImmediate 比 setTimeout(0) 更靠前，且不引入额外延迟。 */
+function yieldToLoop(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}

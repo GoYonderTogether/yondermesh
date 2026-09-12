@@ -35,3 +35,5 @@ export type {
   SourceInstance,
   SourceInstanceInput,
 } from './types.js';
+export { IncrementalIndex } from './incremental.js';
+export type { FileState } from './incremental.js';

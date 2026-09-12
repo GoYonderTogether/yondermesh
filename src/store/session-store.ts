@@ -1272,6 +1272,84 @@ export class SessionStore {
     return Number(r.changes) > 0;
   }
 
+
+  // ─── 增量扫描索引（scanned_files）────────────────────────────────────
+
+  /**
+   * 批量取「文件 → 上次扫描时的 mtime/size」。
+   *
+   * 供 importer 在**读文件之前**判断能不能跳过 —— 这是完整扫描最大的优化点：
+   * 实测 claude 111 个文件读全文要 1809ms，而 stat 全部只要 1ms。
+   */
+  getScannedFileStates(
+    paths: string[],
+  ): Map<string, { mtime: number; size: number }> {
+    const out = new Map<string, { mtime: number; size: number }>();
+    if (paths.length === 0) return out;
+    // SQLite 变量上限 999 → 分批
+    const CHUNK = 500;
+    for (let i = 0; i < paths.length; i += CHUNK) {
+      const slice = paths.slice(i, i + CHUNK);
+      const marks = slice.map(() => '?').join(',');
+      const rows = this.db
+        .prepare(`SELECT path, mtime, size FROM scanned_files WHERE path IN (${marks})`)
+        .all(...slice) as Row[];
+      for (const r of rows) {
+        out.set(r.path as string, {
+          mtime: r.mtime as number,
+          size: r.size as number,
+        });
+      }
+    }
+    return out;
+  }
+
+  /** 记录一批文件已扫描（幂等 upsert）。 */
+  markFilesScanned(entries: Array<{ path: string; mtime: number; size: number }>): void {
+    if (entries.length === 0) return;
+    const now = Date.now();
+    const stmt = this.db.prepare(
+      `INSERT INTO scanned_files (path, mtime, size, scanned_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(path) DO UPDATE SET mtime = excluded.mtime, size = excluded.size, scanned_at = excluded.scanned_at`,
+    );
+    for (const e of entries) stmt.run(e.path, e.mtime, e.size, now);
+  }
+
+  /** 清掉一批文件的增量索引（文件已不存在时用，避免索引无限增长）。 */
+  forgetScannedFiles(paths: string[]): void {
+    if (paths.length === 0) return;
+    const CHUNK = 500;
+    for (let i = 0; i < paths.length; i += CHUNK) {
+      const slice = paths.slice(i, i + CHUNK);
+      const marks = slice.map(() => '?').join(',');
+      this.db.prepare(`DELETE FROM scanned_files WHERE path IN (${marks})`).run(...slice);
+    }
+  }
+
+  /** 增量索引的规模（诊断用）。 */
+  getScannedFileCount(): number {
+    const r = this.db.prepare('SELECT COUNT(*) AS n FROM scanned_files').get() as Row | undefined;
+    return (r?.n as number) ?? 0;
+  }
+
+
+  // ─── 通用 KV（daemon 状态、一次性标记等）────────────────────────────
+
+  /** 读一个元数据值（表已在构造时建好，见 schema_meta）。 */
+  getMeta(key: string): string | null {
+    const r = this.db.prepare('SELECT value FROM schema_meta WHERE key = ?').get(key) as
+      | Row
+      | undefined;
+    return r ? ((r.value as string) ?? null) : null;
+  }
+
+  /** 写一个元数据值（幂等）。 */
+  setMeta(key: string, value: string): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
+      .run(key, value);
+  }
+
   /** 关闭数据库 */
   close(): void {
     this.db.close();

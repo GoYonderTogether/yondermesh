@@ -36,6 +36,7 @@
  */
 
 import * as fs from 'node:fs';
+import { IncrementalIndex } from '../store/index.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type {
@@ -344,6 +345,8 @@ export class PiImporter {
     source: string,
   ): Omit<PiFlavorStats, 'source' | 'cli' | 'sessionsDir' | 'scanRunId' | 'sourceInstanceId'> {
     const files = this.collectJsonlFiles(rootPath);
+    // 增量索引：pi 是一文件一会话，所以可以安全地按 mtime/size 整文件跳过
+    const incr = new IncrementalIndex(this.store, files);
     let scanned = 0;
     let inserted = 0;
     let updated = 0;
@@ -352,11 +355,17 @@ export class PiImporter {
 
     for (const absPath of files) {
       scanned++;
+      const st = IncrementalIndex.statFile(absPath);
+      if (st && !incr.hasChanged(absPath, st)) {
+        unchanged++; // 没变 → 不读文件、不解析
+        continue;
+      }
       const parsed = this.parseFile(absPath, rootPath);
       if (!parsed) {
         skipped++;
         continue;
       }
+      if (st) incr.mark(absPath, st);
       const result = this.store.ingestSession({
         deviceId,
         sourceInstanceId,
@@ -376,6 +385,7 @@ export class PiImporter {
       else unchanged++;
     }
 
+    incr.flush(); // 批量落库增量索引
     return { scanned, inserted, updated, unchanged, skipped };
   }
 

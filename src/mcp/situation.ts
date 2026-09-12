@@ -35,9 +35,18 @@ export interface SituationMe {
   /** 跟我有过交流的会话数 */
   talkedWith: number;
   /**
-   * 树状归属是否可信。
-   * pi 的子代理是**进程内内联**的（task 工具结果直接写进父会话的 message 流），
-   * 不落独立会话文件 → 拿不到树边。claude/hermes/opencode 落独立文件，可信。
+   * 树状归属是否可信（即：这个 CLI 有「子代理」这个概念吗）。
+   *
+   * 实测结论（2026-09-12 核过源码与数据）：
+   *   · claude / hermes / opencode / codex —— 子代理会落**独立会话文件**并带
+   *     agentId / parent_session_id 等字段 → 树边真实可建。
+   *   · **pi 根本没有子代理机制** —— 它的工具集里没有 task/agent 类工具
+   *     （只有 bash/edit/read/write/mcp）。所谓「起个子代理」就是拿 bash
+   *     再跑一个 pi 进程，父子之间**没有任何记录**（session header 无 parent 字段，
+   *     文件里也没有 parentSessionId）。
+   *     所以 pi 显示 0 个 subagent 是**事实，不是采集缺失**。
+   *
+   * 对 pi 来说「树」只能靠人/编排层补：ymesh 自己 launch 的会话可以记关系。
    */
   treeReliable: boolean;
 }
@@ -58,7 +67,7 @@ export interface Situation {
 }
 
 /** 哪些 CLI 的子代理会落成独立会话文件（因此树边可信） */
-const TREE_RELIABLE_SOURCES = new Set([
+export const TREE_RELIABLE_SOURCES = new Set([
   'claude',
   'claude-code',
   'claude_code',
@@ -141,10 +150,16 @@ function buildMe(
   let parentId: string | null = null;
   const childIds: string[] = [];
   try {
+    // 方向约定：spawned_by = from(子) → to(父)。别按字面读 from/to。
     for (const r of store.queryRelationships(selfId)) {
       if (r.relationType !== 'spawned_by') continue;
-      if (r.direction === 'incoming') parentId = r.fromSessionId;
-      else childIds.push(r.toSessionId);
+      if (r.direction === 'outgoing') {
+        // from === 我 → 我是子，to 是我的父
+        if (!parentId) parentId = r.toSessionId;
+      } else {
+        // to === 我 → 我是父，from 是我的子
+        childIds.push(r.fromSessionId);
+      }
     }
   } catch {
     /* 关系表不可用就别挡着主流程 */
@@ -205,7 +220,7 @@ function render(s: Situation): string {
       me.push(`树上有上级 ${s.me.parentId.slice(0, 12)}${inconsistent ? '（topology 与关系表不一致）' : ''}`);
     }
     if (s.me.childIds.length > 0) me.push(`你起了 ${s.me.childIds.length} 个`);
-    if (!s.me.treeReliable) me.push('（本 CLI 子代理不落独立会话，树状归属不完整）');
+    if (!s.me.treeReliable) me.push('（本 CLI 没有子代理机制，所以没有上下级）');
     parts.push(me.join(' · '));
     if (s.me.peers.length > 0) {
       const peer = s.me.peers
