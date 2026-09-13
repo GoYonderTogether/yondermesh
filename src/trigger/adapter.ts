@@ -160,8 +160,12 @@ export const CLI_RESUME_COMMANDS: Record<
   string,
   (sessionId: string, prompt: string, opts?: { model?: string; cwd?: string }) => string[] | null
 > = {
+  // --skip-git-repo-check：目标会话的 cwd 不一定是 git 仓库（Codex 桌面会话目录
+  // 就是普通目录），不带这个 flag 会直接报
+  // 「Not inside a trusted directory and --skip-git-repo-check was not specified」
+  // 而拒绝投递 —— 实测踩到。
   codex: (sid, p, o) => [
-    'exec', 'resume', sid, p,
+    'exec', 'resume', '--skip-git-repo-check', sid, p,
     ...(o?.model ? ['-m', o.model] : []),
   ],
   claude: (sid, p, o) => [

@@ -106,7 +106,10 @@ export class DeliveryFlusher {
     for (const [sid, msgs] of groups) {
       // 限次：目标长期不可达时别每分钟 spawn 一次进程，试够就放弃（消息留在库里）
       if (msgs.every((m) => m.attempts >= MAX_DELIVERY_ATTEMPTS)) {
-        this.core.abandonDelivery(msgs.map((m) => m.id));
+        this.core.abandonDelivery(
+          msgs.map((m) => m.id),
+          `投递放弃：目标 ${sid.slice(0, 12)} 连续 ${MAX_DELIVERY_ATTEMPTS} 次未成功（目标可能长期在跑或 CLI 拒绝）`,
+        );
         this.log(
           `[yondermesh] 投递放弃（已试 ${MAX_DELIVERY_ATTEMPTS} 次）→ ${sid.slice(0, 12)}，消息仍留在库中`,
         );
@@ -173,7 +176,10 @@ export class DeliveryFlusher {
       }
       for (const [targetId, list] of byTarget) {
         if (list.every((m) => m.attempts >= MAX_DELIVERY_ATTEMPTS)) {
-          this.core.abandonDelivery(list.map((m) => m.id));
+          this.core.abandonDelivery(
+            list.map((m) => m.id),
+            `补投降级放弃：来源未知且目标 ${targetId.slice(0, 12)} 连续 ${MAX_DELIVERY_ATTEMPTS} 次未成功`,
+          );
           this.log(
             `[yondermesh] 补投降级放弃（来源未知，已试 ${MAX_DELIVERY_ATTEMPTS} 次）→ ${targetId.slice(0, 12)}`,
           );

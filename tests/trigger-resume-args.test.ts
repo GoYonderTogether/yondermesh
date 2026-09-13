@@ -18,7 +18,10 @@ describe('CLI 续接语法', () => {
   const PROMPT = 'hello';
 
   it('codex：exec resume <SESSION_ID> <PROMPT>（不是 --resume）', () => {
-    expect(CLI_RESUME_COMMANDS.codex?.(SID, PROMPT)).toEqual(['exec', 'resume', SID, PROMPT]);
+    // --skip-git-repo-check 必带：目标会话的 cwd 可能不是 git 仓库
+    expect(CLI_RESUME_COMMANDS.codex?.(SID, PROMPT)).toEqual([
+      'exec', 'resume', '--skip-git-repo-check', SID, PROMPT,
+    ]);
   });
 
   it('claude：-p <PROMPT> --resume <SESSION_ID>', () => {

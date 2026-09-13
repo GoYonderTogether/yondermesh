@@ -909,11 +909,23 @@ export class MailboxCore {
    * 放弃投递（尝试超限）：标记 delivered_at 让它退出队列，但**不删消息**，
    * 也不标记已读——人还能在库里看到它、知道没送出去。
    */
-  abandonDelivery(ids: number[]): void {
+  /**
+   * 放弃投递：把消息移出队列，并**记下放弃的原因**。
+   *
+   * 为什么不能只写 delivered_at：这一位代表「出队」，不代表「送到了」。
+   * 只写它会让"超过重试上限被放弃"和"成功投递"在数据里长得一模一样，
+   * 于是"我那条消息到底到没到"永远查不出来。原因写进 delivery_error，
+   * 查询侧就能区分：injected_at 有值=真送到，delivery_error 有值=没送到。
+   */
+  abandonDelivery(ids: number[], reason?: string): void {
     if (ids.length === 0) return;
     const now = Date.now();
-    const stmt = this.db.prepare('UPDATE agent_messages SET delivered_at = ? WHERE id = ?');
-    for (const id of ids) stmt.run(now, id);
+    const stmt = this.db.prepare(
+      'UPDATE agent_messages SET delivered_at = ?, delivery_error = COALESCE(delivery_error, ?) WHERE id = ?',
+    );
+    for (const id of ids) {
+      stmt.run(now, reason ?? '已放弃投递（超过重试上限）', id);
+    }
   }
 
   /**
