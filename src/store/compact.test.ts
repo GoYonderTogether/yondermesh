@@ -153,6 +153,28 @@ describe('SessionStore compact（数据库膨胀治理）', () => {
     expect(store.countFtsRows()).toBe(6);
   });
 
+  it('C7: compact 清掉孤儿行（session 已不存在的历史遗留）', () => {
+    ingest([msg('user', '正常会话')]);
+    const store2 = store as unknown as {
+      db: {
+        exec: (sql: string) => void;
+        prepare: (s: string) => { run: (...a: unknown[]) => unknown };
+      };
+    };
+    // 手工制造孤儿：模拟老版本 retain 用自己的连接删 session 时的状态
+    // （那个连接没开 PRAGMA foreign_keys，所以既不级联也不报错）
+    store2.db.exec('PRAGMA foreign_keys = OFF');
+    store2.db.prepare('INSERT INTO session_revisions (session_id, revision_number, content_hash, message_count, recorded_at) VALUES (?, 1, ?, 1, ?)').run('ghost-session', 'deadbeef', Date.now());
+    store2.db.prepare('INSERT INTO messages (session_id, revision_id, seq, role, content) VALUES (?, (SELECT max(id) FROM session_revisions), 0, ?, ?)').run('ghost-session', 'user', '孤儿消息');
+    store2.db.exec('PRAGMA foreign_keys = ON');
+
+    expect(store.countOrphanRows()).toBe(2);
+
+    const report = store.compactApply({});
+    expect(report.purgedOrphanRows).toBe(2);
+    expect(store.countOrphanRows()).toBe(0);
+  });
+
   it('C6: keep 模式仍然保留每一版正文（排障开关有效）', () => {
     store.setRevisionBodyMode('keep');
     ingest([msg('user', 'a')]);

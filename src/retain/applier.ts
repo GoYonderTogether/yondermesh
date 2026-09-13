@@ -20,7 +20,8 @@
 import { createGzip } from 'node:zlib';
 import { createWriteStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
+import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import {
   compileNoiseRules,
 } from './policy.js';
@@ -32,6 +33,15 @@ import { analyze } from './analyzer.js';
 import type { RetainReport } from './analyzer.js';
 import { classifySessions } from './session-classifier.js';
 import type { SessionClassification } from './session-classifier.js';
+
+// node:sqlite 是实验性内置，vitest/vite 静态解析会误判为裸包 sqlite。
+// 与 SessionStore 同一处理：运行时用 createRequire 加载，类型仍取自 @types/node。
+const nodeRequire = createRequire(import.meta.url);
+const { DatabaseSync } = nodeRequire('node:sqlite') as {
+  DatabaseSync: typeof DatabaseSyncType;
+};
+/** 类型位与值位同名：函数签名里继续写 `db: DatabaseSync` */
+type DatabaseSync = DatabaseSyncType;
 
 /** 执行结果 */
 export interface ApplyResult {
@@ -75,6 +85,35 @@ export interface ApplyResult {
  * @param policy 策略
  * @param options dryRun / skipBackup
  */
+/**
+ * 删除 session 之前，先把它在子表里的行清干净。
+ *
+ * 为什么需要：retain 用自己的 DatabaseSync 连接（不开 PRAGMA foreign_keys），
+ * 所以 `DELETE FROM sessions` **不会**级联，也不会报错——旧版本因此在线上留下
+ * 32938 条孤儿 messages（session 已不存在，任何查询都看不见，纯占空间）。
+ * 这里显式按同样的条件删子表，删完再删 session，与连接是否开外键无关。
+ *
+ * @param sessionWhere 选择 sessions 的条件（如 `started_at < ?`）
+ * @param params       条件参数
+ */
+function deleteSupersededChildren(
+  db: import('node:sqlite').DatabaseSync,
+  sessionWhere: string,
+  params: (string | number)[],
+): void {
+  const targets = `SELECT id FROM sessions WHERE ${sessionWhere}`;
+  // tool_calls → messages 有 ON DELETE CASCADE，但老库可能还没迁移，显式删更稳
+  try {
+    db.prepare(
+      `DELETE FROM message_tool_calls WHERE session_id IN (${targets})`,
+    ).run(...params);
+  } catch {
+    // 老库没有 message_tool_calls 表：忽略
+  }
+  db.prepare(`DELETE FROM messages WHERE session_id IN (${targets})`).run(...params);
+  db.prepare(`DELETE FROM session_revisions WHERE session_id IN (${targets})`).run(...params);
+}
+
 export function apply(
   dbPath: string,
   policy: RetainPolicy,
@@ -490,6 +529,10 @@ function applyArchive(
     const sessionsArchived = sessions.length;
 
     if (!policy.archive.keepSessionMetadata) {
+      // 删 session 前必须先清子表（messages / session_revisions / tool_calls）：
+      // 这个连接默认不开外键，直接 DELETE sessions 会留下**孤儿消息**
+      // （线上实测攒下 32938 条孤儿 messages，全是这么来的）。
+      deleteSupersededChildren(db, 'started_at < ?', [cutoff]);
       const deleteSessions = db.prepare(
         'DELETE FROM sessions WHERE started_at < ?',
       );
@@ -579,6 +622,8 @@ function applySessionNoise(
   try {
     db.exec('BEGIN');
     try {
+      // 同上：先清子表，避免留下孤儿
+      deleteSupersededChildren(db, 'id IN (SELECT id FROM tmp_sl_session_ids)', []);
       const result = db
         .prepare('DELETE FROM sessions WHERE id IN (SELECT id FROM tmp_sl_session_ids)')
         .run();

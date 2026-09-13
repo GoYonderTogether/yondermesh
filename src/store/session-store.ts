@@ -115,9 +115,13 @@ export interface CompactAnalysis {
   sessionsWithSupersededRevisions: number;
   /** 可回收的历史副本行数 */
   prunableRevisionRows: number;
-  /** 存活消息行数（= 各 session 的当前 revision） */
+  /** messages 表当前总行数（含待回收的历史副本） */
+  messageRowsTotal: number;
+  /** 真正的存活行数 = 总行数 − 可回收历史副本（各 session 的当前 revision） */
   liveMessageRows: number;
   ftsRows: number;
+  /** 孤儿行数（session 已不存在；compact 会清掉） */
+  orphanRows: number;
   dbBytes: number;
   freeBytes: number;
 }
@@ -129,13 +133,15 @@ export interface CompactOptions {
   rebuildFts?: boolean;
   vacuum?: boolean;
   /** 阶段回调（CLI 打进度用；daemon 可忽略） */
-  onPhase?: (phase: 'prune' | 'rebuild-fts' | 'backfill-fts' | 'vacuum') => void;
+  onPhase?: (phase: 'prune' | 'purge-orphans' | 'rebuild-fts' | 'backfill-fts' | 'vacuum') => void;
 }
 
 /** 压缩执行结果 */
 export interface CompactReport {
   revisionBodyMode: RevisionBodyMode;
   deletedRevisionRows: number;
+  /** 清掉的孤儿行数（session 已不存在的历史遗留） */
+  purgedOrphanRows: number;
   ftsRebuilt: boolean;
   ftsBackfilled: number;
   vacuumed: boolean;
@@ -1722,7 +1728,7 @@ export class SessionStore {
     const ftsRows = (
       this.db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get() as Row
     ).n as number;
-    const liveRows = (
+    const totalRows = (
       this.db.prepare('SELECT COUNT(*) AS n FROM messages').get() as Row
     ).n as number;
     const pageInfo = this.db.prepare('PRAGMA page_count').get() as Row | undefined;
@@ -1735,8 +1741,10 @@ export class SessionStore {
       revisionBodyMode: this.getRevisionBodyMode(),
       sessionsWithSupersededRevisions: store.sessions,
       prunableRevisionRows: store.rows,
-      liveMessageRows: liveRows,
+      messageRowsTotal: totalRows,
+      liveMessageRows: Math.max(0, totalRows - store.rows),
       ftsRows,
+      orphanRows: this.countOrphanRows(),
       dbBytes: pageCount * pageBytes,
       freeBytes: freeCount * pageBytes,
     };
@@ -1781,6 +1789,12 @@ export class SessionStore {
       if (Date.now() - started > budgetMs) break;
     }
 
+    // 孤儿行：老版本 retain 用自己的连接删 session 时没开外键，留下了
+    // 「session 已不存在」的 messages / session_revisions（线上实测 3.3 万行）。
+    // 它们在任何查询里都看不见（全都 JOIN sessions），但一直占空间。
+    options.onPhase?.('purge-orphans');
+    const purgedOrphanRows = this.purgeOrphanRows();
+
     if (ftsRebuilt) {
       // 重建 FTS + 触发器（在删除之后：这样回填量只和存活消息量成正比）
       options.onPhase?.('rebuild-fts');
@@ -1812,6 +1826,7 @@ export class SessionStore {
     return {
       revisionBodyMode: this.getRevisionBodyMode(),
       deletedRevisionRows: deletedRows,
+      purgedOrphanRows,
       ftsRebuilt,
       ftsBackfilled,
       vacuumed: options.vacuum ?? false,
@@ -1833,6 +1848,54 @@ export class SessionStore {
     const freeCount = (freeInfo?.freelist_count as number) ?? 0;
     const pageBytes = (pageSize?.page_size as number) ?? 4096;
     return { dbBytes: pageCount * pageBytes, freeBytes: freeCount * pageBytes };
+  }
+
+  /**
+   * 清掉孤儿行：session_id 指向已不存在的 session 的 messages / session_revisions /
+   * message_tool_calls。
+   *
+   * 来源：老版本 `retain apply` 用自己的连接直接 `DELETE FROM sessions`，
+   * 而那个连接没开 PRAGMA foreign_keys，于是既不级联也不报错。
+   * 这些行任何查询都看不见（全部 JOIN sessions），属于纯占空间。
+   */
+  purgeOrphanRows(): number {
+    let removed = 0;
+    this.db.exec('BEGIN');
+    try {
+      const t = this.db
+        .prepare(
+          'DELETE FROM message_tool_calls WHERE session_id NOT IN (SELECT id FROM sessions)',
+        )
+        .run();
+      removed += Number(t.changes);
+      // messages 删除会通过触发器同步清理 FTS（v3 起按 rowid，O(1)）
+      const m = this.db
+        .prepare('DELETE FROM messages WHERE session_id NOT IN (SELECT id FROM sessions)')
+        .run();
+      removed += Number(m.changes);
+      const r = this.db
+        .prepare('DELETE FROM session_revisions WHERE session_id NOT IN (SELECT id FROM sessions)')
+        .run();
+      removed += Number(r.changes);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return removed;
+  }
+
+  /** 孤儿行统计（只读） */
+  countOrphanRows(): number {
+    const m = this.db
+      .prepare('SELECT COUNT(*) AS n FROM messages WHERE session_id NOT IN (SELECT id FROM sessions)')
+      .get() as Row;
+    const r = this.db
+      .prepare(
+        'SELECT COUNT(*) AS n FROM session_revisions WHERE session_id NOT IN (SELECT id FROM sessions)',
+      )
+      .get() as Row;
+    return ((m.n as number) ?? 0) + ((r.n as number) ?? 0);
   }
 
   /** FTS 当前行数（诊断用） */

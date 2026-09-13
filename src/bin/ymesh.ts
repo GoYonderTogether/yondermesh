@@ -2855,7 +2855,9 @@ function cmdCompact(flags: Record<string, string | boolean>): number {
         console.log(`  保留策略:        ${before.revisionBodyMode}`);
         console.log(`  含历史副本的 session: ${before.sessionsWithSupersededRevisions}`);
         console.log(`  可回收历史副本行数:   ${before.prunableRevisionRows}`);
-        console.log(`  存活消息行数:         ${before.liveMessageRows}`);
+        console.log(`  消息总行数:           ${before.messageRowsTotal}`);
+        if (before.orphanRows > 0) console.log(`  孤儿行（可清理）:     ${before.orphanRows}`);
+        console.log(`  其中真正存活:         ${before.liveMessageRows}`);
         console.log(`  全文索引行数:         ${before.ftsRows}`);
         console.log(`  库文件:               ${fmtBytes(before.dbBytes)}（其中空闲 ${fmtBytes(before.freeBytes)}）`);
         console.log(`  执行时会重建 FTS:     ${rebuildFts ? '是' : '否（增量回收）'}`);
@@ -2889,6 +2891,7 @@ function cmdCompact(flags: Record<string, string | boolean>): number {
         lastPhase = phase;
         const label: Record<string, string> = {
           prune: '回收历史 revision 正文',
+          'purge-orphans': '清理孤儿行（session 已删除的历史遗留）',
           'rebuild-fts': '重建全文索引结构',
           'backfill-fts': '回填全文索引',
           vacuum: 'VACUUM 归还磁盘（可能数分钟）',
@@ -2903,6 +2906,7 @@ function cmdCompact(flags: Record<string, string | boolean>): number {
     } else {
       console.log('[yondermesh] compact 完成');
       console.log(`  删除历史副本行数: ${report.deletedRevisionRows}`);
+      if (report.purgedOrphanRows > 0) console.log(`  清理孤儿行:       ${report.purgedOrphanRows}`);
       if (report.ftsRebuilt) console.log(`  重建全文索引:     ${report.ftsBackfilled} 行`);
       console.log(`  库文件:           ${fmtBytes(before.dbBytes)} → ${fmtBytes(after.dbBytes)}`);
       console.log(`  耗时:             ${(report.elapsedMs / 1000).toFixed(1)}s`);

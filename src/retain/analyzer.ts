@@ -9,7 +9,8 @@
  *   - L3 archive：超 TTL 的 session 数 + 涉及消息数
  */
 
-import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
+import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import {
   compileNoiseRules,
 } from './policy.js';
@@ -19,6 +20,14 @@ import type {
 } from './policy.js';
 import { classifySessions } from './session-classifier.js';
 import type { SessionClassification } from './session-classifier.js';
+
+// node:sqlite 是实验性内置，vitest/vite 静态解析会误判为裸包 sqlite（同 SessionStore 的处理）
+const nodeRequire = createRequire(import.meta.url);
+const { DatabaseSync } = nodeRequire('node:sqlite') as {
+  DatabaseSync: typeof DatabaseSyncType;
+};
+/** 类型位与值位同名 */
+type DatabaseSync = DatabaseSyncType;
 
 /** L0 噪音报告 */
 export interface NoiseReport {
