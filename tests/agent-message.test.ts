@@ -345,6 +345,12 @@ describe('agent_message 6. DeliveryFlusher（daemon 侧）', () => {
       expect(env.core.pendingDeliveriesAll('target_idle')).toHaveLength(0);
       // 真的投出去了，且是「用户口吻」（无 agent 来源前缀）
       expect(env.fake.lastRequest?.message).toBe('等你忙完');
+      // 队列投递成功同样要写 injected_at —— 否则立即投递与队列投递两条路
+      // 在数据里长得不一样（实测队列投递成功的 injected_at 全是空）
+      const [msg] = env.core.peekMessages({ forSessionId: target, unreadOnly: false });
+      const row = env.readDelivery(msg.id);
+      expect(row.injected_at).not.toBeNull();
+      expect(row.delivery_error).toBeNull();
     } finally {
       env.cleanup();
     }

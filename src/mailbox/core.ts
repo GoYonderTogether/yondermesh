@@ -965,17 +965,24 @@ export class MailboxCore {
     return row.injected_at !== null && row.delivery_error === null;
   }
 
-  /** 把队列消息标记为已投递（幂等；只有仍在队列里的会被标记）。 */
+  /**
+   * 把队列消息标记为已投递（幂等；只有仍在队列里的会被标记）。
+   *
+   * 同时写 injected_at：这一位的定义是「真的注入到目标会话了」，而队列投递
+   * 走的就是注入（deliver() 成功才调这里）。只写 delivered_at 的话，
+   * 「立即投递」和「队列投递」两条路在数据里长得不一样 —— 实测查询时
+   * 队列投递成功的消息 injected_at 全是空，看起来像没送到。
+   */
   markDelivered(ids: number[]): number {
     if (ids.length === 0) return 0;
     const now = Date.now();
     const stmt = this.db.prepare(
-      'UPDATE agent_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL',
+      'UPDATE agent_messages SET delivered_at = ?, injected_at = COALESCE(injected_at, ?), delivery_error = NULL WHERE id = ? AND delivered_at IS NULL',
     );
     let changed = 0;
     const delivered: number[] = [];
     for (const id of ids) {
-      const r = stmt.run(now, id);
+      const r = stmt.run(now, now, id);
       if (Number(r.changes) > 0) {
         changed += 1;
         delivered.push(id);
