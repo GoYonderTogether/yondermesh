@@ -231,11 +231,43 @@ function resolveCliBinary(name: string): string {
  * Claude Code 的 MCP 配置不存储在 settings.json 中，
  * 而是内部数据库，通过 CLI 命令操作。
  */
+/**
+ * Claude Code 的 MCP 注册落在 `~/.claude.json` 的 mcpServers 下。
+ * 这里只做「已注册且定义完全一致」的判断，用于跳过无意义的 remove+add。
+ *
+ * 为什么要跳过：auto-mount 每次 reconcile（默认每分钟）都会跑一遍，
+ * 而 claude-mcp 策略要 spawn 两次 claude CLI（remove + add）。实测这既拖慢
+ * 每轮挂载（129 个挂载点里就它最贵），也是 128/129 偶发失败的来源
+ * （claude CLI 冷启动/被占用时 remove 或 add 会失败）。
+ */
+export function claudeMcpEntryMatches(config: unknown, ext: Extension): boolean {
+  if (!ext.mcp) return false;
+  const servers = (config as { mcpServers?: Record<string, unknown> } | null)?.mcpServers;
+  const entry = servers?.[ext.name] as { command?: unknown; args?: unknown } | undefined;
+  if (!entry) return false;
+  if (entry.command !== ext.mcp.command) return false;
+  return JSON.stringify(entry.args ?? []) === JSON.stringify(ext.mcp.args);
+}
+
+/** 读 ~/.claude.json 判断是否已按当前定义注册（读不到/解析失败 → false，回退到重挂） */
+function claudeMcpAlreadyRegistered(ext: Extension, home: string): boolean {
+  try {
+    const raw = fs.readFileSync(path.join(home, '.claude.json'), 'utf-8');
+    return claudeMcpEntryMatches(JSON.parse(raw), ext);
+  } catch {
+    return false;
+  }
+}
+
 export const claudeMcpStrategy = {
-  mount(ext: Extension, _home: string): MountResult {
+  mount(ext: Extension, home: string): MountResult {
     try {
       if (!ext.mcp) {
         return { strategy: 'claude-mcp', target: '', extension: ext.name, success: false, message: 'no mcp def' };
+      }
+      // 定义没变就别折腾外部 CLI（见 claudeMcpEntryMatches 注释）
+      if (claudeMcpAlreadyRegistered(ext, home)) {
+        return { strategy: 'claude-mcp', target: '', extension: ext.name, success: true, message: 'already registered (verified)' };
       }
       // 先移除旧的（幂等）
       const claudeBin = resolveCliBinary('claude');
