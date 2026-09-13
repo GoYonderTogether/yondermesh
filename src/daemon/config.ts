@@ -37,6 +37,18 @@ export interface DaemonConfig {
    * 默认 true。设为 false 可关闭 auto-mount 行为（仅手动 `ymesh mount all`）。
    */
   autoMount?: boolean;
+  /**
+   * 是否启用定期数据库压缩（回收被覆盖的历史 revision 正文）。默认 true。
+   *
+   * 为什么要有：ingest 现在只保留 current revision 正文，但存量库里的历史副本
+   * 需要有人来收（实测线上库 13GB / 1550 万行，其中 97% 是历史副本）。
+   * 纯手动命令必然被忘记——最后一次手工 retain 是 7 月 25 日，之后库一路涨到 13GB。
+   */
+  compactEnabled?: boolean;
+  /** 压缩检查间隔（毫秒），默认 24 小时 */
+  compactIntervalMs?: number;
+  /** 每轮压缩最多处理多少个 session（控制单次耗时），默认 200 */
+  compactSessionLimit?: number;
   /** 是否启用 briefing 定时生成（每小时）。默认 true。 */
   briefingEnabled?: boolean;
   /** briefing 定时生成间隔（毫秒），默认 1 小时 */
@@ -61,5 +73,8 @@ export function defaultDaemonConfig(): DaemonConfig {
     autoMount: true,
     briefingEnabled: true,
     briefingIntervalMs: 60 * 60 * 1000, // 1 小时
+    compactEnabled: true,
+    compactIntervalMs: 24 * 60 * 60 * 1000, // 1 天
+    compactSessionLimit: 200,
   };
 }

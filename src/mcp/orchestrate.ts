@@ -19,6 +19,7 @@
  * agent_message —— 不重造投递层。
  */
 
+import { LIVE_THRESHOLD_MS } from '../store/index.js';
 import type { SessionStore } from '../store/index.js';
 import type { MailboxCore } from '../mailbox/core.js';
 import { agentMessage } from '../mailbox/unified.js';
@@ -445,6 +446,63 @@ async function doDiscuss(
  * 投递时机选 on_reply：如果它正在跑，now 会被双写守卫拒绝；on_reply
  * 会在它这一轮结束的那一刻送达（最早的安全点）。
  */
+/** 重复叫停的抑制窗口：窗口内同目标的同一条叫停不再重复入队 */
+export const STOP_DEDUP_WINDOW_MS = 10 * 60_000;
+
+/** 目标的实时状态快照（叫停回执用） */
+interface TargetState {
+  sessionId: string;
+  source: string;
+  /** 最近活动距今毫秒（file_modified_at 优先，回退 last_seen_at） */
+  idleMs: number;
+  /** 还在写（未超过 live 阈值） */
+  live: boolean;
+  messageCount: number;
+  /** 已有未读叫停指令排队中 */
+  pendingStop: boolean;
+}
+
+/**
+ * 读目标的实时状态。
+ *
+ * 为什么需要：实战里出现过「同一目标 60 秒一次、连发 5 轮相同叫停」——
+ * 根因是 stop 只回答「已发出」，调用方无法判断它到底停没停，只能反复重发。
+ * 回执带上 idleMs/live，调用方就能判断该等还是该再叫一次。
+ */
+function readTargetState(
+  store: SessionStore,
+  core: MailboxCore,
+  target: string,
+  bodyPrefix: string,
+): TargetState | null {
+  const sid = store.resolveSessionId(target) ?? target;
+  const s = store.getSession(sid);
+  if (!s) return null;
+  const lastActivity = s.fileModifiedAt ?? s.lastSeenAt ?? 0;
+  const idleMs = Math.max(0, Date.now() - lastActivity);
+  const pending = core
+    .peekMessages({ forSessionId: sid, unreadOnly: true })
+    .some((m) => m.body.startsWith(bodyPrefix));
+  return {
+    sessionId: sid,
+    source: s.source,
+    idleMs,
+    live: idleMs < LIVE_THRESHOLD_MS,
+    messageCount: s.messageCount,
+    pendingStop: pending,
+  };
+}
+
+/** 把毫秒时长说成人话 */
+function humanDuration(ms: number): string {
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return `${Math.floor(ms / 1000)} 秒`;
+  if (min < 60) return `${min} 分钟`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} 小时 ${min % 60} 分钟`;
+  return `${Math.floor(h / 24)} 天 ${h % 24} 小时`;
+}
+
 async function doStop(
   deps: { store: SessionStore; core: MailboxCore },
   input: OrchestrateInput,
@@ -458,6 +516,25 @@ async function doStop(
     (reason ? `\n原因：${reason}` : '') +
     '\n请用一两句话说明：你停在哪一步、已经改动了哪些文件、有没有留下半成品。';
 
+  // 去重闸门：窗口内已经有未读的同一条叫停 → 不重复入队，只回报目标状态。
+  // 实战依据：9/12 深夜同两个目标被 60 秒一次连发 5 轮（14 条相同指令），
+  // 其中 2 条走 target_idle 队列、重试 5 次后放弃——调用方拿不到「停没停」的答案。
+  const state = readTargetState(deps.store, deps.core, input.target, '【叫停】');
+  if (state?.pendingStop) {
+    return {
+      ok: true,
+      action: 'stop',
+      text:
+        `叫停已在下发队列里（未重复下发）：${state.source} ${shortId(state.sessionId)}` +
+        `\n  目标状态：${state.live ? '仍在写' : '已停'}，最近活动 ${humanDuration(state.idleMs)} 前` +
+        '\n  同一条叫停 10 分钟内不会重复入队——要确认它真的停了，用 await 等它进入 idle。',
+      data: { deduped: true, target: state },
+      hint:
+        '重复叫停不会加速它收手（它只能在下一轮边界读消息）。用 `await` 等它 idle，' +
+        '或在目标确实还在动的时候再叫一次。',
+    };
+  }
+
   const r = await agentMessage(deps, {
     action: 'send',
     to: input.target,
@@ -468,19 +545,23 @@ async function doStop(
   if (r.action !== 'send') {
     return { ok: false, action: 'stop', text: '内部错误：stop 走到了 check 分支', error: 'internal' };
   }
+  const after = readTargetState(deps.store, deps.core, input.target, '【叫停】');
   return {
     ok: r.ok,
     action: 'stop',
     text: r.ok
       ? `已发出叫停（协作式）：${r.to?.source ?? ''} ${r.to ? shortId(r.to.sessionId) : input.target}` +
-        '\n  它会在下一轮边界读到并自己收手。'
+        '\n  它会在下一轮边界读到并自己收手。' +
+        (after
+          ? `\n  目标状态：${after.live ? '仍在写' : '已停'}，最近活动 ${humanDuration(after.idleMs)} 前`
+          : '')
       : `叫停失败：${r.error ?? '未知原因'}`,
-    data: r,
+    data: { send: r, target: after },
     error: r.error,
     hint:
       '这是**协作式**叫停，不是 kill —— ymesh 的触发器拿到回复后就把子进程停了，' +
       '从不持有长活句柄，所以没有进程可杀。要真正 force-kill，得先做「句柄池」' +
-      '（ymesh 长期托管子进程），那是架构级改动。',
+      '（ymesh 长期托管子进程），那是架构级改动。目标仍在写时，用 await 等它 idle 即可确认。',
   };
 }
 

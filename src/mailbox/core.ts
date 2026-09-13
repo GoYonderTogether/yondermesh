@@ -386,15 +386,25 @@ export class MailboxCore {
     const messages = this.peekMessages(filter);
     if (messages.length === 0) return [];
 
-    const ids = messages.map((m) => m.id);
     const now = Date.now();
-    const stmt = this.db.prepare(
+    const directStmt = this.db.prepare(
       'UPDATE agent_messages SET read_at = ? WHERE id = ? AND read_at IS NULL',
     );
+    const broadcastStmt = this.db.prepare(
+      'INSERT OR IGNORE INTO agent_message_reads(message_id, session_id, read_at) VALUES (?, ?, ?)',
+    );
     const marked: number[] = [];
-    for (const id of ids) {
-      const r = stmt.run(now, id);
-      if (Number(r.changes) > 0) marked.push(id);
+    for (const m of messages) {
+      if (m.toProject) {
+        // 广播：只记「我读过了」。read_at 是全局单列，对广播保持为 NULL——
+        // 谁先读就把所有人的消息标成已读，是我们要修的 bug。
+        const reader = filter.forSessionId;
+        if (reader) broadcastStmt.run(m.id, reader, now);
+        marked.push(m.id);
+      } else {
+        const r = directStmt.run(now, m.id);
+        if (Number(r.changes) > 0) marked.push(m.id);
+      }
     }
     if (marked.length > 0) {
       this.notifier.notifyRead(marked);
@@ -476,15 +486,21 @@ export class MailboxCore {
         .get(forSessionId) as Row | undefined;
       const project = sessionRow?.project_path as string | null;
       if (project) {
-        // 排除自己发给自己项目的广播（from_session_id = me）
+        // 排除自己发给自己项目的广播（from_session_id = me）；
+        // 已读判定按收件人（agent_message_reads），这样同项目的多个 agent
+        // 都能看到同一条广播，而不是被第一个 check 的人吃掉。
         const r2 = this.db
           .prepare(
-            `SELECT COUNT(*) AS c FROM agent_messages
-             WHERE to_project = ? AND read_at IS NULL
-               AND (from_session_id IS NULL OR from_session_id != ?)
+            `SELECT COUNT(*) AS c FROM agent_messages m
+             WHERE m.to_project = ? AND m.read_at IS NULL
+               AND (m.from_session_id IS NULL OR m.from_session_id != ?)
+               AND NOT EXISTS (
+                 SELECT 1 FROM agent_message_reads r
+                 WHERE r.message_id = m.id AND r.session_id = ?
+               )
                AND ${expiryClause}`,
           )
-          .get(project, forSessionId, now) as Row;
+          .get(project, forSessionId, forSessionId, now) as Row;
         broadcast = Number(r2.c);
       }
     } else if (forProject) {
@@ -768,6 +784,15 @@ export class MailboxCore {
     }
     if (filter.unreadOnly) {
       conditions.push('read_at IS NULL');
+      // 广播的已读是「按收件人」的：我在本项目里读过的广播不算未读，
+      // 但别人还没读过不影响我。没有这一条就会退化成「谁先读谁吃掉」。
+      if (filter.forSessionId) {
+        conditions.push(
+          `NOT EXISTS (SELECT 1 FROM agent_message_reads r
+             WHERE r.message_id = agent_messages.id AND r.session_id = ?)`,
+        );
+        params.push(filter.forSessionId);
+      }
     }
     if (filter.threadId) {
       conditions.push('thread_id = ?');

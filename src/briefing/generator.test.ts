@@ -194,6 +194,32 @@ describe('BriefingGenerator', () => {
     // 只统计今天：1 条
     expect(b.totalSessions).toBe(1);
   });
+
+  it('跨天续跑的长会话要算进今天（不再只看「今天开始」）', async () => {
+    const t0 = Date.now();
+    const claudeInst = store.registerSourceInstance({ deviceId: DEVICE_A, source: 'claude', rootPath: '/home/.claude/projects', coverage: 'A' });
+    // 昨天 21:30 开始，今天还在写（文件 mtime 是刚刚）——线上真实案例：
+    // codex fd4870c6，9/12 21:30 起、9/13 11:22 还在动，382 条消息，旧口径整场漏掉
+    const startedYesterday = t0 - 14 * 3600_000;
+    mkSession({
+      store,
+      sourceInstanceId: claudeInst.id,
+      device: DEVICE_A,
+      source: 'claude',
+      project: '/repo/long-running',
+      startedAt: startedYesterday,
+      fileModifiedAt: t0 - 60_000, // 刚刚还在写
+      messages: [{ role: 'user', content: '跑了一整晚的活' }],
+    });
+
+    const gen = new BriefingGenerator(store, { enabled: false, output: tmpDir });
+    const today = new Date(t0);
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const b = await gen.generate({ date: todayStr, now: t0 });
+
+    expect(b.totalSessions).toBe(1);
+    expect(b.sessions[0].projectPath).toBe('/repo/long-running');
+  });
 });
 
 function sum(rec: Record<string, number>): number {

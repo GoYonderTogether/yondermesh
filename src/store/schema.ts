@@ -154,6 +154,19 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   FOREIGN KEY (reply_to_id) REFERENCES agent_messages(id)
 );
 
+-- 7.1 agent_message_reads：广播的**按收件人**已读状态
+-- 为什么需要：agent_messages.read_at 是单列，只够表达「一条消息一个已读者」。
+-- 广播（to_project）的语义是「发给该项目所有 agent」，用单列会导致**第一个
+-- check 的 agent 把消息从其他 agent 手里偷走**（实测 91% 的 mailbox 流量是广播）。
+-- 直投（to_session_id）继续用 read_at；广播用本表按 session 记已读。
+CREATE TABLE IF NOT EXISTS agent_message_reads (
+  message_id  INTEGER NOT NULL,
+  session_id  TEXT NOT NULL,
+  read_at     INTEGER NOT NULL,
+  PRIMARY KEY (message_id, session_id),
+  FOREIGN KEY (message_id) REFERENCES agent_messages(id)
+);
+
 -- 8. message_tool_calls：结构化工具调用（loop build-tool-calls-schema）
 --    不动 messages 表（避免 12M 行 ALTER）；新建独立表存储 tool_use / function_call。
 --    幂等：UNIQUE(message_id, call_seq) → INSERT OR IGNORE 重复跑不重复插入。
@@ -165,7 +178,9 @@ CREATE TABLE IF NOT EXISTS message_tool_calls (
   tool_name    TEXT NOT NULL,
   tool_input   TEXT,
   UNIQUE (message_id, call_seq),
-  FOREIGN KEY (message_id) REFERENCES messages(id),
+  -- ON DELETE CASCADE：消息被清理（compact / retain）时，其工具调用必须一起走。
+  -- 否则任何 DELETE FROM messages 都会撞 FOREIGN KEY constraint failed。
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
   FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 `;
@@ -195,6 +210,8 @@ CREATE INDEX IF NOT EXISTS idx_msg_thread             ON agent_messages(thread_i
 CREATE INDEX IF NOT EXISTS idx_msg_expires            ON agent_messages(expires_at);
 -- 投递队列：按 (投递时机, 未投递) 找待发消息
 CREATE INDEX IF NOT EXISTS idx_msg_queue              ON agent_messages(deliver_on, delivered_at);
+-- 广播已读：按收件人查未读广播
+CREATE INDEX IF NOT EXISTS idx_msg_reads_session      ON agent_message_reads(session_id, message_id);
 
 CREATE INDEX IF NOT EXISTS idx_mtc_message             ON message_tool_calls(message_id);
 CREATE INDEX IF NOT EXISTS idx_mtc_session             ON message_tool_calls(session_id);
@@ -225,6 +242,15 @@ CREATE INDEX IF NOT EXISTS idx_mtc_session             ON message_tool_calls(ses
  */
 export const SCHEMA_FTS = `
 -- FTS5 虚拟表：仅 user 消息的全文索引（trigram 分词器，支持 CJK 子串匹配）
+--
+-- v3 关键约定：**rowid = messages.id**
+--   为什么必须这样：v2 的删除触发器是
+--       DELETE FROM messages_fts WHERE message_id = old.id
+--   而 message_id 声明为 UNINDEXED（列值不可索引，只有 rowid 可）——于是每删一条
+--   messages 都要把整张 FTS 表扫一遍。实战库上 12M 行 FTS × 27 万条删除 =
+--   完全卡死（retain apply 因此需要临时 DROP 触发器才能跑完）。
+--   rowid 是 FTS5 的索引列，DELETE WHERE rowid = ? 是 O(1)。
+--   代价：插入时必须显式指定 rowid（见三个触发器），迁移时需重建一次 FTS。
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   content,
   session_id UNINDEXED,
@@ -235,41 +261,42 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 
 -- 触发器：user 消息 INSERT → 索引（截断到 500 字符控制 trigram 体积）
 CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages WHEN new.role = 'user' BEGIN
-  INSERT INTO messages_fts(content, session_id, message_id, revision_id)
-  VALUES (substr(new.content, 1, 500), new.session_id, new.id, new.revision_id);
+  INSERT INTO messages_fts(rowid, content, session_id, message_id, revision_id)
+  VALUES (new.id, substr(new.content, 1, 500), new.session_id, new.id, new.revision_id);
 END;
 
--- 触发器：user 消息 DELETE → 从 FTS 删除
+-- 触发器：user 消息 DELETE → 从 FTS 删除（O(1)，按 rowid）
 CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages WHEN old.role = 'user' BEGIN
-  DELETE FROM messages_fts WHERE message_id = old.id;
+  DELETE FROM messages_fts WHERE rowid = old.id;
 END;
 
 -- 触发器：user 消息 UPDATE → 重建该行的 FTS 索引
 CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages WHEN new.role = 'user' BEGIN
-  DELETE FROM messages_fts WHERE message_id = old.id;
-  INSERT INTO messages_fts(content, session_id, message_id, revision_id)
-  VALUES (substr(new.content, 1, 500), new.session_id, new.id, new.revision_id);
+  DELETE FROM messages_fts WHERE rowid = old.id;
+  INSERT INTO messages_fts(rowid, content, session_id, message_id, revision_id)
+  VALUES (new.id, substr(new.content, 1, 500), new.session_id, new.id, new.revision_id);
 END;
 `;
 
 /**
- * FTS schema 升级：从 v1（全消息索引）迁移到 v2（仅 user + 截断 500）。
+ * FTS schema 重建：删除触发器 + 删除 FTS 表，由 SCHEMA_FTS 重新创建。
  *
- * 由 ensureSchema 在检测到 v1 时调用一次。幂等（DROP IF EXISTS）。
+ * 历史上用于两件事，都是同一个动作（重建才能改 rowid 映射 / 改索引范围）：
+ *   v1 → v2：全消息索引 → 仅 user + 截断 500
+ *   v2 → v3：message_id 列删除（O(n) 全表扫）→ rowid 删除（O(1)）
  *
- * 检测条件：schema_meta 表中 fts_version != 'v2'。
+ * 幂等：DROP IF EXISTS。调用方负责随后的「回填」（rebuild 后 FTS 为空）。
  */
-export const FTS_V2_MIGRATION = `
--- 删除旧触发器（v1 全角色触发器）
+export const FTS_REBUILD_MIGRATION = `
 DROP TRIGGER IF EXISTS messages_fts_ai;
 DROP TRIGGER IF EXISTS messages_fts_ad;
 DROP TRIGGER IF EXISTS messages_fts_au;
 
--- 删除旧 FTS 表（v1，全消息索引）
 DROP TABLE IF EXISTS messages_fts;
-
--- 重建为 v2（仅 user + 截断 500）—— 由 SCHEMA_FTS 重新创建
 `;
+
+/** @deprecated 保留旧名（v1/v2 → v3 走同一个重建动作），新代码用 FTS_REBUILD_MIGRATION。 */
+export const FTS_V2_MIGRATION = FTS_REBUILD_MIGRATION;
 
 /**
  * 已有数据库的列迁移。在 ensureSchema 之后执行，幂等。

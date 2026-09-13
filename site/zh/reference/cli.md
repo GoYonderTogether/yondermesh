@@ -21,6 +21,12 @@ ymesh <command> --db <path>     # 指定数据库路径
 |---|---|
 | `ymesh help` | 显示此帮助信息 |
 | `ymesh version` | 显示版本号 |
+| `ymesh ──` | Agent 接口（4 个职能，MCP 与 CLI 同一套；优先用这 4 个）────────── |
+| `ymesh observe` | 看：会诊本机所有 agent 的会话（scope=me|global|project|session|active|tree） |
+| `ymesh message` | 说：跟其他 agent 会话通信（action=send|check） |
+| `ymesh orchestrate` | 管：spawn 起会话 / assign 派活 / handoff 接力 / await 等结果 / discuss 多模型讨论 / stop 叫停 / prior 查旧账 |
+| `ymesh workspace` | 标：给工作目录起名、分组、看某目录下有哪些 agent 在跑 |
+| `ymesh ──` | 采集与查看 ─────────────────────────────────────────────────── |
 | `ymesh scan` | 扫描本机全部 session（27 个 adapter：cass/claude/codex/hermes/ |
 | `ymesh status` | 显示 daemon 状态和最近扫描结果 |
 | `ymesh agents` | 列出本机检测到的所有 agent 及其支持状态 |
@@ -44,10 +50,10 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh extract` | 提取项目全部 user 需求与 assistant 响应到 NDJSONL 文件（按行号/ID 索引） |
 | `ymesh handoff` | &lt;id&gt;        提取 session 浓缩 handoff 包（compacted 摘要 + tool call + plan），用于任务接管 |
 | `ymesh state` | &lt;action&gt;      管理运行时状态文件 (sync|show) |
-| `ymesh mailbox` | &lt;action&gt;    跨 session 消息总线 (post|get|pop|list|mark-read|check|whoami|unread) |
-| `ymesh launch` | 启动新 agent session（--cli &lt;agent&gt; --prompt "text" [--model &lt;m&gt;]） |
-| `ymesh inject` | 向运行中 session 注入消息（--cli &lt;agent&gt; --session &lt;id&gt; --message "text"） |
-| `ymesh transfer` | 跨 agent 转交 session（--cli &lt;src&gt; --session &lt;id&gt; --target &lt;dst&gt; [--output &lt;path&gt;]） |
+| `ymesh mailbox` | &lt;action&gt;    [遗留，用 message] 跨 session 消息总线 (post|get|pop|list|mark-read|check|whoami|unread) |
+| `ymesh launch` | [遗留，用 orchestrate spawn] 启动新 agent session（--cli &lt;agent&gt; --prompt "text" [--model &lt;m&gt;]） |
+| `ymesh inject` | [遗留] 向运行中 session 注入消息（--cli &lt;agent&gt; --session &lt;id&gt; --message "text"） |
+| `ymesh transfer` | [遗留，用 orchestrate handoff] 跨 agent 转交 session（--cli &lt;src&gt; --session &lt;id&gt; --target &lt;dst&gt; [--output &lt;path&gt;]） |
 | `ymesh send` | 同步注入 v3：发送消息到目标 agent 并同步拿回复（--cli &lt;agent&gt; [--session &lt;id&gt;] [--mode stopped|running|new] --message "text" [--model &lt;m&gt;] [--effort &lt;e&gt;] [--cwd &lt;path&gt;] [--timeout &lt;ms&gt;] [--json]） |
 | `ymesh briefing` | generate   生成每日晨报（多维切分：agent/项目/设备/时段 + 完成数/完成率/卡住待办） |
 | `ymesh 选项:` | [--date &lt;YYYY-MM-DD&gt;] [--output &lt;dir&gt;] [--json] |
@@ -62,6 +68,8 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh --session-format` | jsonl|sqlite|json|markdown --yes（覆盖已存在） |
 | `ymesh sync` | fts            显式分批回填 messages_fts 全文索引（大库自动回填被跳过时用） |
 | `ymesh 选项:` | --batch &lt;n&gt;（每批条数，默认 5000）[--json] |
+| `ymesh compact` | 压缩数据库：回收被覆盖的历史 revision 正文 + 重建全文索引 + 归还磁盘 |
+| `ymesh 选项:` | --dry-run（只报告）--vacuum（回收磁盘，需独占）--json |
 | `ymesh retain` | analyze      扫描数据库冗余（噪音/超长/老旧 session + session 级分类），报告可压缩量（只读） |
 | `ymesh retain` | apply        执行筛除（L0 删噪音 + L2 截断 + SL0/SL1/SL2 session 级 + L3 归档），含去重备份 |
 | `ymesh 选项:` | --dry-run（预演）--no-backup（跳过备份）[--db &lt;path&gt;] [--json] |

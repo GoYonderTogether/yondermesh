@@ -14,7 +14,7 @@
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
-import { SCHEMA, SCHEMA_INDEXES, SCHEMA_FTS, FTS_V2_MIGRATION } from './schema.js';
+import { SCHEMA, SCHEMA_INDEXES, SCHEMA_FTS, FTS_REBUILD_MIGRATION } from './schema.js';
 import { MIGRATION_COLUMNS, MIGRATION_BACKFILLS } from './schema.js';
 import type { ProcessAliveChecker } from './process-detector.js';
 import type {
@@ -88,12 +88,68 @@ const FTS_AUTOCHECK_MAX_ROWS = Number(
   process.env.YONDERMESH_FTS_AUTOCHECK_MAX_ROWS ?? 200_000,
 );
 
+/**
+ * 当前 FTS schema 版本。改动 FTS 结构（索引范围 / rowid 映射 / 分词器）时必须 +1，
+ * 否则老库不会重建，行为会静默不一致。
+ *   v1 = 全消息索引
+ *   v2 = 仅 user + 截断 500（删除走 UNINDEXED 的 message_id 列 → O(n) 全表扫）
+ *   v3 = 仅 user + 截断 500 + **rowid = messages.id**（删除 O(1)）
+ */
+const FTS_SCHEMA_VERSION = 'v3';
+
+/**
+ * 历史 revision 正文的保留策略：
+ *   current-only（默认）= 只保留 current revision 的消息正文，旧 revision 只留元数据
+ *   keep               = 保留每一版正文（旧的 O(N²) 行为，仅排障/研究时用）
+ *
+ * 为什么默认 current-only：每次内容变化都整份重写消息，存储量随对话长度**平方增长**。
+ * 实测 claude-code 会话 986 条消息 → 2082 个 revision → 193 万行；13GB 库里
+ * 97% 是这种被覆盖的历史副本，而产品侧没有任何读路径会读它们。
+ */
+export type RevisionBodyMode = 'current-only' | 'keep';
+
+/** 压缩评估结果（只读） */
+export interface CompactAnalysis {
+  revisionBodyMode: RevisionBodyMode;
+  /** 含历史副本的 session 数 */
+  sessionsWithSupersededRevisions: number;
+  /** 可回收的历史副本行数 */
+  prunableRevisionRows: number;
+  /** 存活消息行数（= 各 session 的当前 revision） */
+  liveMessageRows: number;
+  ftsRows: number;
+  dbBytes: number;
+  freeBytes: number;
+}
+
+/** 压缩执行参数 */
+export interface CompactOptions {
+  sessionLimit?: number;
+  budgetMs?: number;
+  rebuildFts?: boolean;
+  vacuum?: boolean;
+  /** 阶段回调（CLI 打进度用；daemon 可忽略） */
+  onPhase?: (phase: 'prune' | 'rebuild-fts' | 'backfill-fts' | 'vacuum') => void;
+}
+
+/** 压缩执行结果 */
+export interface CompactReport {
+  revisionBodyMode: RevisionBodyMode;
+  deletedRevisionRows: number;
+  ftsRebuilt: boolean;
+  ftsBackfilled: number;
+  vacuumed: boolean;
+  elapsedMs: number;
+}
+
 export class SessionStore {
   private readonly db: DatabaseSyncType;
   /** FTS 未同步时的数据量（供 CLI/MCP 按需提示，不再自动打印）。 */
   private ftsStale: { userMsgTotal: number; ftsTotal: number } | null = null;
   /** 大库下把 FTS 陈旧检查推迟（避免每条命令付 40s+ 的全表 COUNT）。 */
   private ftsCheckDeferred = false;
+  /** FTS 刚被重建（迁移后），需要回填；大库上交给 `ymesh compact` / `sync fts`。 */
+  private ftsNeedsBackfill = false;
 
   constructor(location: string) {
     this.db = new DatabaseSync(location);
@@ -114,8 +170,10 @@ export class SessionStore {
     this.runMigrations();
     this.db.exec(SCHEMA_INDEXES);
 
-    // FTS v2 迁移：检测 v1 FTS（非 contentless）并升级到 v2（contentless + 仅 user）
-    // 用 schema_meta 元数据表记录 fts_version，幂等
+    // FTS schema 版本管理：fts_version 记录结构版本，不一致就重建（重建 → 回填）。
+    //
+    // 为什么必须按版本号重建而不是原地改：rowid 映射无法 ALTER，只能重建 FTS 表。
+    // 历史：v1 全消息 → v2 仅 user → v3 rowid 化（删除从 O(n) 变 O(1)）。
     this.db.exec(`CREATE TABLE IF NOT EXISTS schema_meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -123,45 +181,26 @@ export class SessionStore {
     const ftsVersionRow = this.db
       .prepare('SELECT value FROM schema_meta WHERE key = ?')
       .get('fts_version') as Row | undefined;
+    const currentFtsSql =
+      ((this.db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages_fts'")
+        .get() as Row | undefined)?.sql as string) ?? '';
+    const recordedVersion = (ftsVersionRow?.value as string | undefined) ?? null;
 
-    if (!ftsVersionRow) {
-      // 首次安装或旧库无元数据：检测是否需要从 v1 迁移
-      // v1 = 全消息索引（无 WHEN role='user' 条件）
-      const oldFtsRow = this.db
-        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages_fts'")
-        .get() as Row | undefined;
-      const oldSql = (oldFtsRow?.sql as string) ?? '';
-      if (oldSql) {
-        // 任何已存在的 FTS 表都需要迁移到 v2（v1 全消息，或 contentless 实验）
-        this.db.exec(FTS_V2_MIGRATION);
-      }
-      // 创建 v2 FTS schema
+    // contentless 是历史上一个错误的 v2 实现，即使版本号对也要重建
+    const needsRebuild =
+      recordedVersion !== FTS_SCHEMA_VERSION || currentFtsSql.includes("content=''");
+
+    if (needsRebuild) {
+      this.db.exec(FTS_REBUILD_MIGRATION);
       this.db.exec(SCHEMA_FTS);
       this.db
         .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
-        .run('fts_version', 'v2');
-    } else if (ftsVersionRow.value !== 'v2') {
-      // 从其他版本升级到 v2
-      this.db.exec(FTS_V2_MIGRATION);
-      this.db.exec(SCHEMA_FTS);
-      this.db
-        .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
-        .run('fts_version', 'v2');
+        .run('fts_version', FTS_SCHEMA_VERSION);
+      this.ftsNeedsBackfill = true;
     } else {
-      // fts_version == 'v2'，但需要检测当前 FTS 是否真的是 v2（regular，非 contentless）
-      // 因为之前有一个错误的 v2 实现（contentless），需要检测并修复
-      const currentFtsRow = this.db
-        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages_fts'")
-        .get() as Row | undefined;
-      const currentSql = (currentFtsRow?.sql as string) ?? '';
-      if (currentSql.includes("content=''")) {
-        // 当前是 contentless FTS（错误的 v2），迁移到正确的 v2（regular）
-        this.db.exec(FTS_V2_MIGRATION);
-        this.db.exec(SCHEMA_FTS);
-      } else {
-        // 已是正确的 v2，确保 schema 存在（CREATE IF NOT EXISTS 幂等）
-        this.db.exec(SCHEMA_FTS);
-      }
+      // 版本一致：确保 schema 存在（CREATE IF NOT EXISTS 幂等）
+      this.db.exec(SCHEMA_FTS);
     }
 
     // FTS 陈旧检查的**成本闸门**：旧实现在构造里直接跑
@@ -177,7 +216,15 @@ export class SessionStore {
     if (approxRows <= FTS_AUTOCHECK_MAX_ROWS) {
       this.syncFtsIfStale();
     } else {
+      // 大库：不在这里回填（会阻塞每条命令）。迁移后的空 FTS 由
+      // `ymesh compact` / `ymesh sync fts` 分批补，状态见 ftsStaleInfo()。
       this.ftsCheckDeferred = true;
+      if (this.ftsNeedsBackfill) {
+        const r = this.db
+          .prepare("SELECT COUNT(*) AS n FROM messages WHERE role = 'user'")
+          .get() as Row;
+        this.ftsStale = { userMsgTotal: (r.n as number) ?? 0, ftsTotal: 0 };
+      }
     }
   }
 
@@ -222,11 +269,16 @@ export class SessionStore {
       this.ftsStale = { userMsgTotal, ftsTotal };
       return;
     }
+    // rowid 必须等于 messages.id（v3 约定，删除才能 O(1)）。
+    // 只回填 current revision：历史 revision 的正文对检索零价值，却是重复放大的来源。
     this.db.exec(`
-      INSERT INTO messages_fts(content, session_id, message_id, revision_id)
-      SELECT substr(content, 1, 500), session_id, id, revision_id
-      FROM messages
-      WHERE role = 'user' AND id NOT IN (SELECT message_id FROM messages_fts)
+      INSERT INTO messages_fts(rowid, content, session_id, message_id, revision_id)
+      SELECT m.id, substr(m.content, 1, 500), m.session_id, m.id, m.revision_id
+      FROM messages m
+      JOIN sessions s ON s.id = m.session_id
+      WHERE m.role = 'user'
+        AND m.revision_id = s.current_revision_id
+        AND m.id NOT IN (SELECT message_id FROM messages_fts)
     `);
   }
 
@@ -269,8 +321,10 @@ export class SessionStore {
     // 取游标之后的下一批 user 消息（id > cursor 走主键索引，O(batchSize)）
     const batch = this.db
       .prepare(
-        `SELECT id, content, session_id, revision_id FROM messages
-         WHERE role = 'user' AND id > ? ORDER BY id ASC LIMIT ?`,
+        `SELECT m.id AS id, m.content AS content, m.session_id AS session_id, m.revision_id AS revision_id
+         FROM messages m JOIN sessions s ON s.id = m.session_id
+         WHERE m.role = 'user' AND m.revision_id = s.current_revision_id AND m.id > ?
+         ORDER BY m.id ASC LIMIT ?`,
       )
       .all(cursor, batchSize) as Array<{
         id: number;
@@ -281,15 +335,16 @@ export class SessionStore {
 
     if (batch.length === 0) return { total, done, remaining: 0 };
 
+    // rowid = messages.id（v3 约定）
     const insert = this.db.prepare(
-      'INSERT INTO messages_fts(content, session_id, message_id, revision_id) VALUES (?, ?, ?, ?)',
+      'INSERT INTO messages_fts(rowid, content, session_id, message_id, revision_id) VALUES (?, ?, ?, ?, ?)',
     );
     this.db.exec('BEGIN');
     try {
       for (const m of batch) {
         // 截断到 500 字符（与触发器保持一致）
         const truncated = m.content.length > 500 ? m.content.substring(0, 500) : m.content;
-        insert.run(truncated, m.session_id, m.id, m.revision_id);
+        insert.run(m.id, truncated, m.session_id, m.id, m.revision_id);
       }
       this.db.exec('COMMIT');
     } catch (err) {
@@ -303,6 +358,7 @@ export class SessionStore {
 
   /** 幂等列迁移：检测列是否存在，缺失才 ALTER TABLE ADD COLUMN */
   private runMigrations(): void {
+    this.migrateToolCallsCascade();
     for (const { table, column, type } of MIGRATION_COLUMNS) {
       const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Row[];
       const exists = cols.some((c) => c.name === column);
@@ -317,6 +373,54 @@ export class SessionStore {
         this.db.exec(sql);
       }
     }
+  }
+
+  /**
+   * 把 message_tool_calls 的 message_id 外键升级为 ON DELETE CASCADE。
+   *
+   * 为什么必须迁移：初版建表时外键没写级联，于是任何 `DELETE FROM messages`
+   * （compact 回收历史副本、retain 删噪音）都会直接抛 FOREIGN KEY constraint failed。
+   * SQLite 不能 ALTER 外键，只能按「建新表 → 拷数据 → 换名」重建。
+   *
+   * 幂等：检测 PRAGMA foreign_key_list 里 messages 外键的 on_delete 是否为 CASCADE。
+   * 老库上是一次性成本（本项目实测 15.8 万行，秒级）。
+   */
+  private migrateToolCallsCascade(): void {
+    const exists = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='message_tool_calls'")
+      .get() as Row | undefined;
+    if (!exists) return;
+    const fks = this.db.prepare("PRAGMA foreign_key_list('message_tool_calls')").all() as Row[];
+    const msgFk = fks.find((f) => String(f.table) === 'messages');
+    if (msgFk && String(msgFk.on_delete).toUpperCase() === 'CASCADE') return;
+
+    // PRAGMA foreign_keys 在事务内无效，必须在事务外切换
+    this.db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      this.db.exec(`
+        BEGIN;
+        CREATE TABLE IF NOT EXISTS message_tool_calls_mig (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          message_id   INTEGER NOT NULL,
+          session_id   TEXT NOT NULL,
+          call_seq     INTEGER NOT NULL,
+          tool_name    TEXT NOT NULL,
+          tool_input   TEXT,
+          UNIQUE (message_id, call_seq),
+          FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+          FOREIGN KEY (session_id) REFERENCES sessions(id)
+        );
+        INSERT OR IGNORE INTO message_tool_calls_mig (id, message_id, session_id, call_seq, tool_name, tool_input)
+          SELECT id, message_id, session_id, call_seq, tool_name, tool_input FROM message_tool_calls;
+        DROP TABLE message_tool_calls;
+        ALTER TABLE message_tool_calls_mig RENAME TO message_tool_calls;
+        COMMIT;
+      `);
+    } finally {
+      this.db.exec('PRAGMA foreign_keys = ON');
+    }
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_mtc_message ON message_tool_calls(message_id)');
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_mtc_session ON message_tool_calls(session_id)');
   }
 
   /** 写入元数据列（首次入库和更新时调用） */
@@ -488,6 +592,9 @@ export class SessionStore {
          .get(sessionId) as Row).n as number) + 1;
      const revisionId = this.insertRevision(sessionId, nextNumber, hash, messageCount, input.sourceKind);
      this.insertMessages(sessionId, revisionId, input.messages);
+     // 旧 revision 的正文到此为止就没用了（没有任何读路径会读历史 revision 的消息），
+     // 立刻删掉，避免「每变一次就多存一份全文」的平方级膨胀。revision 元数据保留。
+     this.pruneSupersededRevisionBodies(sessionId, revisionId);
      const fileModifiedAtUpdate = input.fileModifiedAt ?? now;
      this.db
        .prepare(
@@ -664,6 +771,96 @@ export class SessionStore {
     };
   }
 
+  // ─── 历史 revision 正文的保留策略与回收 ──────────────────────────────
+
+  /**
+   * 当前的历史 revision 正文保留策略。
+   * 默认 current-only：只保留 current revision 正文（旧版只留 hash/count/时间）。
+   */
+  getRevisionBodyMode(): RevisionBodyMode {
+    return this.getMeta('revision_bodies') === 'keep' ? 'keep' : 'current-only';
+  }
+
+  /**
+   * 切换历史 revision 正文保留策略。
+   * keep 只建议排障时临时打开——它会恢复平方级膨胀。
+   */
+  setRevisionBodyMode(mode: RevisionBodyMode): void {
+    this.setMeta('revision_bodies', mode);
+  }
+
+  /**
+   * 删除某 session 中「非 current revision」的消息正文，返回删除行数。
+   *
+   * 走 idx_messages_session(session_id, revision_id, seq)，单 session 删除是索引区间扫描。
+   * FTS 侧由 messages_fts_ad 触发器按 rowid 同步删除（v3 起 O(1)）。
+   */
+  pruneSupersededRevisionBodies(sessionId: string, keepRevisionId: number): number {
+    if (this.getRevisionBodyMode() === 'keep') return 0;
+    const r = this.db
+      .prepare('DELETE FROM messages WHERE session_id = ? AND revision_id != ?')
+      .run(sessionId, keepRevisionId);
+    return Number(r.changes);
+  }
+
+  /**
+   * 统计「历史 revision 正文」的存量（只读，供 compact 报告）。
+   */
+  countSupersededRevisionStore(): { sessions: number; rows: number } {
+    const sRow = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM sessions s
+         WHERE EXISTS (
+           SELECT 1 FROM messages m
+           WHERE m.session_id = s.id AND m.revision_id != s.current_revision_id
+         )`,
+      )
+      .get() as Row;
+    const rRow = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM messages m
+         JOIN sessions s ON s.id = m.session_id
+         WHERE m.revision_id != s.current_revision_id`,
+      )
+      .get() as Row;
+    return { sessions: (sRow.n as number) ?? 0, rows: (rRow.n as number) ?? 0 };
+  }
+
+  /**
+   * 分批回收历史 revision 正文，返回本轮删除的行数。
+   * @param sessionLimit 本轮最多处理多少个 session（控制单次耗时，便于 daemon 定时跑）
+   */
+  pruneSupersededRevisionBodiesBatch(sessionLimit: number = 50): number {
+    if (this.getRevisionBodyMode() === 'keep') return 0;
+    const targets = this.db
+      .prepare(
+        `SELECT s.id AS id, s.current_revision_id AS cur FROM sessions s
+         WHERE s.current_revision_id IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM messages m
+             WHERE m.session_id = s.id AND m.revision_id != s.current_revision_id
+           )
+         LIMIT ?`,
+      )
+      .all(sessionLimit) as Array<{ id: string; cur: number }>;
+    if (targets.length === 0) return 0;
+    let deleted = 0;
+    this.db.exec('BEGIN');
+    try {
+      for (const t of targets) {
+        const r = this.db
+          .prepare('DELETE FROM messages WHERE session_id = ? AND revision_id != ?')
+          .run(t.id, t.cur);
+        deleted += Number(r.changes);
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return deleted;
+  }
+
   /** 读取 session 的全部 revision 历史（升序） */
   getRevisions(sessionId: string): RevisionRecord[] {
     const rows = this.db
@@ -783,6 +980,17 @@ export class SessionStore {
       conditions.push('started_at <= ?');
       params.push(query.startedAtTo);
     }
+    // 区间交集：started_at <= activeTo AND 最近活动 >= activeFrom
+    // 用 file_modified_at（文件真实 mtime）判定"那天有没有在干活"——与
+    // getActiveSessionsSummary 同一约定，不受"ymesh 什么时候扫到它"影响。
+    if (query.activeFrom !== undefined) {
+      conditions.push('COALESCE(file_modified_at, last_seen_at, updated_at, created_at) >= ?');
+      params.push(query.activeFrom);
+    }
+    if (query.activeTo !== undefined) {
+      conditions.push('COALESCE(started_at, created_at) <= ?');
+      params.push(query.activeTo);
+    }
     if (query.cwdPrefix !== undefined) {
       // 规范化：去尾部斜杠，使 /repo/ 与 /repo 等价
       const cwdNorm = query.cwdPrefix.replace(/\/+$/, '');
@@ -811,21 +1019,13 @@ export class SessionStore {
         if (longTokens.length > 0) {
           // 每个 token 用双引号包裹（phrase，避免 FTS5 语法字符干扰），空格连接（AND）
           const matchExpr = longTokens.map((t) => `"${t}"`).join(' ');
-          // ⚠️ 关联方向决定性能（实测同一台机、13M 消息库）：
-          //   · 从 sessions 侧关联（原写法）：
-          //       EXISTS (... f.session_id = sessions.id AND f.revision_id = sessions.current_revision_id)
-          //     → 对每个 session 重扫整个 FTS 命中集（"yondermesh" 命中 26k 行），
-          //       3255 × 26k = **直接挂住超时**
-          //   · 非关联 IN：1.06s，但丢掉 current_revision 过滤（会召回旧 revision 的内容）
-          //   · **从 FTS 侧关联（现写法）**：3.2s，且保留 current_revision 精确性 ——
-          //     26k 次主键查 sessions 很快，方向反过来就好了
-          // 取第三种：用 2 秒换回正确性。
+          // 性能史（同一台机、13M 消息库）：
+          //   · 从 sessions 侧关联：对每个 session 重扫 FTS 命中集 → 直接超时
+          //   · 从 FTS 侧关联 + current_revision 子查询：3.2s（为了排除旧 revision 的重复命中）
+          //   · 现在：FTS 只含 current revision（v3 回填 + ingest 清理保证），
+          //     不再需要那层子查询，非关联 IN 即可，1s 以内。
           conditions.push(
-            `sessions.id IN (
-              SELECT f.session_id FROM messages_fts f
-              WHERE f.messages_fts MATCH ?
-                AND f.revision_id = (SELECT s2.current_revision_id FROM sessions s2 WHERE s2.id = f.session_id)
-            )`,
+            `sessions.id IN (SELECT f.session_id FROM messages_fts f WHERE f.messages_fts MATCH ?)`,
           );
           params.push(matchExpr);
         }
@@ -1512,6 +1712,132 @@ export class SessionStore {
     this.db
       .prepare('INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)')
       .run(key, value);
+  }
+
+  // ─── 压缩：回收历史 revision 正文 + 重建检索索引 ──────────────────────
+
+  /** 只读评估：有多少历史副本可回收（`ymesh compact --dry-run`）。 */
+  compactAnalyze(): CompactAnalysis {
+    const store = this.countSupersededRevisionStore();
+    const ftsRows = (
+      this.db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get() as Row
+    ).n as number;
+    const liveRows = (
+      this.db.prepare('SELECT COUNT(*) AS n FROM messages').get() as Row
+    ).n as number;
+    const pageInfo = this.db.prepare('PRAGMA page_count').get() as Row | undefined;
+    const freeInfo = this.db.prepare('PRAGMA freelist_count').get() as Row | undefined;
+    const pageSize = this.db.prepare('PRAGMA page_size').get() as Row | undefined;
+    const pageCount = (pageInfo?.page_count as number) ?? 0;
+    const freeCount = (freeInfo?.freelist_count as number) ?? 0;
+    const pageBytes = (pageSize?.page_size as number) ?? 4096;
+    return {
+      revisionBodyMode: this.getRevisionBodyMode(),
+      sessionsWithSupersededRevisions: store.sessions,
+      prunableRevisionRows: store.rows,
+      liveMessageRows: liveRows,
+      ftsRows,
+      dbBytes: pageCount * pageBytes,
+      freeBytes: freeCount * pageBytes,
+    };
+  }
+
+  /**
+   * 执行压缩。默认**只做增量回收**（触发器在位，逐 session 按索引删除）。
+   *
+   * 大库一次性回收（几十万行以上）必须用 `rebuildFts`：
+   * 走触发器逐行删 FTS 是 O(删除行数 × FTS 查找)，而重建 FTS 的成本只和
+   * **存活 rows** 成正比（清理后通常只剩 2%~3%）。
+   *
+   * @param options.sessionLimit 每批处理的 session 数（控制单次事务大小）
+   * @param options.budgetMs     时间预算，超出即返回（daemon 定时任务用）
+   * @param options.rebuildFts   先 DROP FTS（连带触发器）再重建 + 回填
+   * @param options.vacuum       结束时 VACUUM 归还磁盘（需要无其他写事务）
+   */
+  compactApply(options: CompactOptions = {}): CompactReport {
+    const started = Date.now();
+    const sessionLimit = options.sessionLimit ?? 200;
+    const budgetMs = options.budgetMs ?? Number.POSITIVE_INFINITY;
+    const rebuildFts = options.rebuildFts ?? false;
+    let deletedRows = 0;
+    let ftsRebuilt = false;
+    let ftsBackfilled = 0;
+
+    if (rebuildFts) {
+      // 关掉触发器并丢掉 FTS：大批量删除不再逐行走 FTS
+      options.onPhase?.('prune');
+      this.db.exec('DROP TRIGGER IF EXISTS messages_fts_ai');
+      this.db.exec('DROP TRIGGER IF EXISTS messages_fts_ad');
+      this.db.exec('DROP TRIGGER IF EXISTS messages_fts_au');
+      this.db.exec('DROP TABLE IF EXISTS messages_fts');
+      ftsRebuilt = true;
+    }
+
+    // 分批回收历史 revision 正文
+    for (;;) {
+      const n = this.pruneSupersededRevisionBodiesBatch(sessionLimit);
+      deletedRows += n;
+      if (n === 0) break;
+      if (Date.now() - started > budgetMs) break;
+    }
+
+    if (ftsRebuilt) {
+      // 重建 FTS + 触发器（在删除之后：这样回填量只和存活消息量成正比）
+      options.onPhase?.('rebuild-fts');
+      this.db.exec(SCHEMA_FTS);
+      this.setMeta('fts_version', FTS_SCHEMA_VERSION);
+      this.ftsNeedsBackfill = false;
+      // 回填（同样分批，避免单事务过大）
+      options.onPhase?.('backfill-fts');
+      for (;;) {
+        const before = this.countFtsRows();
+        this.syncFtsBatch(5000);
+        const after = this.countFtsRows();
+        ftsBackfilled += after - before;
+        if (after === before) break;
+      }
+    }
+
+    if (options.vacuum) {
+      options.onPhase?.('vacuum');
+      // VACUUM 不能在事务里跑；先合并 WAL，再整体重建文件。
+      try {
+        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+      } catch {
+        // 有并发读时 checkpoint 可能拿不到写锁，不阻塞后续 VACUUM 尝试
+      }
+      this.db.exec('VACUUM');
+    }
+
+    return {
+      revisionBodyMode: this.getRevisionBodyMode(),
+      deletedRevisionRows: deletedRows,
+      ftsRebuilt,
+      ftsBackfilled,
+      vacuumed: options.vacuum ?? false,
+      elapsedMs: Date.now() - started,
+    };
+  }
+
+  /**
+   * 库文件体积与空闲页（O(1)，走 PRAGMA，不进全表扫描）。
+   *
+   * 为什么不直接 stat 文件：WAL 里可能还有没合并的页，而且「空闲页」才是
+   * 「空间没还给磁盘」的信号（删了行但没 VACUUM 时 free 会很大）。
+   */
+  dbSizeInfo(): { dbBytes: number; freeBytes: number } {
+    const pageInfo = this.db.prepare('PRAGMA page_count').get() as Row | undefined;
+    const freeInfo = this.db.prepare('PRAGMA freelist_count').get() as Row | undefined;
+    const pageSize = this.db.prepare('PRAGMA page_size').get() as Row | undefined;
+    const pageCount = (pageInfo?.page_count as number) ?? 0;
+    const freeCount = (freeInfo?.freelist_count as number) ?? 0;
+    const pageBytes = (pageSize?.page_size as number) ?? 4096;
+    return { dbBytes: pageCount * pageBytes, freeBytes: freeCount * pageBytes };
+  }
+
+  /** FTS 当前行数（诊断用） */
+  countFtsRows(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get() as Row).n as number;
   }
 
   /** 关闭数据库 */

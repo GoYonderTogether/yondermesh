@@ -196,6 +196,16 @@ export interface SessionQuery {
   startedAtFrom?: number;
   /** startedAt 闭区间终点（含） */
   startedAtTo?: number;
+  /**
+   * 「当天有活动」窗口起点：session 的时间区间与 [activeFrom, activeTo] 有交集即命中。
+   *
+   * 与 startedAtFrom/To 的区别：后者只认「在这段时间里**开始**的 session」，
+   * 会把昨天开始、今天还在干活的长会话整个漏掉。日报/晨报要的是「今天有哪些
+   * agent 在动」，所以用交集口径。
+   */
+  activeFrom?: number;
+  /** 「当天有活动」窗口终点（与 activeFrom 配对使用） */
+  activeTo?: number;
   /** cwd 前缀匹配（目录边界安全，LIKE 特殊字符转义） */
   cwdPrefix?: string;
   /** projectPath 前缀匹配（目录边界安全） */

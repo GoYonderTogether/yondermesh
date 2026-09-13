@@ -220,6 +220,14 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
 命令:
   help                显示此帮助信息
   version             显示版本号
+
+  ── Agent 接口（4 个职能，MCP 与 CLI 同一套；优先用这 4 个）──────────
+  observe             看：会诊本机所有 agent 的会话（scope=me|global|project|session|active|tree）
+  message             说：跟其他 agent 会话通信（action=send|check）
+  orchestrate         管：spawn 起会话 / assign 派活 / handoff 接力 / await 等结果 / discuss 多模型讨论 / stop 叫停 / prior 查旧账
+  workspace           标：给工作目录起名、分组、看某目录下有哪些 agent 在跑
+
+  ── 采集与查看 ───────────────────────────────────────────────────
   scan                扫描本机全部 session（27 个 adapter：cass/claude/codex/hermes/
                       windsurf/continue/opencode/copilot/openclaw/kimi/qwen/gemini/pi/
                       factory/vibe/codebuddy/cline/crush/openhands/goose/antigravity/
@@ -246,10 +254,10 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   extract             提取项目全部 user 需求与 assistant 响应到 NDJSONL 文件（按行号/ID 索引）
   handoff <id>        提取 session 浓缩 handoff 包（compacted 摘要 + tool call + plan），用于任务接管
   state <action>      管理运行时状态文件 (sync|show)
-  mailbox <action>    跨 session 消息总线 (post|get|pop|list|mark-read|check|whoami|unread)
-  launch              启动新 agent session（--cli <agent> --prompt "text" [--model <m>]）
-  inject              向运行中 session 注入消息（--cli <agent> --session <id> --message "text"）
-  transfer            跨 agent 转交 session（--cli <src> --session <id> --target <dst> [--output <path>]）
+  mailbox <action>    [遗留，用 message] 跨 session 消息总线 (post|get|pop|list|mark-read|check|whoami|unread)
+  launch              [遗留，用 orchestrate spawn] 启动新 agent session（--cli <agent> --prompt "text" [--model <m>]）
+  inject              [遗留] 向运行中 session 注入消息（--cli <agent> --session <id> --message "text"）
+  transfer            [遗留，用 orchestrate handoff] 跨 agent 转交 session（--cli <src> --session <id> --target <dst> [--output <path>]）
   send                同步注入 v3：发送消息到目标 agent 并同步拿回复（--cli <agent> [--session <id>] [--mode stopped|running|new] --message "text" [--model <m>] [--effort <e>] [--cwd <path>] [--timeout <ms>] [--json]）
   briefing generate   生成每日晨报（多维切分：agent/项目/设备/时段 + 完成数/完成率/卡住待办）
                       选项: [--date <YYYY-MM-DD>] [--output <dir>] [--json]
@@ -264,6 +272,10 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
                             --session-format jsonl|sqlite|json|markdown --yes（覆盖已存在）
   sync fts            显式分批回填 messages_fts 全文索引（大库自动回填被跳过时用）
                       选项: --batch <n>（每批条数，默认 5000）[--json]
+  compact             压缩数据库：回收被覆盖的历史 revision 正文 + 重建全文索引 + 归还磁盘
+                      选项: --dry-run（只报告）--vacuum（回收磁盘，需独占）
+                            --mode current-only|keep（切换历史正文保留策略）--json
+
   retain analyze      扫描数据库冗余（噪音/超长/老旧 session + session 级分类），报告可压缩量（只读）
   retain apply        执行筛除（L0 删噪音 + L2 截断 + SL0/SL1/SL2 session 级 + L3 归档），含去重备份
                       选项: --dry-run（预演）--no-backup（跳过备份）[--db <path>] [--json]
@@ -363,7 +375,11 @@ Commands:
   extract             Extract a project's user requirements and assistant responses to NDJSONL (indexed by line/ID)
   handoff <id>        Extract a compacted handoff package (compacted summaries + tool calls + plan) for task takeover
   state <action>      Manage runtime state file (sync|show)
-  mailbox <action>    Cross-session message bus (post|get|pop|list|mark-read|check|whoami|unread)
+  observe             See: inspect sessions across all local agents (scope=me|global|project|session|active|tree)
+  message             Say: talk to other agent sessions (action=send|check)
+  orchestrate         Manage: spawn / assign / handoff / await / discuss / stop (cooperative) / prior
+  workspace           Label: name and group working directories; see who is running where
+  mailbox <action>    [legacy, use message] Cross-session message bus (post|get|pop|list|mark-read|check|whoami|unread)
   launch              Start a new agent session (--cli <agent> --prompt "text" [--model <m>])
   inject              Inject a message into a running session (--cli <agent> --session <id> --message "text")
   transfer            Transfer a session across agents (--cli <src> --session <id> --target <dst> [--output <path>])
@@ -381,6 +397,9 @@ Commands:
                                --session-format jsonl|sqlite|json|markdown --yes (overwrite existing)
   sync fts            Explicitly backfill messages_fts full-text index in batches (use when large-DB auto-backfill is skipped)
                       Options: --batch <n> (batch size, default 5000) [--json]
+  compact             Shrink the database: drop superseded revision bodies + rebuild the FTS index + return disk space
+                      Options: --dry-run (report only) --vacuum (return disk, needs exclusive access)
+                               --mode current-only|keep (revision body policy) [--json]
   retain analyze      Scan database for redundancy (noise/oversized/stale sessions + session-level classification), report compressible volume (read-only)
   retain apply        Execute retention (L0 drop noise + L2 truncate + SL0/SL1/SL2 session-level + L3 archive), with deduplicated backup
                       Options: --dry-run (preview) --no-backup (skip backup) [--db <path>] [--json]
@@ -1032,6 +1051,18 @@ function cmdStatus(flags: Record<string, string | boolean>): number {
           console.log(`\n  ⚠️  全文索引未同步: ${SessionStore.formatFtsStaleHint(ftsStale)}`);
         } else {
           console.log(`\n  全文索引: 已同步`);
+        }
+      }
+      // 库体积 + 空闲页（O(1) PRAGMA）。空闲页很大 = 删过数据但没 VACUUM，
+      // 这时文件不会自己缩小，得跑 `ymesh compact --vacuum`。
+      const sizeInfo = ftsStore.dbSizeInfo();
+      if (sizeInfo.dbBytes > 0) {
+        const freePct = sizeInfo.dbBytes > 0 ? (sizeInfo.freeBytes / sizeInfo.dbBytes) * 100 : 0;
+        console.log(
+          `\n  库文件:     ${fmtBytes(sizeInfo.dbBytes)}（空闲 ${fmtBytes(sizeInfo.freeBytes)}，${freePct.toFixed(0)}%）`,
+        );
+        if (freePct > 20) {
+          console.log('    空闲页偏多 → ymesh compact --vacuum 可把空间还给磁盘');
         }
       }
     } finally {
@@ -2794,6 +2825,112 @@ function cmdDistill(flags: Record<string, string | boolean>): number {
 }
 
 /** sync 命令：显式触发数据维护任务（目前支持 fts 回填） */
+/** compact 命令：回收历史 revision 正文 + 重建 FTS + 归还磁盘 */
+function cmdCompact(flags: Record<string, string | boolean>): number {
+  const dataDir = resolveDataDir(flags);
+  const dbPath = typeof flags.db === 'string' ? flags.db : join(dataDir, 'yondermesh.db');
+  const dryRun = flags['dry-run'] === true;
+  const wantVacuum = flags.vacuum === true;
+  const sessionLimit =
+    typeof flags['session-limit'] === 'string'
+      ? Math.max(1, parseInt(flags['session-limit'], 10) || 200)
+      : 200;
+
+  const store = openStore(dbPath);
+  try {
+    // --mode 可在压缩前切换保留策略（keep → current-only 是回收历史副本的前提）
+    if (flags.mode === 'keep' || flags.mode === 'current-only') {
+      store.setRevisionBodyMode(flags.mode as 'keep' | 'current-only');
+    }
+    const before = store.compactAnalyze();
+    // 大库一次性回收必须重建 FTS（逐行走触发器删 FTS 会把时间花在索引上）；
+    // 小规模增量回收走触发器更省事。
+    const rebuildFts = before.prunableRevisionRows > 200_000;
+
+    if (dryRun) {
+      if (flags.json) {
+        console.log(JSON.stringify({ dryRun: true, ...before, wouldRebuildFts: rebuildFts }, null, 2));
+      } else {
+        console.log('[yondermesh] compact 评估（只读）');
+        console.log(`  保留策略:        ${before.revisionBodyMode}`);
+        console.log(`  含历史副本的 session: ${before.sessionsWithSupersededRevisions}`);
+        console.log(`  可回收历史副本行数:   ${before.prunableRevisionRows}`);
+        console.log(`  存活消息行数:         ${before.liveMessageRows}`);
+        console.log(`  全文索引行数:         ${before.ftsRows}`);
+        console.log(`  库文件:               ${fmtBytes(before.dbBytes)}（其中空闲 ${fmtBytes(before.freeBytes)}）`);
+        console.log(`  执行时会重建 FTS:     ${rebuildFts ? '是' : '否（增量回收）'}`);
+        if (before.revisionBodyMode === 'keep') {
+          console.log('  ⚠️  当前是 keep 策略（保留每一版正文），compact 不会删任何东西。');
+          console.log('     要回收就得先切回 current-only：ymesh compact --mode current-only');
+        } else {
+          console.log('  去掉 --dry-run 即执行；加 --vacuum 可把回收的空间还给磁盘。');
+        }
+      }
+      return 0;
+    }
+
+    if (before.revisionBodyMode === 'keep' && before.prunableRevisionRows > 0) {
+      const msg =
+        '当前是 keep 策略（保留每一版正文），compact 不会删除。要回收请加 --mode current-only。';
+      if (flags.json) console.log(JSON.stringify({ ok: false, skipped: true, reason: msg }, null, 2));
+      else console.error(`[yondermesh] ${msg}`);
+      return flags.json ? 0 : 1;
+    }
+    if (!flags.json) {
+      console.error(`[yondermesh] 开始压缩：待回收 ${before.prunableRevisionRows} 行历史副本，库 ${fmtBytes(before.dbBytes)}`);
+    }
+    let lastPhase = '';
+    const report = store.compactApply({
+      sessionLimit,
+      rebuildFts,
+      vacuum: wantVacuum,
+      onPhase: (phase) => {
+        if (flags.json || phase === lastPhase) return;
+        lastPhase = phase;
+        const label: Record<string, string> = {
+          prune: '回收历史 revision 正文',
+          'rebuild-fts': '重建全文索引结构',
+          'backfill-fts': '回填全文索引',
+          vacuum: 'VACUUM 归还磁盘（可能数分钟）',
+        };
+        console.error(`[yondermesh] ${label[phase] ?? phase}…`);
+      },
+    });
+    const after = store.compactAnalyze();
+
+    if (flags.json) {
+      console.log(JSON.stringify({ before, after, report }, null, 2));
+    } else {
+      console.log('[yondermesh] compact 完成');
+      console.log(`  删除历史副本行数: ${report.deletedRevisionRows}`);
+      if (report.ftsRebuilt) console.log(`  重建全文索引:     ${report.ftsBackfilled} 行`);
+      console.log(`  库文件:           ${fmtBytes(before.dbBytes)} → ${fmtBytes(after.dbBytes)}`);
+      console.log(`  耗时:             ${(report.elapsedMs / 1000).toFixed(1)}s`);
+      if (!wantVacuum && before.dbBytes - after.dbBytes < before.dbBytes * 0.2) {
+        console.log('  提示: 空间尚未归还磁盘（页进入空闲列表，后续写入会复用）。要真正缩小文件加 --vacuum。');
+      }
+    }
+    return 0;
+  } catch (err) {
+    if (flags.json) {
+      console.log(JSON.stringify({ ok: false, error: String(err) }, null, 2));
+    } else {
+      console.error(`[yondermesh] compact 失败: ${String(err)}`);
+    }
+    return 1;
+  } finally {
+    store.close();
+  }
+}
+
+/** 人类可读的字节数 */
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
 function cmdSync(flags: Record<string, string | boolean>): number {
   const positional = process.argv.slice(process.argv.indexOf('sync') + 1);
   const action = positional[0] ?? '';
@@ -3614,6 +3751,9 @@ async function main(): Promise<number> {
 
     case 'sync':
       return cmdSync(flags);
+
+    case 'compact':
+      return cmdCompact(flags);
 
     case 'retain':
       return await cmdRetain(flags);

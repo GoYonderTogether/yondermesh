@@ -44,7 +44,11 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh extract` | Extract a project's user requirements and assistant responses to NDJSONL (indexed by line/ID) |
 | `ymesh handoff` | &lt;id&gt;        Extract a compacted handoff package (compacted summaries + tool calls + plan) for task takeover |
 | `ymesh state` | &lt;action&gt;      Manage runtime state file (sync|show) |
-| `ymesh mailbox` | &lt;action&gt;    Cross-session message bus (post|get|pop|list|mark-read|check|whoami|unread) |
+| `ymesh observe` | See: inspect sessions across all local agents (scope=me|global|project|session|active|tree) |
+| `ymesh message` | Say: talk to other agent sessions (action=send|check) |
+| `ymesh orchestrate` | Manage: spawn / assign / handoff / await / discuss / stop (cooperative) / prior |
+| `ymesh workspace` | Label: name and group working directories; see who is running where |
+| `ymesh mailbox` | &lt;action&gt;    [legacy, use message] Cross-session message bus (post|get|pop|list|mark-read|check|whoami|unread) |
 | `ymesh launch` | Start a new agent session (--cli &lt;agent&gt; --prompt "text" [--model &lt;m&gt;]) |
 | `ymesh inject` | Inject a message into a running session (--cli &lt;agent&gt; --session &lt;id&gt; --message "text") |
 | `ymesh transfer` | Transfer a session across agents (--cli &lt;src&gt; --session &lt;id&gt; --target &lt;dst&gt; [--output &lt;path&gt;]) |
@@ -62,6 +66,8 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh --session-format` | jsonl|sqlite|json|markdown --yes (overwrite existing) |
 | `ymesh sync` | fts            Explicitly backfill messages_fts full-text index in batches (use when large-DB auto-backfill is skipped) |
 | `ymesh Options:` | --batch &lt;n&gt; (batch size, default 5000) [--json] |
+| `ymesh compact` | Shrink the database: drop superseded revision bodies + rebuild the FTS index + return disk space |
+| `ymesh Options:` | --dry-run (report only) --vacuum (return disk, needs exclusive access) [--json] |
 | `ymesh retain` | analyze      Scan database for redundancy (noise/oversized/stale sessions + session-level classification), report compressible volume (read-only) |
 | `ymesh retain` | apply        Execute retention (L0 drop noise + L2 truncate + SL0/SL1/SL2 session-level + L3 archive), with deduplicated backup |
 | `ymesh Options:` | --dry-run (preview) --no-backup (skip backup) [--db &lt;path&gt;] [--json] |

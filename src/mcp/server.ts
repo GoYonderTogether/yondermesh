@@ -682,7 +682,7 @@ export class McpServer {
           type: 'object',
           properties: {
             action: { type: 'string', enum: ['send', 'check'], description: 'send=发 / check=看，默认 check', default: 'check' },
-            to: { type: 'string', description: 'send: 目标 session id（支持 hash / native / 前缀），或 "all" 广播' },
+            to: { type: 'string', description: 'send: 目标 session id（支持 hash / native / 前缀），或 "all" 广播（广播按收件人记已读：同项目多个 agent 各自都能看到，不会被先读的人吃掉）' },
             body: { type: 'string', description: 'send: 消息正文' },
             delivery: { type: 'string', enum: ['now', 'after_turn', 'on_reply'], description: 'send: 投递时机，默认 now', default: 'now' },
             reply_to: { type: 'number', description: 'send: 回复某条消息的 id' },

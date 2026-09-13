@@ -41,6 +41,9 @@ export interface SourceScanResult {
   error?: string;
 }
 
+/** auto-mount 心跳日志间隔：结果没变化时最多每小时打一行（避免每分钟一行噪音） */
+const AUTO_MOUNT_HEARTBEAT_MS = 60 * 60_000;
+
 /** 一次全量扫描的结果 */
 export interface FullScanResult {
   results: SourceScanResult[];
@@ -75,6 +78,9 @@ export class YondermeshDaemon {
   private cassImported = false; // cass 只全量导入一次
   private lastScan?: FullScanResult;
   private watchErrors: string[] = [];
+  /** auto-mount 日志抑制：上次汇总 + 上次打印时间（见 autoMount 噪音治理） */
+  private lastAutoMountSummary = '';
+  private lastAutoMountLoggedAt = 0;
   /** 当前正在 fs.watch 的目录列表（启动时收集，stop 时清空） */
   private watchedPaths: string[] = [];
 
@@ -102,6 +108,7 @@ export class YondermeshDaemon {
    */
   private lastScanAt = new Map<string, number>();
   private briefingScheduler?: BriefingScheduler;
+  private compactTimer?: ReturnType<typeof setInterval>;
   /** 首轮扫描的 Promise（启动时异步跑，不阻塞 watch/reconcile 起来） */
   private scanInFlight: Promise<void> | null = null;
 
@@ -191,6 +198,45 @@ export class YondermeshDaemon {
         });
     }, this.config.reconcileIntervalMs);
 
+    // 启动定期压缩（默认每天一次，可配置关闭）。
+    //
+    // 只做「增量回收」：逐 session 按索引删历史副本，带时间预算；不 rebuild FTS、
+    // 不 VACUUM —— 后两者会长时间独占数据库，不适合放在常驻进程里。
+    // 需要真正归还磁盘时用 `ymesh compact --vacuum`。
+    if (this.config.compactEnabled) {
+      const runCompact = () => {
+        try {
+          const interval = this.config.compactIntervalMs ?? 24 * 60 * 60 * 1000;
+          const last = Number(this.store.getMeta('last_compact_at') ?? 0);
+          if (Date.now() - last < interval) return;
+          const analysis = this.store.compactAnalyze();
+          if (analysis.prunableRevisionRows === 0) {
+            this.store.setMeta('last_compact_at', String(Date.now()));
+            return;
+          }
+          const report = this.store.compactApply({
+            sessionLimit: this.config.compactSessionLimit ?? 200,
+            budgetMs: 60_000,
+          });
+          this.store.setMeta('last_compact_at', String(Date.now()));
+          const remaining = this.store.compactAnalyze().prunableRevisionRows;
+          process.stderr.write(
+            `[yondermesh] compact: 回收历史副本 ${report.deletedRevisionRows} 行` +
+              `（剩余 ${remaining} 行），耗时 ${(report.elapsedMs / 1000).toFixed(1)}s\n`,
+          );
+        } catch (err) {
+          // 压缩失败不能影响采集
+          const line = `compact error: ${String(err)}`;
+          this.watchErrors.push(line);
+          process.stderr.write(`[yondermesh] ${line}\n`);
+        }
+      };
+      // 启动 5 分钟后先跑一次（避开启动时的全量扫描），之后每 10 分钟检查一次是否到点
+      const firstCompactTimer = setTimeout(runCompact, 5 * 60_000);
+      firstCompactTimer.unref?.();
+      this.compactTimer = setInterval(runCompact, 10 * 60_000);
+    }
+
     // 启动 briefing 定时生成（每小时，可配置关闭）
     if (this.config.briefingEnabled) {
       this.briefingScheduler = new BriefingScheduler(
@@ -248,6 +294,10 @@ export class YondermeshDaemon {
     }
 
     // 清理 briefing scheduler
+    if (this.compactTimer) {
+      clearInterval(this.compactTimer);
+      this.compactTimer = undefined;
+    }
     if (this.briefingScheduler) {
       this.briefingScheduler.stop();
       this.briefingScheduler = undefined;
@@ -742,9 +792,22 @@ export class YondermeshDaemon {
       // 与 cmdInstall / cmdMount 的统计口径保持一致
       const attempted = results.filter((r) => r.strategy !== 'unsupported');
       const ok = attempted.filter((r) => r.success).length;
-      process.stderr.write(
-        `[yondermesh] auto-mount: ${ok}/${attempted.length} mounts OK (${reason})\n`,
-      );
+      const summary = `${ok}/${attempted.length}`;
+      // 噪音治理：reconcile 每分钟跑一次，原来每分钟打一行「128/129 mounts OK」，
+      // 实测两个月攒下 6000+ 行、把真错误淹掉。现在只在
+      //   · 结果变化（成功数变了）· 有失败 · 距上次心跳 >= 1 小时
+      // 时才打。
+      const failed = attempted.length - ok;
+      const now = Date.now();
+      const changed = summary !== this.lastAutoMountSummary;
+      const heartbeatDue = now - this.lastAutoMountLoggedAt >= AUTO_MOUNT_HEARTBEAT_MS;
+      if (failed > 0 || changed || heartbeatDue) {
+        this.lastAutoMountSummary = summary;
+        this.lastAutoMountLoggedAt = now;
+        process.stderr.write(
+          `[yondermesh] auto-mount: ${summary} mounts OK (${reason})\n`,
+        );
+      }
     } catch (err) {
       this.watchErrors.push(`auto-mount error (${reason}): ${String(err)}`);
     }

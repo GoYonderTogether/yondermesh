@@ -101,7 +101,9 @@ export class BriefingGenerator {
     const date = options?.date ?? this.localDate(now);
     const { startMs, endMs } = this.dayBounds(date);
 
-    const window = { startedAtFrom: startMs, startedAtTo: endMs };
+    // 用「与当天有交集」而不是「当天开始」：跨天续跑的长会话（昨天开始、
+    // 今天还在写）才是日报里最该出现的，旧的 startedAt 口径会把它们全部漏掉。
+    const window = { activeFrom: startMs, activeTo: endMs };
 
     // 权威计数（无 limit）
     const stats = this.store.getSessionStats(window);
