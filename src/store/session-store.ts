@@ -82,11 +82,19 @@ export function tokenizeKeyword(keyword: string): string[] {
  *
  * 低于此值：构造时直接做精确检查（COUNT(*) 便宜，保持"小库自动回填"体验）。
  * 高于此值：推迟检查（deferred）——1300 万行上 COUNT(*) 实测 44.5s，不能进热路径。
- * 可用环境变量 YONDERMESH_FTS_AUTOCHECK_MAX_ROWS 覆盖。
+ * 可用环境变量 YONDERMESH_FTS_AUTOCHECK_MAX_MB 覆盖。
  */
-const FTS_AUTOCHECK_MAX_ROWS = Number(
-  process.env.YONDERMESH_FTS_AUTOCHECK_MAX_ROWS ?? 200_000,
-);
+/**
+ * FTS 自动陈旧检查的**体积**门槛（MB）。
+ *
+ * 为什么用体积而不是 MAX(rowid)：rowid 删除后不会回退。实测线上库压缩后只剩
+ * 37 万行、530MB，MAX(rowid) 仍停在 1685 万 —— 于是明明很便宜的自检被永久
+ * 推迟，`ymesh status` 一直显示「大库，精确检查约需数十秒」，纯误导。
+ *
+ * 体积与自检成本同向（messages 是主表）：12GB → 44s，530MB → 62ms。
+ * 默认 1GB 约对应数秒级上限。
+ */
+const FTS_AUTOCHECK_MAX_MB = Number(process.env.YONDERMESH_FTS_AUTOCHECK_MAX_MB ?? 1024);
 
 /**
  * 当前 FTS schema 版本。改动 FTS 结构（索引范围 / rowid 映射 / 分词器）时必须 +1，
@@ -213,13 +221,15 @@ export class SessionStore {
     //   SELECT COUNT(*) FROM messages WHERE role='user'  + COUNT(*) FROM messages_fts
     // 在 1300 万行的 messages 表上实测 **44.5 秒/次 × 2**，于是每条命令
     //（连「只有 27 条消息的 session 详情」也一样）都要等 90 秒以上。
-    // 现在：先用 O(1) 的 MAX(rowid) 探测库规模（实测 0.038s）——
+    // 现在：先用 O(1) 的 PRAGMA 探测库体积——
     //   · 小库 → 立刻做精确检查（便宜，保持自动回填体验）
     //   · 大库 → 推迟（deferred），只在显式需要时（status / sync fts / 搜索路径）
     //     调 ensureFtsChecked()
-    const sizeProbe = this.db.prepare('SELECT MAX(rowid) AS r FROM messages').get() as Row | undefined;
-    const approxRows = (sizeProbe?.r as number) ?? 0;
-    if (approxRows <= FTS_AUTOCHECK_MAX_ROWS) {
+    // O(1) 体积探测（PRAGMA page_count × page_size），不用 MAX(rowid)——
+    // 后者删除后不回退，会把「已经变小」的库一直当大库。
+    const dbBytes = this.dbSizeInfo().dbBytes;
+    const withinBudget = dbBytes <= FTS_AUTOCHECK_MAX_MB * 1024 * 1024;
+    if (withinBudget) {
       this.syncFtsIfStale();
     } else {
       // 大库：不在这里回填（会阻塞每条命令）。迁移后的空 FTS 由
