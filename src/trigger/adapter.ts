@@ -140,6 +140,41 @@ const CLI_LAUNCH_COMMANDS: Record<string, (prompt: string, opts?: { model?: stri
   qwen: (p, o) => ({ bin: 'qwen', args: ['-p', p, '-o', 'text', ...(o?.model ? ['-m', o.model] : [])] }),
 };
 
+/**
+ * 「续接已有 session 并发一条消息」的命令构造 —— 每个 CLI 的语法都不一样。
+ *
+ * 为什么必须逐个写：fallbackSpawn 原来对所有 CLI 都拼
+ *   `<bin> --resume <sid> --message <msg>`
+ * 但现实是（实测）：
+ *   · codex  → `codex exec resume <SESSION_ID> <PROMPT>`（`--resume` 根本不是 exec 的参数）
+ *   · claude → `claude -p <PROMPT> --resume <SESSION_ID>`
+ *   · pi     → `pi --session <SESSION_ID> <PROMPT>`
+ * 结果是：投递虽然真的把 CLI 启动了，却因为参数不对报
+ * 「unexpected argument '--resume'」—— 用户只看到"消息发了没人收到"。
+ *
+ * 验证方式：直接 `codex exec resume --help` / `claude --help` / `pi --help`。
+ * 没列出语法的 CLI 返回 null，调用方会给出「该 CLI 续接语法未适配」的明确错误，
+ * 而不是拿一个必然失败的通用参数硬试。
+ */
+export const CLI_RESUME_COMMANDS: Record<
+  string,
+  (sessionId: string, prompt: string, opts?: { model?: string; cwd?: string }) => string[] | null
+> = {
+  codex: (sid, p, o) => [
+    'exec', 'resume', sid, p,
+    ...(o?.model ? ['-m', o.model] : []),
+  ],
+  claude: (sid, p, o) => [
+    '-p', p, '--resume', sid,
+    ...(o?.model ? ['--model', o.model] : []),
+  ],
+  'claude-code': (sid, p, o) => [
+    '-p', p, '--resume', sid,
+    ...(o?.model ? ['--model', o.model] : []),
+  ],
+  pi: (sid, p) => ['--session', sid, p],
+};
+
 /** 检查 CLI 是否安装 */
 function isInstalled(cli: string): boolean {
   const bin = BIN_MAP[cli];
@@ -1733,18 +1768,36 @@ export class TriggerAdapter {
       return { delivered: false, response: '', channel: 'cli-spawn', latencyMs: Date.now() - start, error: `未知 CLI: ${req.cli}` };
     }
 
-    // 构造 resume + message 命令
-    const args: string[] = [];
-    if (req.sessionId) {
-      args.push('--resume', req.sessionId);
+    // 构造「续接 + 发消息」命令：按 CLI 的各自语法
+    const build = CLI_RESUME_COMMANDS[req.cli];
+    if (!req.sessionId || !build) {
+      return {
+        delivered: false,
+        response: '',
+        channel: 'cli-spawn',
+        latencyMs: Date.now() - start,
+        error: req.sessionId
+          ? `cli-spawn 未适配 ${req.cli} 的续接语法，无法安全投递（需要先适配该 CLI 的 resume 参数）`
+          : 'stopped 模式需要 sessionId',
+      };
     }
-    args.push('--message', req.message);
+    const args = build(req.sessionId, req.message, { model: req.model, cwd: req.cwd });
+    if (!args) {
+      return {
+        delivered: false,
+        response: '',
+        channel: 'cli-spawn',
+        latencyMs: Date.now() - start,
+        error: `cli-spawn 未适配 ${req.cli} 的续接语法`,
+      };
+    }
 
     try {
-      const r = spawnSync(bin, args, {
+      const r = spawnSync(resolveCliBinary(bin), args, {
         encoding: 'utf-8',
         timeout: req.timeoutMs ?? 60000,
         cwd: req.cwd,
+        env: buildCliEnv(),
       });
       const stdout = r.stdout ?? '';
       const stderr = r.stderr ?? '';
