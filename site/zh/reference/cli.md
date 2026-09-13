@@ -27,7 +27,8 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh orchestrate` | 管：spawn 起会话 / assign 派活 / handoff 接力 / await 等结果 / discuss 多模型讨论 / stop 叫停 / prior 查旧账 |
 | `ymesh workspace` | 标：给工作目录起名、分组、看某目录下有哪些 agent 在跑 |
 | `ymesh ──` | 采集与查看 ─────────────────────────────────────────────────── |
-| `ymesh scan` | 扫描本机全部 session（27 个 adapter：cass/claude/codex/hermes/ |
+| `ymesh scan` | [--force]      扫描本机全部 session（--force 忽略增量指纹、全量重读） |
+| `ymesh 27` | 个 adapter：cass/claude/codex/hermes/ |
 | `ymesh status` | 显示 daemon 状态和最近扫描结果 |
 | `ymesh agents` | 列出本机检测到的所有 agent 及其支持状态 |
 | `ymesh sessions` | 列出 session（支持过滤） |
@@ -69,7 +70,8 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh sync` | fts            显式分批回填 messages_fts 全文索引（大库自动回填被跳过时用） |
 | `ymesh 选项:` | --batch &lt;n&gt;（每批条数，默认 5000）[--json] |
 | `ymesh compact` | 压缩数据库：回收被覆盖的历史 revision 正文 + 重建全文索引 + 归还磁盘 |
-| `ymesh 选项:` | --dry-run（只报告）--vacuum（回收磁盘，需独占）--json |
+| `ymesh 选项:` | --dry-run（只报告）--vacuum（回收磁盘，需独占） |
+| `ymesh --mode` | current-only|keep（切换历史正文保留策略）--json |
 | `ymesh retain` | analyze      扫描数据库冗余（噪音/超长/老旧 session + session 级分类），报告可压缩量（只读） |
 | `ymesh retain` | apply        执行筛除（L0 删噪音 + L2 截断 + SL0/SL1/SL2 session 级 + L3 归档），含去重备份 |
 | `ymesh 选项:` | --dry-run（预演）--no-backup（跳过备份）[--db &lt;path&gt;] [--json] |

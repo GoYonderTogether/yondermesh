@@ -27,7 +27,7 @@ That fragmentation is the tax you pay every time you switch CLIs or machines. yo
 - **Collect** `shipped` — every session from every CLI on every device flows into one local SQLite. Your agents stop being islands and start acting as one working whole.
 - **Sync** `planned` — end-to-end-encrypted cross-device sync via a self-hosted relay. Not yet implemented; the sync code path is a TODO stub.
 - **Query** `shipped` — any agent queries any other agent's context via MCP tools. Topology-aware, source-aware, project-aware.
-- **Hand off** `shipped` — agent A picks up exactly where agent B stopped, even on a different machine. Sessions stop dying at the boundary; they become a continuous workflow.
+- **Hand off** `shipped` — agent A picks up where agent B stopped, **on the same machine** (cross-device handoff needs Sync, which is `planned`). Sessions stop dying at the boundary; they become a continuous workflow.
 - **Send** `preview` — synchronously inject a user message into any connected CLI agent and get the reply back. 26 CLIs (23 via wrapper channels for stopped/running; Claude Code and Codex via new-mode spawn; ChatGPT via the IDE class). 5 channels in use (cli-spawn / http-api / ws-rpc / tmux / applescript), 3 modes (stopped / running / new). Even if the target agent has no model configured, you still get an error message instead of silence.
 
 ## Quick start
@@ -91,7 +91,7 @@ ymesh send --cli opencode --session <id> --mode stopped --message "Now do the sa
 - **Session handoff** `shipped` — extract a compacted handoff package (summaries + recent messages + task plan) and pass it to another agent.
 - **Synchronous injection (Mailbox v3)** `preview` — `ymesh send` / `send` (MCP) deliver a user message to any connected CLI and return the cleaned reply. 26 CLIs (23 via wrapper channels for stopped/running; Claude Code and Codex via new-mode spawn; ChatGPT via the IDE class). 5 trigger channels in use, 3 modes (stopped / running / new, with optional `model` + `effort` for `new`). Failure is never silent: unknown CLI, missing model, upstream API rate-limit all surface as text in the response.
 - **Cross-device sync** `planned` — E2E-encrypted relay design exists; the sync code path is a TODO stub, not yet functional.
-- **Daily briefing** `planned` — activity digest design exists; the briefing generator is a TODO stub, not yet functional.
+- **Daily briefing** `shipped` — `ymesh briefing generate` writes a per-day digest (`~/.yondermesh/briefings/<date>.md`) and the daemon refreshes it hourly. Slice by agent / project / device / hour, with completed / active / awaiting-review counts. Deterministic, zero-LLM. Note: a session counts for a day if it **overlapped** that day (started earlier but still working counts too).
 - **No UI, no cloud lock-in, no model proxy, no agent modification.**
 
 ## Architecture
@@ -196,7 +196,7 @@ Full documentation: **https://goyondertogether.github.io/yondermesh/**
 - [x] **Mailbox v3** — synchronous injection (`ymesh send` / `send`); 26 CLIs (23 via wrapper channels for stopped/running; Claude Code and Codex via new-mode spawn; ChatGPT via the IDE class), 5 trigger channels in use, 3 modes
 - [ ] **M3** — enterprise: audit trail, RBAC, session replay, compliance reports
 - `planned` **Cross-device sync** — E2E-encrypted relay; sync code path is a TODO stub
-- `planned` **Daily briefing** — activity digest; generator is a TODO stub
+- `shipped` **Daily briefing** — per-day digest written to `~/.yondermesh/briefings/`, refreshed hourly by the daemon
 - `planned` **config.yaml parsing** — daemon currently uses built-in defaults only
 
 ## Contributing

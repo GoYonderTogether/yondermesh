@@ -67,7 +67,8 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh sync` | fts            Explicitly backfill messages_fts full-text index in batches (use when large-DB auto-backfill is skipped) |
 | `ymesh Options:` | --batch &lt;n&gt; (batch size, default 5000) [--json] |
 | `ymesh compact` | Shrink the database: drop superseded revision bodies + rebuild the FTS index + return disk space |
-| `ymesh Options:` | --dry-run (report only) --vacuum (return disk, needs exclusive access) [--json] |
+| `ymesh Options:` | --dry-run (report only) --vacuum (return disk, needs exclusive access) |
+| `ymesh --mode` | current-only|keep (revision body policy) [--json] |
 | `ymesh retain` | analyze      Scan database for redundancy (noise/oversized/stale sessions + session-level classification), report compressible volume (read-only) |
 | `ymesh retain` | apply        Execute retention (L0 drop noise + L2 truncate + SL0/SL1/SL2 session-level + L3 archive), with deduplicated backup |
 | `ymesh Options:` | --dry-run (preview) --no-backup (skip backup) [--db &lt;path&gt;] [--json] |
