@@ -140,9 +140,16 @@ function makeDeprecated(description: string, target: string): string {
  * T1.3 正交核心工具集(推荐入口)。文档生成器据此把工具分为「核心 8 工具」与
  * 「辅助工具」两组;新增/调整核心工具时同步更新此常量,即为单一真相源。
  */
+/**
+ * 当前对外的「核心正交工具」—— 也即 agent 真正该用的那 4 个职能。
+ *
+ * 历史：这里是收敛前的 8 个工具名（search_sessions / get_session / ...）。
+ * 4 工具收敛（看/说/管/标）之后它们全部变成 deprecated 兼容壳，而这份名单
+ * 没跟着改，导致文档生成器把新四件套全判成「辅助工具」，核心工具数为 0。
+ * 只有文档生成器在用这个常量（无运行时代码依赖）。
+ */
 export const ORTHOGONAL_TOOL_NAMES = [
-  'search_sessions', 'get_session', 'list_active', 'overview',
-  'handoff', 'send', 'mailbox', 'agents',
+  'observe', 'message', 'orchestrate', 'workspace',
 ] as const;
 
 export class McpServer {

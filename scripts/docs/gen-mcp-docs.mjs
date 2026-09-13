@@ -97,7 +97,10 @@ function render(tools, lang) {
         desc: 'yondermesh MCP server（ymesh mcp）暴露的正交工具集参考 —— 参数与调用方式。',
         banner: '> **自动生成** 自 `src/mcp/server.ts` 的 `McpServer.listTools()`，请勿手动编辑 — 在 `site/` 目录运行 `npm run sync` 重新生成。',
         intro: '`ymesh mcp` 启动一个 stdio JSON-RPC server，把 yondermesh 的 session 图暴露给任何支持 MCP 的 agent（Claude Code、Codex、Cursor、Gemini、Windsurf、Continue 等）。已废弃的转发别名不在此列。',
-        countLine: (core, aux) => `**核心正交工具 ${core} 个**，另有 ${aux} 个辅助工具（项目历史提取 / whoami）。`,
+        countLine: (core, aux) =>
+          aux > 0
+            ? `**核心正交工具 ${core} 个**，另有 ${aux} 个辅助工具。`
+            : `**核心正交工具 ${core} 个**（看 / 说 / 管 / 标）。`,
         coreHead: '## 核心工具（正交集）', auxHead: '## 辅助工具',
         howto: '## 如何调用', cliHead: '### 从 CLI',
         argsHead: '### 参数', noArgs: '_无参数。_',
@@ -108,7 +111,10 @@ function render(tools, lang) {
         desc: 'Reference for the orthogonal tool set exposed by the yondermesh MCP server (ymesh mcp) — arguments and invocation.',
         banner: '> **Auto-generated** from `McpServer.listTools()` in `src/mcp/server.ts`. Do not edit by hand — run `npm run sync` in `site/` to regenerate.',
         intro: 'The `ymesh mcp` command starts a stdio JSON-RPC server that exposes yondermesh\'s session graph to any MCP-capable agent (Claude Code, Codex, Cursor, Gemini, Windsurf, Continue, ...). Deprecated forwarding aliases are omitted.',
-        countLine: (core, aux) => `**${core} core orthogonal tools**, plus ${aux} auxiliary tools (project-history extraction / whoami).`,
+        countLine: (core, aux) =>
+          aux > 0
+            ? `**${core} core orthogonal tools**, plus ${aux} auxiliary tools.`
+            : `**${core} core orthogonal tools** — see / say / manage / label.`,
         coreHead: '## Core tools (orthogonal set)', auxHead: '## Auxiliary tools',
         howto: '## How to call', cliHead: '### From the CLI',
         argsHead: '### Arguments', noArgs: '_No arguments._',

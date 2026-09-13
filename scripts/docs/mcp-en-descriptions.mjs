@@ -9,6 +9,63 @@
 // source (Chinese) string rather than crashing.
 
 export const EN = {
+  observe: {
+    desc: 'See — the single read entry point over every AI agent session on this machine (and, later, across devices). Pick `scope` to choose what you are looking at (me / global / project / session / active / tree), then narrow with filters; `shape` decides the output form (list / detail / summary / tree / stats). Use it before starting work so you know who is already running, and instead of post-processing results by hand — filters are part of the query.',
+    params: {
+      scope: 'What to look at: me (my own session) / global / project / session / active (who is working now) / tree (session hierarchy)',
+      target: 'Target for scope=session|tree: session id (hash, native UUID or unique prefix) or project path for scope=project',
+      shape: 'Output form: list / detail / summary / tree / stats',
+      roles: 'Only these message roles, e.g. ["user","assistant"] — use ["user"] to read just what the human asked',
+      exclude: 'Exclude roles such as ["tool"] to drop tool-call noise',
+      min_length: 'Only messages with at least this many characters (e.g. 200 = long requirements only)',
+      keyword: 'Fuzzy keyword match over message content',
+      since: 'Only activity after this time — ISO 8601 or relative like 7d / 24h / 30m',
+      until: 'Only activity before this time',
+      limit: 'Max rows (default 20)',
+      offset: 'Pagination offset (default 0)',
+      include_agents: 'For scope=global, also list the detected CLIs',
+      self_session_id: 'Explicitly state which session you are (when self-detection is ambiguous)',
+    },
+  },
+  message: {
+    desc: 'Say — the one entry point for talking to another agent session. You do not need to know which CLI it is, only its session id. `action=send` posts a message, `action=check` reads what was sent to me. `delivery` picks the moment: now (rejected while the target is running — injecting between its turns corrupts the session), after_turn (delivered once my own turn ends; queued messages to the same target are merged), on_reply (delivered the moment the target finishes replying to its user, phrased as if the user said it).',
+    params: {
+      action: 'send = post a message, check = read messages addressed to me (default)',
+      to: 'send: target session id (hash / native / prefix) or "all" to broadcast to my project',
+      body: 'send: message body',
+      delivery: 'send: now / after_turn / on_reply (default now)',
+      reply_to: 'send: id of the message you are replying to (thread is derived automatically)',
+      limit: 'check: max messages to return (default 20)',
+      mark_read: 'check: mark returned messages as read (default true)',
+      unread_only: 'check: only unread messages (default true)',
+      self_session_id: 'check: explicitly state which session you are',
+    },
+  },
+  orchestrate: {
+    desc: 'Manage — what I do to sessions below me. `spawn` starts a new session, `assign` hands work to an existing one, `handoff` builds a takeover package, `await` waits for a result, `discuss` runs a multi-model debate, `stop` asks a session to stop cooperatively (never a kill — see the tool result), `prior` asks whether this was attempted before.',
+    params: {
+      action: 'spawn / assign / handoff / await / discuss / stop / prior',
+      target: 'Target session (assign/await/stop) or source session (handoff)',
+      brief: 'Task description (spawn/assign/discuss)',
+      to: 'discuss: which sessions to pull in (at least 2, must use different models)',
+      query: 'prior: the task or error text to search for',
+      delivery: 'spawn/assign/discuss: when to deliver — now / after_turn / on_reply (default on_reply)',
+      config: 'spawn: execution config — cli / model / effort / cwd / timeout_ms',
+      limit: 'await / prior: how many records to consider',
+      self_session_id: 'Explicitly state which session you are',
+    },
+  },
+  workspace: {
+    desc: 'Label — where I record what a working directory means: a human-readable label, a group, and a note. Also answers "which agents are running under this directory right now", counting only sessions strictly below the marked path.',
+    params: {
+      action: 'add / update / remove / list / status',
+      path: 'Absolute path of the working directory',
+      label: 'Readable name for the directory',
+      group: 'Group such as "personal" / "work"',
+      note: 'Free-form note',
+      within_minutes: 'status: only consider sessions seen within the last N minutes (default 30)',
+    },
+  },
   search_sessions: {
     desc: 'Search session records across every AI agent on this device. Filter by time range, project path, agent type, and session type; supports full-text `query` search over message bodies. Use it before starting a new task to find related history, or to review all work on a project.',
     params: {
