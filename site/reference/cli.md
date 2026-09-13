@@ -33,7 +33,7 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh update` | [--local]    Update from Git source (auto-rollback on build failure); --local packs from local source |
 | `ymesh rollback` | Roll back to the previous release manually |
 | `ymesh mcp` | Start MCP server (stdio JSON-RPC, for other agents to mount) |
-| `ymesh mcp` | call &lt;tool&gt; [args]  Call an MCP tool from the terminal (e.g. ymesh mcp call list_active) |
+| `ymesh mcp` | call &lt;tool&gt; [args]  Call an MCP tool from the terminal (e.g. ymesh mcp call observe --scope active) |
 | `ymesh mcp` | register        Register MCP server into Claude Code and Codex (auto-available in new sessions) |
 | `ymesh mcp` | unregister      Unregister from Claude Code and Codex |
 | `ymesh mcp` | status          Show MCP registration status |

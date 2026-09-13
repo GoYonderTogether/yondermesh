@@ -240,7 +240,7 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   update [--local]    从 Git 源码更新（构建失败自动回退）；--local 跳过 clone，从本地源码打包
   rollback            手动回退到上一个 release 版本
   mcp                 启动 MCP server（stdio JSON-RPC，供其他 agent 挂载）
-  mcp call <tool> [args]  终端直接调用 MCP 工具（如 ymesh mcp call list_active）
+  mcp call <tool> [args]  终端直接调用 MCP 工具（如 ymesh mcp call observe --scope active）
   mcp register        注册 MCP server 到 Claude Code 和 Codex（安装后新 session 自动可用）
   mcp unregister      从 Claude Code 和 Codex 注销
   mcp status          查看 MCP 注册状态
@@ -348,7 +348,7 @@ Commands:
   update [--local]    Update from Git source (auto-rollback on build failure); --local packs from local source
   rollback            Roll back to the previous release manually
   mcp                 Start MCP server (stdio JSON-RPC, for other agents to mount)
-  mcp call <tool> [args]  Call an MCP tool from the terminal (e.g. ymesh mcp call list_active)
+  mcp call <tool> [args]  Call an MCP tool from the terminal (e.g. ymesh mcp call observe --scope active)
   mcp register        Register MCP server into Claude Code and Codex (auto-available in new sessions)
   mcp unregister      Unregister from Claude Code and Codex
   mcp status          Show MCP registration status
@@ -1058,7 +1058,7 @@ function cmdStatus(flags: Record<string, string | boolean>): number {
 /** sessions 命令 */
 // ─── active 命令 ──────────────────────────────────────────────────────────
 
-/** active 命令：快速查看谁在跑（复用 MCP list_active_sessions 的底层逻辑） */
+/** active 命令：快速查看谁在跑（与 observe --scope active 同一份底层逻辑） */
 function cmdActive(flags: Record<string, string | boolean>): number {
   const store = openStore(flags.db as string | undefined);
   const withinMin = typeof flags.within === 'string' ? parseInt(flags.within, 10) : 30;
