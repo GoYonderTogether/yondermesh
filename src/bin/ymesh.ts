@@ -228,7 +228,8 @@ yondermesh v${VERSION} — 自托管 Agent 上下文总线
   workspace           标：给工作目录起名、分组、看某目录下有哪些 agent 在跑
 
   ── 采集与查看 ───────────────────────────────────────────────────
-  scan                扫描本机全部 session（27 个 adapter：cass/claude/codex/hermes/
+  scan [--force]      扫描本机全部 session（--force 忽略增量指纹、全量重读）
+                      27 个 adapter：cass/claude/codex/hermes/
                       windsurf/continue/opencode/copilot/openclaw/kimi/qwen/gemini/pi/
                       factory/vibe/codebuddy/cline/crush/openhands/goose/antigravity/
                       aider/trae-cli/cursor-ide/trae-ide/amp/chatgpt）
@@ -719,7 +720,8 @@ async function cmdScan(flags: Record<string, string | boolean>): Promise<number>
         }
       }
       if (!Cls) throw new Error(`未找到 importer/extractor 类`);
-      const instance = new Cls(store, { deviceId });
+      // 默认走增量指纹（未变的文件整批跳过）；`ymesh scan --force` 才强制重读
+      const instance = new Cls(store, { deviceId, force: flags.force === true });
       const stats = (meta.method === 'extract' ? instance.extract?.() : instance.import?.()) as Record<string, unknown> | undefined;
       const scanned = (stats && typeof stats[meta.scannedField] === 'number') ? stats[meta.scannedField] as number : 0;
       const inserted = (stats && typeof stats.inserted === 'number') ? stats.inserted as number : 0;
@@ -3454,7 +3456,9 @@ async function cmdReimport(flags: Record<string, string | boolean>): Promise<num
       return 1;
     }
 
-    const instance = new Cls(store, { deviceId });
+    // force：reimport 的目的就是补历史数据（结构化 tool_calls），必须绕开增量指纹；
+    // 否则文件没变就整批跳过，命令会「报成功但补 0 条」（实测踩到）
+    const instance = new Cls(store, { deviceId, force: true });
     const stats = (meta.method === 'extract' ? instance.extract?.() : instance.import?.()) as Record<string, unknown> | undefined;
 
     // 统计 reimport 后的 toolCalls 数

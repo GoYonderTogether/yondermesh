@@ -804,8 +804,18 @@ export class YondermeshDaemon {
       if (failed > 0 || changed || heartbeatDue) {
         this.lastAutoMountSummary = summary;
         this.lastAutoMountLoggedAt = now;
+        // 有失败时把「哪个挂载失败了」一起打出来：只报 N/M 时，
+        // 一个间歇失败的挂载点根本无从定位（线上实测见过 128/129 反复出现）。
+        const detail =
+          failed > 0
+            ? '  失败: ' +
+              attempted
+                .filter((r) => !r.success)
+                .map((r) => `${r.extension}@${r.target}(${r.strategy})`)
+                .join(', ')
+            : '';
         process.stderr.write(
-          `[yondermesh] auto-mount: ${summary} mounts OK (${reason})\n`,
+          `[yondermesh] auto-mount: ${summary} mounts OK (${reason})${detail}\n`,
         );
       }
     } catch (err) {

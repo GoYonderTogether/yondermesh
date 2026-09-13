@@ -281,6 +281,39 @@ describe('orchestrate 5. 各 action', () => {
     expect(r.hint).toContain('句柄池'); // 诚实说明为什么不能真 kill
   });
 
+  it('stop 回执带上目标实时状态（仍在写 / 已停）', async () => {
+    const id = env.addSession('s', '/p', [{ role: 'user', content: 'x' }]);
+    const r = await orchestrate(
+      { store: env.store, core: env.core },
+      { action: 'stop', target: id, brief: '测试' },
+    );
+    expect(r.ok).toBe(true);
+    // 目标刚刚还在写 → 明确回报「仍在写」+ 最近活动时长，调用方不必靠反复重发试探
+    expect(r.text).toContain('目标状态');
+    expect(r.text).toContain('仍在写');
+  });
+
+  it('stop 去重：同目标的同一条叫停不会重复入队（10 分钟窗口）', async () => {
+    const id = env.addSession('s', '/p', [{ role: 'user', content: 'x' }]);
+    const deps = { store: env.store, core: env.core };
+
+    const first = await orchestrate(deps, { action: 'stop', target: id, brief: '同一件事' });
+    expect(first.ok).toBe(true);
+    expect(first.text).toContain('已发出叫停');
+
+    // 第二次（同一目标、同一条指令）：不重复下发，只回报队列与状态
+    const second = await orchestrate(deps, { action: 'stop', target: id, brief: '同一件事' });
+    expect(second.ok).toBe(true);
+    expect(second.text).toContain('未重复下发');
+    expect((second.data as { deduped?: boolean } | undefined)?.deduped).toBe(true);
+
+    // 目标邮箱里只有一条叫停指令
+    const pending = env.core
+      .peekMessages({ forSessionId: id, unreadOnly: true })
+      .filter((m) => m.body.startsWith('【叫停】'));
+    expect(pending).toHaveLength(1);
+  });
+
   it('await：报告还在跑还是已停', async () => {
     const id = env.addSession('s', '/p', [{ role: 'user', content: '需求' }, { role: 'assistant', content: '回复' }]);
     const r = await orchestrate({ store: env.store, core: env.core }, { action: 'await', target: id });

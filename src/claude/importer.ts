@@ -48,6 +48,15 @@ export interface ClaudeImportOptions {
   rootPath?: string;
   /** 设备 id，默认 os.hostname() */
   deviceId?: string;
+  /**
+   * 忽略增量指纹，强制重读所有文件。
+   *
+   * 为什么需要：`ymesh reimport --source <x> --yes` 的用途就是「把历史数据补回来」
+   * （结构化 tool_calls 之类）。但增量索引会因为文件未变而整批跳过 —— 实测
+   * `reimport --source claude --limit 200 --yes` 扫了 65 个 session、补 0 条，
+   * 等于空转。reimport 必须带 force 才有意义。
+   */
+  force?: boolean;
 }
 
 /** 导入统计 */
@@ -198,7 +207,11 @@ export class ClaudeCodeImporter {
   ): Omit<ClaudeImportStats, 'scanRunId' | 'sourceInstanceId'> {
     const files = this.collectJsonlFiles(rootPath);
     // 增量索引：读文件之前先 stat 比对 mtime/size，未变就整个跳过
-    const incr = new IncrementalIndex(this.store, files.map((f) => f.absPath));
+    const incr = new IncrementalIndex(
+      this.store,
+      files.map((f) => f.absPath),
+      this.options.force === true,
+    );
 
     type Item = { absPath: string; relPath: string; isSubagent: boolean };
     const roots: Item[] = [];

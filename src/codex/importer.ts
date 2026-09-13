@@ -80,6 +80,15 @@ export interface CodexImportOptions {
   rootPath?: string;
   /** 设备 id，默认 os.hostname() */
   deviceId?: string;
+  /**
+   * 忽略增量指纹，强制重读所有文件。
+   *
+   * 为什么需要：`ymesh reimport --source <x> --yes` 的用途就是「把历史数据补回来」
+   * （结构化 tool_calls 之类）。但增量索引会因为文件未变而整批跳过 —— 实测
+   * `reimport --source claude --limit 200 --yes` 扫了 65 个 session、补 0 条，
+   * 等于空转。reimport 必须带 force 才有意义。
+   */
+  force?: boolean;
 }
 
 /** 导入统计 */
@@ -344,7 +353,7 @@ export class CodexImporter {
     // 逐文件跳会**丢掉没读那些文件的段**（聚合结果不完整 → 数据丢失）。
     // 所以按「文件名的 session uuid」分组，**整组都未变**才跳。
     // 实测本机 0 个 nativeId 对应多文件，但这里仍按组处理，避免将来踩坑。
-    const incr = new IncrementalIndex(this.store, files);
+    const incr = new IncrementalIndex(this.store, files, this.options.force === true);
     const groupOf = (absPath: string): string => {
       const m = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(
         absPath,

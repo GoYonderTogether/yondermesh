@@ -73,6 +73,15 @@ export interface PiImportOptions {
   deviceId?: string;
   /** 仅导入指定 flavor（source 名），默认全部 */
   only?: PiFlavor | string;
+  /**
+   * 忽略增量指纹，强制重读所有文件。
+   *
+   * 为什么需要：`ymesh reimport --source <x> --yes` 的用途就是「把历史数据补回来」
+   * （结构化 tool_calls 之类）。但增量索引会因为文件未变而整批跳过 —— 实测
+   * `reimport --source claude --limit 200 --yes` 扫了 65 个 session、补 0 条，
+   * 等于空转。reimport 必须带 force 才有意义。
+   */
+  force?: boolean;
 }
 
 /** 单 flavor 导入统计 */
@@ -346,7 +355,7 @@ export class PiImporter {
   ): Omit<PiFlavorStats, 'source' | 'cli' | 'sessionsDir' | 'scanRunId' | 'sourceInstanceId'> {
     const files = this.collectJsonlFiles(rootPath);
     // 增量索引：pi 是一文件一会话，所以可以安全地按 mtime/size 整文件跳过
-    const incr = new IncrementalIndex(this.store, files);
+    const incr = new IncrementalIndex(this.store, files, this.options.force === true);
     let scanned = 0;
     let inserted = 0;
     let updated = 0;
