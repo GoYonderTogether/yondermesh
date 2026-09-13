@@ -80,6 +80,7 @@ import { orchestrate } from '../mcp/orchestrate.js';
 import { workspace as workspaceCmd } from '../mcp/workspace.js';
 import { loadWrapper as regLoadWrapper, listImporters } from '../adapters/registry.js';
 import { scaffoldAdapter } from '../sdk/scaffold.js';
+import { augmentProcessPath } from '../detect/cli-path.js';
 import type { ScaffoldOptions } from '../sdk/scaffold.js';
 
 // 读取 package.json 的版本号
@@ -3648,6 +3649,12 @@ function quoteShell(s: string): string {
 }
 
 async function main(): Promise<number> {
+  // 进程级 PATH 兜底：daemon 由 LaunchAgent 托管时 PATH 只有
+  // /usr/bin:/bin:/usr/sbin:/sbin，而 CLI 装在 ~/.local/bin、fnm 目录下。
+  // 不补这一步，「调用其他 CLI/子进程」类功能在后台会成片失败
+  // （消息投递 exit -1、mount 失败、agent 检测漏报，都是同一个根因）。
+  augmentProcessPath();
+
   const argv = process.argv.slice(2);
   const parsed = parseArgs(argv);
   const { flags } = parsed;

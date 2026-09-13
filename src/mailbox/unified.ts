@@ -260,11 +260,25 @@ export async function agentMessage(
     } catch {
       resolved = null; // 前缀歧义：按原样字符串入队
     }
+
+    // 发送方身份必须在**入队时**定下来：
+    //   sender_idle 的触发条件是「发送方这一轮结束」，from_session_id 为空就永远
+    //   匹配不上任何 session —— 消息会静默烂在队列里（实测 6 条协作通知躺了一天）。
+    //   所以先自动解析「我是谁」（env → cwd 匹配），解析不到就降级成 target_idle
+    //   （等目标空闲再投，保证送达），并把降级明说出来。
+    const selfId = input.selfSessionId ?? core.resolveSelfSession({}) ?? undefined;
+    let deliverOn: DeliveryPolicy = policy;
+    let degraded = false;
+    if (policy === 'sender_idle' && !selfId) {
+      deliverOn = 'target_idle';
+      degraded = true;
+    }
+
     const id = core.postMessage({
       toSessionId: resolved?.sessionId ?? to,
-      fromSessionId: input.selfSessionId,
+      fromSessionId: selfId,
       body,
-      deliverOn: policy,
+      deliverOn,
       replyToId: input.replyTo,
     });
     return {
@@ -274,8 +288,10 @@ export async function agentMessage(
       messageId: id,
       to: resolved ?? undefined,
       delivered: false,
-      hint:
-        choice === 'after_turn'
+      hint: degraded
+        ? '⚠️ 没能识别出你属于哪个 session（env/cwd 都对不上），已改为「等目标空闲再投」以保证送达。' +
+          '想要 after_turn 语义请显式传 self_session_id。'
+        : choice === 'after_turn'
           ? '已排队：等你这一轮结束、daemon 把它投给目标（同目标的积压会合并成一条）'
           : '已排队：等目标回复完用户那一刻投给它，且以用户口吻（不暴露是你发的）',
     };
@@ -331,6 +347,7 @@ export async function agentMessage(
     delivery: 'now',
     to: target,
     delivered: res.delivered,
+    messageId: res.messageId,
     response: res.response,
     error: res.error ?? undefined,
   };

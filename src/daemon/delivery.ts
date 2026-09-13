@@ -88,9 +88,16 @@ export class DeliveryFlusher {
     if (rows.length === 0) return;
 
     const groups = new Map<string, typeof rows>();
+    // 控制侧为空的历史消息（老版本发送时没能识别出发送方）：
+    // 旧实现直接 `continue` —— 不计数、不报错、永远不投，实测 6 条协作通知
+    // 就这么烂在库里躺了一天。现在单独收口，在方法末尾降级投递（见下）。
+    const orphanSide: typeof rows = [];
     for (const r of rows) {
       const key = sideColumn === 'to_session_id' ? r.toSessionId : r.fromSessionId;
-      if (!key) continue;
+      if (!key) {
+        orphanSide.push(r);
+        continue;
+      }
       const list = groups.get(key) ?? [];
       list.push(r);
       groups.set(key, list);
@@ -139,6 +146,50 @@ export class DeliveryFlusher {
           report.deliveries += 1;
           this.log(
             `[yondermesh] after_turn 投递 ${sid.slice(0, 8)} → ${targetId.slice(0, 8)}（${list.length} 条合并）`,
+          );
+        }
+      }
+    }
+
+    // ── 控制侧为空的消息：降级投递，绝不静默丢 ─────────────────────────────
+    //
+    // 没有 from_session_id 的 after_turn 消息永远等不到「发送方 idle」——
+    // 这是数据层面的死结，只能降级：目标明确就按 target_idle（等目标空闲）投，
+    // 并在正文标注来源未知；目标也没有（项目广播）仍可通过 message check 拉取，
+    // 只提示、不误报为失败。
+    if (orphanSide.length > 0) {
+      const deliverable = orphanSide.filter((m) => m.toSessionId);
+      const pullOnly = orphanSide.length - deliverable.length;
+      if (pullOnly > 0) {
+        this.log(
+          `[yondermesh] 队列有 ${pullOnly} 条广播无注入目标（目标可用 message check 拉取）`,
+        );
+      }
+      const byTarget = new Map<string, typeof deliverable>();
+      for (const m of deliverable) {
+        const list = byTarget.get(m.toSessionId as string) ?? [];
+        list.push(m);
+        byTarget.set(m.toSessionId as string, list);
+      }
+      for (const [targetId, list] of byTarget) {
+        if (list.every((m) => m.attempts >= MAX_DELIVERY_ATTEMPTS)) {
+          this.core.abandonDelivery(list.map((m) => m.id));
+          this.log(
+            `[yondermesh] 补投降级放弃（来源未知，已试 ${MAX_DELIVERY_ATTEMPTS} 次）→ ${targetId.slice(0, 12)}`,
+          );
+          continue;
+        }
+        if (!this.isIdle(targetId)) continue; // 目标还在忙 → 再等等
+        const body =
+          '[来自另一个 agent 会话（发送方未知，队列补投）]\n' + coalesce(list);
+        const ok = await this.deliver(targetId, body, report);
+        this.core.recordDeliveryAttempt(list.map((m) => m.id));
+        if (ok) {
+          this.core.markDelivered(list.map((m) => m.id));
+          report.flushed += list.length;
+          report.deliveries += 1;
+          this.log(
+            `[yondermesh] 补投（来源未知）→ ${targetId.slice(0, 12)}（${list.length} 条合并）`,
           );
         }
       }

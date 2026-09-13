@@ -326,6 +326,12 @@ export const MIGRATION_COLUMNS: { table: string; column: string; type: string }[
   { table: 'agent_messages', column: 'delivered_at', type: 'INTEGER' },
   // 投递尝试次数：目标一直不可达时限次放弃（消息仍留在库里，只是不再重试）
   { table: 'agent_messages', column: 'delivery_attempts', type: 'INTEGER NOT NULL DEFAULT 0' },
+  // 立即投递的失败原因 / 真正注入目标会话的时刻。
+  // 为什么需要单独一列：delivered_at 的语义是「已写进收件人邮箱」（非队列消息插入时
+  // 就写上了），跟「真的注入到目标会话里」不是一回事 —— 混用会让"发出去了吗"
+  // 永远回答成"发了"，哪怕 spawn 直接失败。
+  { table: 'agent_messages', column: 'delivery_error', type: 'TEXT' },
+  { table: 'agent_messages', column: 'injected_at', type: 'INTEGER' },
 ];
 
 /**

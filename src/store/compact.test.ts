@@ -182,3 +182,64 @@ describe('SessionStore compact（数据库膨胀治理）', () => {
     expect(store.countSupersededRevisionStore().rows).toBe(1);
   });
 });
+
+describe('resolveLastActivity：活跃时间不能用扫描时间', () => {
+  const DEVICE2 = 'activity-test';
+  function env() {
+    const store = new SessionStore(':memory:');
+    const inst = store.registerSourceInstance({
+      deviceId: DEVICE2,
+      source: 'hermes',
+      rootPath: '/fake/.hermes',
+      coverage: 'A',
+    });
+    return { store, inst };
+  }
+
+  it('adapter 没给 fileModifiedAt 时，用最后一条消息的时间（不是 Date.now）', () => {
+    const { store, inst } = env();
+    const lastMsgAt = Date.now() - 3 * 24 * 3600_000; // 3 天前说过话
+    const sid = store.ingestSession({
+      deviceId: DEVICE2,
+      sourceInstanceId: inst.id,
+      nativeSessionId: 'old-session',
+      source: 'hermes',
+      startedAt: lastMsgAt - 60_000,
+      messages: [
+        { role: 'user', content: 'hi', timestamp: lastMsgAt - 1000 },
+        { role: 'assistant', content: 'yo', timestamp: lastMsgAt },
+      ],
+    }).sessionId;
+    const s = store.getSession(sid)!;
+    // 修复前这里会是「现在」→ 每个死会话看起来都刚活跃过
+    expect(s.fileModifiedAt).toBe(lastMsgAt);
+  });
+
+  it('秒级时间戳会被归一成毫秒（少数 adapter 给秒）', () => {
+    const { store, inst } = env();
+    const secs = Math.floor((Date.now() - 3600_000) / 1000);
+    const sid = store.ingestSession({
+      deviceId: DEVICE2,
+      sourceInstanceId: inst.id,
+      nativeSessionId: 'sec-session',
+      source: 'hermes',
+      messages: [{ role: 'user', content: 'hi', timestamp: secs }],
+    }).sessionId;
+    const s = store.getSession(sid)!;
+    expect(s.fileModifiedAt).toBe(secs * 1000);
+  });
+
+  it('adapter 显式给了 fileModifiedAt 时以它为准（文件 mtime 更准）', () => {
+    const { store, inst } = env();
+    const mtime = Date.now() - 5000;
+    const sid = store.ingestSession({
+      deviceId: DEVICE2,
+      sourceInstanceId: inst.id,
+      nativeSessionId: 'explicit-session',
+      source: 'claude-code',
+      fileModifiedAt: mtime,
+      messages: [{ role: 'user', content: 'hi', timestamp: Date.now() - 999_999 }],
+    }).sessionId;
+    expect(store.getSession(sid)!.fileModifiedAt).toBe(mtime);
+  });
+});

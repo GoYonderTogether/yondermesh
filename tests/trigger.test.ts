@@ -318,10 +318,11 @@ describe('TriggerAdapter.trigger — IDE CLI 路由（mock child_process）', ()
       mkReq({ cli: 'trae-ide', message: 'hi', mode: 'new', timeoutMs: 500 }),
     );
     expect(spawnSync).toHaveBeenCalled();
-    // 第一次 spawnSync 应该是 `which tmux`
-    const firstCall = vi.mocked(spawnSync).mock.calls[0];
-    expect(firstCall?.[0]).toBe('which');
-    expect(firstCall?.[1]).toEqual(['tmux']);
+    // tmux 的存在性现在由共享解析器判断（cli-path：PATH → 常见安装目录回退），
+    // 所以不再保证"第一次 spawnSync 是 which tmux"。这里改为断言
+    // 确实走了 tmux 通道 —— 即 spawnSync 里出现过 tmux 命令。
+    const calls = vi.mocked(spawnSync).mock.calls.map((c) => c[0]);
+    expect(calls.some((bin) => String(bin).includes('tmux'))).toBe(true);
   });
 });
 

@@ -77,10 +77,35 @@ describe('file_modified_at 存储', () => {
     expect(session!.fileModifiedAt).toBe(NOW - 5 * MIN);
   });
 
-  it('未传 fileModifiedAt 时回退到 Date.now()', () => {
+  it('未传 fileModifiedAt 且没有消息时间戳时，回退到 Date.now()', () => {
+    // ingest() 默认给的消息 timestamp=1（1970 年）——那是脏数据，会被当作无效
     const result = ingest(store, instId, { nativeId: 's1' });
     const session = store.getSession(result.sessionId);
     expect(session!.fileModifiedAt).toBe(NOW);
+  });
+
+  it('未传 fileModifiedAt 但有消息时间戳时，用最后一条消息的时间（不是扫描时间）', () => {
+    // 为什么改：adapter 不传 fileModifiedAt 时旧实现用 Date.now()（=扫描时间），
+    // 于是每次全量扫描都把历史 session 刷成「刚刚活跃」，active 视图/晨报全部失真。
+    const spokeAt = NOW - 2 * 24 * HOUR;
+    const result = ingest(store, instId, {
+      nativeId: 's2',
+      // 注意：不传 fileModifiedAt
+      messages: [
+        { role: 'user', content: '早', timestamp: spokeAt - MIN },
+        { role: 'assistant', content: '嗯', timestamp: spokeAt },
+      ],
+    });
+    const session = store.getSession(result.sessionId);
+    expect(session!.fileModifiedAt).toBe(spokeAt);
+  });
+
+  it('未来时间戳（时钟漂移/脏数据）按 now 处理', () => {
+    const result = ingest(store, instId, {
+      nativeId: 's3',
+      messages: [{ role: 'user', content: 'hi', timestamp: NOW + 48 * HOUR }],
+    });
+    expect(store.getSession(result.sessionId)!.fileModifiedAt).toBe(NOW);
   });
 
   it('内容变化时 file_modified_at 更新为新值', () => {

@@ -8,10 +8,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
-import { homedir } from 'node:os';
 
 import type { Extension, MountResult } from './types.js';
 import { CONTEXT_BLOCK_START, CONTEXT_BLOCK_END } from './types.js';
+import { resolveCliBinary } from '../detect/cli-path.js';
 
 // ── mcp-json 策略 (Cursor / Gemini / Windsurf / Continue) ──
 
@@ -187,42 +187,6 @@ export const skillSymlinkStrategy = {
     }
   },
 };
-
-// ── CLI 可执行文件解析 ──
-
-/**
- * 解析 CLI 可执行文件的绝对路径。
- *
- * 为什么不能只靠 PATH：daemon 由 LaunchAgent 托管，launchd 给的环境 PATH 只有
- * `/usr/bin:/bin:/usr/sbin:/sbin`，而 `claude` 装在 `~/.local/bin/claude`
- * —— 于是 daemon 里的 auto-mount 每次都失败（实测日志：128/129，失败项
- * `yondermesh@claude-code(claude-mcp)`），而手动 `ymesh mount all` 又一切正常。
- * 这类「同一条命令，人和 daemon 跑出两种结果」的坑，只能靠显式解析路径解决。
- */
-function resolveCliBinary(name: string): string {
-  try {
-    const found = execSync(`which ${name} 2>/dev/null`, {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (found) return found;
-  } catch {
-    // PATH 里没有，继续找常见安装位置
-  }
-  const home = homedir();
-  const candidates = [
-    path.join(home, '.local', 'bin', name),
-    path.join(home, '.claude', 'local', name),
-    path.join(home, '.bun', 'bin', name),
-    path.join(home, '.npm-global', 'bin', name),
-    `/opt/homebrew/bin/${name}`,
-    `/usr/local/bin/${name}`,
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  return name; // 找不到就原样返回，让调用方按原方式报错
-}
 
 // ── claude-mcp 策略 (Claude Code) ──
 

@@ -81,11 +81,82 @@ function makeEnv(opts?: { delivered?: boolean }) {
     return found!.id;
   };
 
+  /** 直接读投递终态（delivered_at / delivery_error），验证"发出去没有"可查 */
+  const readDelivery = (
+    messageId: number,
+  ): { delivered_at: number | null; delivery_error: string | null; injected_at: number | null } => {
+    const db = (store as unknown as {
+      db: { prepare: (s: string) => { get: (...a: unknown[]) => unknown } };
+    }).db;
+    return db
+      .prepare('SELECT delivered_at, delivery_error, injected_at FROM agent_messages WHERE id = ?')
+      .get(messageId) as { delivered_at: number | null; delivery_error: string | null; injected_at: number | null };
+  };
+
   return {
     store,
     core,
     fake,
     addSession,
+    readDelivery,
+    cleanup: () => {
+      core.close();
+      store.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    },
+  };
+}
+
+/** 触发器返回失败的环境（验证失败原因会被记下来） */
+function makeEnvWithFailure(): ReturnType<typeof makeEnv> {
+  const dataDir = mkdtempSync(join(tmpdir(), 'ymesh-agentmsg-fail-'));
+  const dbPath = join(dataDir, 'test.db');
+  const store = new SessionStore(dbPath);
+  const fake = new FakeTrigger({
+    delivered: false,
+    response: '',
+    exitCode: -1,
+    channel: 'cli-spawn',
+    error: 'spawn 失败: ENOENT',
+  } as TriggerResult);
+  const core = new MailboxCore(dbPath, dataDir, fake, new ReplyAdapter());
+  const inst = store.registerSourceInstance({
+    deviceId: DEVICE,
+    source: 'pi',
+    rootPath: '/fake/.pi',
+    coverage: 'A',
+  });
+  const addSession = (nativeId: string, cwd: string, modifyAgeMs = 0): string => {
+    store.ingestSession({
+      deviceId: DEVICE,
+      sourceInstanceId: inst.id,
+      nativeSessionId: nativeId,
+      source: 'pi',
+      cwd,
+      projectPath: cwd,
+      startedAt: Date.now() - 60_000,
+      lastSeenAt: Date.now() - modifyAgeMs,
+      fileModifiedAt: Date.now() - modifyAgeMs,
+      messages: [{ role: 'user', content: 'hi' }],
+    } as never);
+    return store
+      .querySessions({ source: 'pi' } as never)
+      .find((x) => x.nativeSessionId === nativeId)!.id;
+  };
+  const readDelivery = (messageId: number) => {
+    const db = (store as unknown as {
+      db: { prepare: (s: string) => { get: (...a: unknown[]) => unknown } };
+    }).db;
+    return db
+      .prepare('SELECT delivered_at, delivery_error, injected_at FROM agent_messages WHERE id = ?')
+      .get(messageId) as { delivered_at: number | null; delivery_error: string | null; injected_at: number | null };
+  };
+  return {
+    store,
+    core,
+    fake,
+    addSession,
+    readDelivery,
     cleanup: () => {
       core.close();
       store.close();
@@ -279,6 +350,56 @@ describe('agent_message 6. DeliveryFlusher（daemon 侧）', () => {
     }
   });
 
+  it('after_turn 但发送方解析不到自己 → 降级成 on_reply 入队（不再静默卡死）', async () => {
+    const env = makeEnv();
+    try {
+      const target = env.addSession('degrade-native', '/proj/degrade', 10 * 60_000);
+      // 不传 self_session_id，且环境里没有 YONDERMESH_SESSION_ID → 解析不到发送方
+      const before = process.env.YONDERMESH_SESSION_ID;
+      delete process.env.YONDERMESH_SESSION_ID;
+      try {
+        const r = await agentMessage(
+          { core: env.core, store: env.store },
+          { action: 'send', to: target, body: '来源不明的提醒', delivery: 'after_turn' },
+        );
+        expect(r.ok).toBe(true);
+        // 关键：没有落进 sender_idle（那条队列靠"发送方 idle"，来源为空就永远不触发）
+        expect(env.core.pendingDeliveriesAll('sender_idle')).toHaveLength(0);
+        expect(env.core.pendingDeliveriesAll('target_idle')).toHaveLength(1);
+        expect(r.hint ?? '').toContain('等目标空闲');
+      } finally {
+        if (before !== undefined) process.env.YONDERMESH_SESSION_ID = before;
+      }
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it('队列里遗留的「来源为空」消息会被降级补投，不再烂在库里', async () => {
+    const env = makeEnv();
+    try {
+      const target = env.addSession('legacy-native', '/proj/legacy', 10 * 60_000);
+      // 模拟历史数据：老版本发送时没能解析出发送方，from_session_id 为空
+      env.core.postMessage({
+        toSessionId: target,
+        fromSessionId: undefined,
+        body: '同工作区协作提醒（历史遗留）',
+        deliverOn: 'sender_idle',
+      });
+      expect(env.core.pendingDeliveriesAll('sender_idle')).toHaveLength(1);
+
+      const report = await new DeliveryFlusher(env.store, env.core).onScanned();
+
+      // 修复前：这条消息永远匹配不到"发送方 idle"，静静躺着；现在会被补投
+      expect(report.flushed).toBe(1);
+      expect(env.core.pendingDeliveriesAll('sender_idle')).toHaveLength(0);
+      // 正文标注来源未知，接收方不会被误导成"用户说的"
+      expect(env.fake.lastRequest?.message).toContain('发送方未知');
+    } finally {
+      env.cleanup();
+    }
+  });
+
   it('目标还在忙 → 不投，留在队列', async () => {
     const env = makeEnv();
     try {
@@ -291,6 +412,41 @@ describe('agent_message 6. DeliveryFlusher（daemon 侧）', () => {
       expect(report.flushed).toBe(0);
       expect(env.core.pendingDeliveriesAll('target_idle')).toHaveLength(1);
       expect(env.fake.lastRequest).toBeUndefined();
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it('now 投递成功后写 delivered_at（"发出去了吗"可查）', async () => {
+    const env = makeEnv({ delivered: true });
+    try {
+      const target = env.addSession('now-ok', '/proj/now', 10 * 60_000);
+      const r = await agentMessage(
+        { core: env.core, store: env.store },
+        { action: 'send', to: target, body: '立刻投这条', delivery: 'now' },
+      );
+      expect(r.delivered).toBe(true);
+      // 真正的"注入成功"信号是 injected_at（delivered_at 只代表"进了收件箱"）
+      const row = env.readDelivery(r.messageId as number);
+      expect(row.injected_at).not.toBeNull();
+      expect(row.delivery_error).toBeNull();
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it('now 投递失败后写 delivery_error（失败原因不再丢）', async () => {
+    const env = makeEnvWithFailure();
+    try {
+      const target = env.addSession('now-fail', '/proj/nowfail', 10 * 60_000);
+      const r = await agentMessage(
+        { core: env.core, store: env.store },
+        { action: 'send', to: target, body: '会失败的投递', delivery: 'now' },
+      );
+      expect(r.delivered).toBe(false);
+      const row = env.readDelivery(r.messageId as number);
+      expect(row.injected_at).toBeNull();
+      expect(row.delivery_error).toContain('spawn 失败');
     } finally {
       env.cleanup();
     }

@@ -524,7 +524,7 @@ export class SessionStore {
       // 首次创建：session + revision 1 + 消息
      if (!existing) {
       const startedAt = input.startedAt ?? now;
-      const fileModifiedAt = input.fileModifiedAt ?? now;
+      const fileModifiedAt = this.resolveLastActivity(input, now);
       this.db
         .prepare(
           `INSERT INTO sessions
@@ -611,7 +611,7 @@ export class SessionStore {
      // 旧 revision 的正文到此为止就没用了（没有任何读路径会读历史 revision 的消息），
      // 立刻删掉，避免「每变一次就多存一份全文」的平方级膨胀。revision 元数据保留。
      this.pruneSupersededRevisionBodies(sessionId, revisionId);
-     const fileModifiedAtUpdate = input.fileModifiedAt ?? now;
+     const fileModifiedAtUpdate = this.resolveLastActivity(input, now);
      this.db
        .prepare(
          `UPDATE sessions
@@ -1935,6 +1935,38 @@ export class SessionStore {
   private contentHash(messages: SessionMessageInput[]): string {
     const norm = JSON.stringify(messages.map((m, i) => [i, m.role, m.content]));
     return createHash('sha256').update(norm).digest('hex');
+  }
+
+  /**
+   * 解析「最后活动时间」——adapter 没显式给 fileModifiedAt 时的兜底。
+   *
+   * 为什么不能直接用 Date.now()：那是**扫描时间**。DB 类数据源（hermes /
+   * opencode / cass / trae-ide）没有文件 mtime，旧实现于是把「ymesh 什么时候
+   * 扫到它」当成了「它什么时候活跃」。后果实测过：
+   *   · 一次全量扫描（reimport --force）之后，活跃列表从 3 个涨到 66 个
+   *   · 晨报的「今天有哪些 agent 在干活」被历史会话灌满
+   *   · 投递器判 idle 也用这个字段 → 刚扫过的死会话被当成"还在忙"
+   *
+   * 现在改成：adapter 给了就用它的（文件 mtime 最准）；没给就用**消息里最大的
+   * 时间戳**——「最后一次说话」才是这个 session 真实的活跃时刻。
+   * 时间戳按秒给的源（少数 adapter）会被归一成毫秒；未来时间戳按 now 处理。
+   */
+  private resolveLastActivity(input: SessionIngestInput, now: number): number {
+    if (input.fileModifiedAt !== undefined) return input.fileModifiedAt;
+    // 2001-01-01 之前的"时间戳"对 agent 会话没有意义（测试桩/脏数据里常见
+    // timestamp: 1），当作无效，避免把历史时间算成活跃时间。
+    const MIN_VALID_MS = Date.UTC(2001, 0, 1);
+    let maxTs = 0;
+    for (const m of input.messages) {
+      const ts = m.timestamp;
+      if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) continue;
+      // 秒级时间戳（< 1e12）归一成毫秒
+      const ms = ts < 1_000_000_000_000 ? Math.round(ts * 1000) : Math.round(ts);
+      if (ms < MIN_VALID_MS) continue;
+      if (ms > maxTs) maxTs = ms;
+    }
+    if (maxTs === 0) return now; // 一条带时间的消息都没有：只能退回扫描时间
+    return Math.min(maxTs, now); // 未来时间戳（时钟漂移/脏数据）按 now 处理
   }
 
   /** 插入一条 revision，返回自增 id */

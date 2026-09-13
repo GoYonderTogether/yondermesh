@@ -12,6 +12,7 @@ import { spawn, spawnSync } from 'node:child_process';
 
 import type { TriggerRequest, TriggerResult, TriggerChannel, CliTriggerCapability, TriggerMode } from './types.js';
 import { loadWrapper as regLoadWrapper, getAdapter } from '../adapters/registry.js';
+import { findCliBinary, resolveCliBinary, buildCliEnv } from '../detect/cli-path.js';
 
 // ---------------------------------------------------------------------------
 // CLI 分类
@@ -143,12 +144,10 @@ const CLI_LAUNCH_COMMANDS: Record<string, (prompt: string, opts?: { model?: stri
 function isInstalled(cli: string): boolean {
   const bin = BIN_MAP[cli];
   if (!bin) return false;
-  try {
-    const r = spawnSync('which', [bin], { encoding: 'utf-8', timeout: 2000 });
-    return r.status === 0 && r.stdout.trim().length > 0;
-  } catch {
-    return false;
-  }
+  // 走共享解析器（PATH → 常见安装目录回退）。原实现 `which <bin>` 只看 PATH：
+  // daemon 由 launchd 托管时 PATH 只有 /usr/bin:/bin:...，于是所有 CLI 都被
+  // 判定成「未安装」—— 实测 codex / claude-code / pi / hermes 全部 false。
+  return findCliBinary(bin) !== undefined;
 }
 
 /** 检查 IDE 类 CLI 是否安装（看 .app bundle 或二进制） */
@@ -351,7 +350,10 @@ function tmuxTrigger(req: TriggerRequest): TriggerResult {
 
   // tmux 是否安装
   try {
-    const which = spawnSync('which', ['tmux'], { encoding: 'utf-8', timeout: 1000 });
+    const tmuxBin = findCliBinary('tmux');
+  const which = tmuxBin
+    ? { status: 0, stdout: tmuxBin, stderr: '' }
+    : spawnSync('which', ['tmux'], { encoding: 'utf-8', timeout: 1000 });
     if (which.status !== 0) {
       return { delivered: false, response: '', channel: 'tmux', latencyMs: Date.now() - start, error: 'tmux 未安装' };
     }
@@ -675,9 +677,10 @@ async function wsRpcNewSession(req: TriggerRequest, start: number, timeoutMs: nu
     return { delivered: false, response: '', channel: 'ws-rpc', latencyMs: Date.now() - start, error: `未知 CLI: ${cli}` };
   }
   try {
-    const r = spawnSync(bin, [req.message], {
+    const r = spawnSync(resolveCliBinary(bin), [req.message], {
       encoding: 'utf-8',
       timeout: timeoutMs,
+      env: buildCliEnv(),
       cwd: req.cwd,
     });
     const stdout = r.stdout ?? '';
@@ -1668,11 +1671,15 @@ export class TriggerAdapter {
         if (launchCmd) {
           const cmd = launchCmd(req.message, { model: req.model, cwd: req.cwd });
           try {
-            const r = spawnSync(cmd.bin, cmd.args, {
+            // 两个都必须做（实测）：
+            //   · 绝对路径：裸命令名在 launchd 的 PATH 下 ENOENT → exit -1
+            //   · 补 PATH 的 env：codex 之类是 `#!/usr/bin/env node` 脚本，
+            //     没有 node 照样起不来
+            const r = spawnSync(resolveCliBinary(cmd.bin), cmd.args, {
               encoding: 'utf-8',
               timeout: timeoutMs,
               cwd: req.cwd,
-              env: { ...process.env, ...(cmd.env ?? {}) },
+              env: buildCliEnv(cmd.env),
             });
             const stdout = r.stdout ?? '';
             const stderr = r.stderr ?? '';

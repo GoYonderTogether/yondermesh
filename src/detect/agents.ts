@@ -16,7 +16,7 @@
  * 由 OpenSpace 创建但 agent 本身未安装，不应计为已安装。
  */
 
-import { execSync } from 'node:child_process';
+import { findCliBinary } from './cli-path.js';
 import { existsSync, readdirSync, readlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -340,12 +340,9 @@ const AGENT_REGISTRY: AgentMeta[] = [
  * 用 execSync 调用 `which <cmd>`，失败返回 undefined。
  */
 function whichSync(cmd: string): string | undefined {
-  try {
-    const result = execSync(`which ${cmd} 2>/dev/null`, { encoding: 'utf-8' }).trim();
-    return result || undefined;
-  } catch {
-    return undefined;
-  }
+  // 走共享解析器：launchd 下 PATH 只有 /usr/bin:/bin:...，裸 which 会漏掉
+  // ~/.local/bin / fnm 里的 CLI（daemon 里检测「装了哪些 agent」全靠它）
+  return findCliBinary(cmd);
 }
 
 /**

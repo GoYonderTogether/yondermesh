@@ -229,7 +229,8 @@ export class MailboxCore {
         threadId,
         input.replyToId ?? null,
         input.deliverOn ?? null,
-        // 非队列消息：一写入就算“已投递”（只是存着供收件人读）
+        // 非队列消息：一写入就算「已进收件人邮箱」（供其拉取）。
+        // 注意：这不代表"已注入目标会话"—— 后者看 injected_at / delivery_error。
         input.deliverOn ? null : now,
       );
 
@@ -345,6 +346,15 @@ export class MailboxCore {
         // 审计写入失败不影响 send 主流程
       }
     }
+
+    // 4.5) 记下这次立即投递的终态
+    // 为什么需要：立即投递（deliver_on IS NULL）原来只写审计行、不写结果，
+    // 于是 570 条「now」消息 delivered_at 永远是空 —— "发出去了吗/对方收到了吗"
+    // 数据库回答不了。现在成功写 delivered_at，失败写 delivery_error。
+    this.recordImmediateOutcome(messageId, {
+      ok: triggerResult.delivered,
+      error: triggerResult.error,
+    });
 
     // 5) 返回 SendResult
     const result: SendResult = {
@@ -904,6 +914,43 @@ export class MailboxCore {
     const now = Date.now();
     const stmt = this.db.prepare('UPDATE agent_messages SET delivered_at = ? WHERE id = ?');
     for (const id of ids) stmt.run(now, id);
+  }
+
+  /**
+   * 记录一次「立即投递」的终态：成功 → delivered_at；失败 → delivery_error。
+   *
+   * 幂等：同一条消息重复记录时，成功会清掉旧的失败原因。
+   */
+  recordImmediateOutcome(
+    messageId: number,
+    outcome: { ok: boolean; error?: string },
+  ): void {
+    const now = Date.now();
+    if (outcome.ok) {
+      // 成功：记「真的注入到目标会话」的时刻。
+      // 注意不要写 delivered_at —— 那一位在插入时就写成"已进邮箱"了，
+      // 两件事混用会让失败也看起来像送达（实测就是这么误导的）。
+      this.db
+        .prepare(
+          'UPDATE agent_messages SET injected_at = ?, delivery_attempts = delivery_attempts + 1, delivery_error = NULL WHERE id = ?',
+        )
+        .run(now, messageId);
+      return;
+    }
+    this.db
+      .prepare(
+        'UPDATE agent_messages SET delivery_attempts = delivery_attempts + 1, delivery_error = ? WHERE id = ?',
+      )
+      .run((outcome.error ?? '未知原因').slice(0, 500), messageId);
+  }
+
+  /** 立即投递是否真的注入成功（供 send 调用方/诊断查询） */
+  wasInjected(messageId: number): boolean {
+    const row = this.db
+      .prepare('SELECT injected_at, delivery_error FROM agent_messages WHERE id = ?')
+      .get(messageId) as Row | undefined;
+    if (!row) return false;
+    return row.injected_at !== null && row.delivery_error === null;
   }
 
   /** 把队列消息标记为已投递（幂等；只有仍在队列里的会被标记）。 */
