@@ -130,12 +130,11 @@ ymesh releases            # 列出所有已安装的 release
 | 路径 | 用途 |
 |---|---|
 | `~/.yondermesh/yondermesh.db` | 本地 SQLite —— 所有已采集的 session |
-| `~/.yondermesh/config.yaml` | devices、agents、sync relay、MCP、briefing 配置 |
+| `~/.yondermesh/config.yaml` | devices、agents、sync relay、MCP 配置 |
 | `~/.yondermesh/key.pem` | 跨设备同步的 E2E 加密密钥 |
 | `~/.yondermesh/logs/` | daemon 与 CLI 日志 |
 | `~/.yondermesh/releases/<version>/` | 已安装的 release |
 | `~/.yondermesh/bin/ymesh` | 指向当前 release 的符号链接 |
-| `~/.yondermesh/briefings/` | 每日 briefing 输出 |
 
 完整目录树见[文件布局](/zh/reference/files)。
 
@@ -152,15 +151,19 @@ ymesh scan                        # 从原生 session 文件重建数据库
 
 ## 问：有每日总结吗？
 
-有。briefing 生成器会向 `~/.yondermesh/briefings/` 写入每日总结，汇总所有
-设备上的 agent 活动（"你的 N 个 agent 跨 M 台设备今天完成了 K 个任务，成功
-率 X%"）。在 `config.yaml` 里启用或关闭：
+没有，而且是**刻意不做**。yondermesh 是**给 agent 用的工具，不是给人看的报表
+产品**：它的职责是让 agent 互相看得见、说得上话、接得住活。给人看的总结属于
+另一件事，不内建；早期做过一版，已移除。
 
-```yaml
-briefing:
-  enabled: true
-  output: ~/.yondermesh/briefings
+想要总结，直接问 agent —— 这正是它存在的意义：
+
 ```
+你：我的 agent 今天都干了什么？
+Agent: → observe --scope global --since 24h
+```
+
+需要的原材料通过 MCP 工具（`observe` / `message` / `orchestrate` /
+`workspace`）和 CLI 全都能查到，随时可以让 agent 现场汇总。
 
 ## 问：bug 应该报到哪里？
 

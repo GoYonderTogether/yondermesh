@@ -2,7 +2,7 @@
  * yondermesh daemon 配置（LOOP-006）
  *
  * v0.1 极简：只管本机 session 采集 + 实时监听。
- * sync / mcp / briefing 留到后续 Loop，此处不展开。
+ * sync / mcp 留到后续 Loop，此处不展开。
  */
 
 import { homedir } from 'node:os';
@@ -49,10 +49,6 @@ export interface DaemonConfig {
   compactIntervalMs?: number;
   /** 每轮压缩最多处理多少个 session（控制单次耗时），默认 200 */
   compactSessionLimit?: number;
-  /** 是否启用 briefing 定时生成（每小时）。默认 true。 */
-  briefingEnabled?: boolean;
-  /** briefing 定时生成间隔（毫秒），默认 1 小时 */
-  briefingIntervalMs?: number;
 }
 
 /** 默认数据目录（支持 YONDERMESH_HOME 环境变量覆盖） */
@@ -71,8 +67,6 @@ export function defaultDaemonConfig(): DaemonConfig {
     debounceMs: 1_000, // 1 秒
     minScanGapMs: 15_000, // 15 秒：实时监听的最小扫描间隔（防热循环饿死 reconcile）
     autoMount: true,
-    briefingEnabled: true,
-    briefingIntervalMs: 60 * 60 * 1000, // 1 小时
     compactEnabled: true,
     compactIntervalMs: 24 * 60 * 60 * 1000, // 1 天
     compactSessionLimit: 200,

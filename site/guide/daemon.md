@@ -72,7 +72,7 @@ The daemon reads its configuration from defaults defined in `src/daemon/config.t
 
 ### Overriding the data directory
 
-Set the `YONDERMESH_HOME` environment variable to relocate the entire data directory (DB, PID file, config, logs, briefings):
+Set the `YONDERMESH_HOME` environment variable to relocate the entire data directory (DB, PID file, config, logs):
 
 ```bash
 export YONDERMESH_HOME=/var/lib/yondermesh

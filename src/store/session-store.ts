@@ -1089,7 +1089,7 @@ export class SessionStore {
    * 把「用户手里可能拿到的任意一种 id」解析成 DB 主键 `id`。
    *
    * 背景（为什么需要）：本库有**两套 id 并存**——
-   *   · `id`                = sha256(content) 派生，DB 主键（CLI 多处用它，如 retrospective）
+   *   · `id`                = sha256(content) 派生，DB 主键（CLI 多处引用）
    *   · `native_session_id` = 各 CLI 自己的 id（pi 是 UUID，claude/codex 是各自的文件名 id）
    * 而 `ymesh sessions` 列表里显示的是**截断的 hash**，`ymesh mailbox` / `ymesh inject`
    * 用的却是 native id —— 用户几乎必然拿错 id 去用，得到一句「session not found」。

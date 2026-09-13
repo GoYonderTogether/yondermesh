@@ -176,7 +176,7 @@ There is no single `ymesh uninstall` command. To fully remove yondermesh:
    ```
 
 2. Remove the data directory (this deletes the SQLite database, all release
-   builds, the symlink, and any briefings):
+   builds and the symlink):
 
    ```bash
    rm -rf ~/.yondermesh

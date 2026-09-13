@@ -70,11 +70,11 @@
       <summary>四模块怎么写</summary>
       <div class="guide">
         <p><b>1. 目标 (Goal)</b>：成功长什么样 + 约束。例："给一天全部 session 生成结构化汇总，不能漏报失败任务。"</p>
-        <p><b>2. 上下文 (Context)</b>：每次循环必须读的固定文件。例："读 ARCHITECTURE.md、docs/features.yaml、src/briefing/ 现状。"</p>
-        <p><b>3. 行动约束 (Action)</b>：允许哪些工具/命令、能改哪些范围。例："只能改 src/briefing/ 与 tests/briefing/；用 vitest 验证。"</p>
+        <p><b>2. 上下文 (Context)</b>：每次循环必须读的固定文件。例："读 ARCHITECTURE.md、docs/features.yaml、src/mcp/ 现状。"</p>
+        <p><b>3. 行动约束 (Action)</b>：允许哪些工具/命令、能改哪些范围。例："只能改 src/mcp/ 与 tests/；用 vitest 验证。"</p>
         <p><b>4. 观察与反馈 (Observation)</b>：怎么判断做对——测试 + 一个"检查者" sub-agent 对抗审查；失败把错误丢回继续，直到通过。</p>
         <p><b>Prompt</b>：复制给 agent 的提示词，须要求"用 sub-agent 执行 + 自验证到通过才停、不许撒谎"。留空则自动从四模块生成。</p>
-        <p><b>verifier</b>：定义"完成"的命令（如 <code>npm test -- briefing</code>），scan 据此判 passed/failed。必须可机器校验。</p>
+        <p><b>verifier</b>：定义"完成"的命令（如 <code>npm test -- mcp</code>），scan 据此判 passed/failed。必须可机器校验。</p>
         <p><b>状态机</b>：draft（人写）→ 人审改 approved → scan 跑 verifier → passed/failed。passed 且有 feature 关联 → 自动把该 feature 置 shipped。</p>
       </div>
     </details>
@@ -158,10 +158,10 @@ function renderEditor(l){
     </div>
     <div class="row">
       <div><label>状态</label><select id="f_status">${opts}</select></div>
-      <div><label>关联 feature（features.yaml 的 id）</label><input id="f_feature" value="${esc(l.feature)}" placeholder="如 briefing"></div>
+      <div><label>关联 feature（features.yaml 的 id）</label><input id="f_feature" value="${esc(l.feature)}" placeholder="如 search"></div>
     </div>
     <label>verifier（判定完成的命令）</label>
-    <input id="f_verifier" value="${esc(l.verifier)}" placeholder="如 npm test -- briefing">
+    <input id="f_verifier" value="${esc(l.verifier)}" placeholder="如 npm test -- mcp">
     <label>1. 目标 (Goal)</label><textarea id="f_goal">${esc(l.goal)}</textarea>
     <label>2. 上下文 (Context)</label><textarea id="f_context">${esc(l.context)}</textarea>
     <label>3. 行动约束 (Action)</label><textarea id="f_action">${esc(l.action)}</textarea>

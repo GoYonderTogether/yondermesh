@@ -160,7 +160,7 @@ ymesh status
    ymesh service uninstall
    ```
 
-2. 移除数据目录（这会删除 SQLite 数据库、所有 release 构建、符号链接和任何 briefing）：
+2. 移除数据目录（这会删除 SQLite 数据库、所有 release 构建和符号链接）：
 
    ```bash
    rm -rf ~/.yondermesh

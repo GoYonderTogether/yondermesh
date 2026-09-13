@@ -108,7 +108,6 @@ start → scan-once → watch (fs events) → periodic reconcile → idle
 | `src/trigger/` | `TriggerAdapter`（投递层，唯一 spawn 或对话 CLI 进程的层）+ `ReplyAdapter`（纯函数回复清洗器，无 I/O）。26 个 CLI 上实际在用 5 通道（第六种 `stdin` 有定义但尚未接线）× 3 模式。 |
 | `src/install/` | Release 构建、launcher 符号链接、git updater、skill linker、路径解析。 |
 | `src/extract/` | `ymesh extract`——把 user 需求与 assistant 响应转储为 NDJSONL 文件。 |
-| `src/briefing/` | 每日摘要生成器（输出到 `~/.yondermesh/briefings/`）。 |
 | `src/sync/` | 跨设备同步 agent（仅密文）。 |
 
 几条横切规则维持了边界清晰：

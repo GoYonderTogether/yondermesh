@@ -108,7 +108,6 @@ The source tree under `src/` is organized by responsibility. The table below is 
 | `src/trigger/` | `TriggerAdapter` (delivery, the only layer that spawns or talks to a CLI process) + `ReplyAdapter` (pure-function reply cleaner, no I/O). 5 channels in use (a sixth, `stdin`, is defined but not yet wired) × 3 modes across 26 CLIs. |
 | `src/install/` | Release build, launcher symlink, git updater, skill linker, path resolution. |
 | `src/extract/` | `ymesh extract` — dumps user requirements + assistant responses to NDJSONL files. |
-| `src/briefing/` | Daily digest generator (output to `~/.yondermesh/briefings/`). |
 | `src/sync/` | Cross-device sync agent (ciphertext only). |
 
 A few cross-cutting rules keep the boundaries clean:

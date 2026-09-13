@@ -56,14 +56,6 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh inject` | [遗留] 向运行中 session 注入消息（--cli &lt;agent&gt; --session &lt;id&gt; --message "text"） |
 | `ymesh transfer` | [遗留，用 orchestrate handoff] 跨 agent 转交 session（--cli &lt;src&gt; --session &lt;id&gt; --target &lt;dst&gt; [--output &lt;path&gt;]） |
 | `ymesh send` | 同步注入 v3：发送消息到目标 agent 并同步拿回复（--cli &lt;agent&gt; [--session &lt;id&gt;] [--mode stopped|running|new] --message "text" [--model &lt;m&gt;] [--effort &lt;e&gt;] [--cwd &lt;path&gt;] [--timeout &lt;ms&gt;] [--json]） |
-| `ymesh briefing` | generate   生成每日晨报（多维切分：agent/项目/设备/时段 + 完成数/完成率/卡住待办） |
-| `ymesh 选项:` | [--date &lt;YYYY-MM-DD&gt;] [--output &lt;dir&gt;] [--json] |
-| `ymesh stats` | 工作统计（多维切片：按天/项目/模型） |
-| `ymesh 选项:` | [--by day|project|model] [--from &lt;time&gt;] [--to &lt;time&gt;] [--json] |
-| `ymesh distill` | run         从 extract 产物蒸馏标签/主题/偏好（规则启发式，零 LLM） |
-| `ymesh distill` | list        列出已蒸馏项目 |
-| `ymesh distill` | show        查看某项目蒸馏产物（--hash &lt;projectHash&gt;） |
-| `ymesh 选项:` | --project &lt;path&gt; [--json] |
 | `ymesh scaffold` | &lt;name&gt;     生成新 adapter 模板（importer/wrapper/inject/index）到 src/&lt;name&gt;/ |
 | `ymesh 选项:` | --config-dir &lt;dir&gt; --cli-binary &lt;bin&gt; |
 | `ymesh --session-format` | jsonl|sqlite|json|markdown --yes（覆盖已存在） |
@@ -75,13 +67,8 @@ ymesh <command> --db <path>     # 指定数据库路径
 | `ymesh retain` | analyze      扫描数据库冗余（噪音/超长/老旧 session + session 级分类），报告可压缩量（只读） |
 | `ymesh retain` | apply        执行筛除（L0 删噪音 + L2 截断 + SL0/SL1/SL2 session 级 + L3 归档），含去重备份 |
 | `ymesh 选项:` | --dry-run（预演）--no-backup（跳过备份）[--db &lt;path&gt;] [--json] |
-| `ymesh retrospective` | 单 session 复盘：生成事实层（originalNeed/toolCalls/detours）+ 5 段 markdown 骨架 |
-| `ymesh 选项:` | --session &lt;id&gt; [--output &lt;path&gt;] [--json] [--no-redact] [--db &lt;path&gt;] |
 | `ymesh reimport` | 重新扫描指定 source 补结构化 tool_calls（幂等；默认 dry-run） |
 | `ymesh 选项:` | --source &lt;name&gt; [--limit &lt;n&gt;] [--dry-run] [--yes] [--db &lt;path&gt;] [--json] |
-| `ymesh issue` | create        把复盘产物作为 user story 提交到 GitHub issue（shell-out 到 gh CLI） |
-| `ymesh 选项:` | --title &lt;t&gt; [--body &lt;text&gt;] [--body-file &lt;path&gt;|-] [--label &lt;l&gt;...] |
-| `ymesh [--repo` | &lt;owner/name&gt;] [--dry-run] |
 
 ## 通用选项
 

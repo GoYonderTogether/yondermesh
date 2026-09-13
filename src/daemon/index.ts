@@ -23,7 +23,6 @@ import { CodexImporter, resolveCodexSessionsPath } from '../codex/index.js';
 import { mountAll } from '../mount/index.js';
 import { getAdapter } from '../adapters/registry.js';
 import { resolvePiFlavors } from '../pi/index.js';
-import { BriefingScheduler } from './briefing-scheduler.js';
 import { DeliveryFlusher } from './delivery.js';
 import { MailboxCore } from '../mailbox/index.js';
 import type { DaemonConfig } from './config.js';
@@ -107,7 +106,6 @@ export class YondermeshDaemon {
    * 每来源最快 minScanGapMs 才扫一次。
    */
   private lastScanAt = new Map<string, number>();
-  private briefingScheduler?: BriefingScheduler;
   private compactTimer?: ReturnType<typeof setInterval>;
   /** 首轮扫描的 Promise（启动时异步跑，不阻塞 watch/reconcile 起来） */
   private scanInFlight: Promise<void> | null = null;
@@ -237,15 +235,6 @@ export class YondermeshDaemon {
       this.compactTimer = setInterval(runCompact, 10 * 60_000);
     }
 
-    // 启动 briefing 定时生成（每小时，可配置关闭）
-    if (this.config.briefingEnabled) {
-      this.briefingScheduler = new BriefingScheduler(
-        this.store,
-        this.config.dataDir,
-        this.config.briefingIntervalMs,
-      );
-      this.briefingScheduler.start();
-    }
 
     // 确保进程不会因为 watcher 保持存活（调用方自己决定是否 hold）
   }
@@ -293,14 +282,9 @@ export class YondermeshDaemon {
       this.reconcileTimer = undefined;
     }
 
-    // 清理 briefing scheduler
     if (this.compactTimer) {
       clearInterval(this.compactTimer);
       this.compactTimer = undefined;
-    }
-    if (this.briefingScheduler) {
-      this.briefingScheduler.stop();
-      this.briefingScheduler = undefined;
     }
 
     // 释放锁

@@ -142,12 +142,11 @@ Under `~/.yondermesh/`:
 | Path | Purpose |
 |---|---|
 | `~/.yondermesh/yondermesh.db` | Local SQLite — every harvested session |
-| `~/.yondermesh/config.yaml` | Devices, agents, sync relay, MCP, briefing config |
+| `~/.yondermesh/config.yaml` | Devices, agents, sync relay, MCP config |
 | `~/.yondermesh/key.pem` | E2E encryption key for cross-device sync |
 | `~/.yondermesh/logs/` | Daemon and CLI logs |
 | `~/.yondermesh/releases/<version>/` | Installed releases |
 | `~/.yondermesh/bin/ymesh` | Symlink to the current release |
-| `~/.yondermesh/briefings/` | Daily briefing output |
 
 See [File Layout](/reference/files) for the full tree.
 
@@ -164,17 +163,20 @@ affected — paired devices will re-push their sessions on the next sync cycle.
 
 ## Q: Is there a daily digest?
 
-Planned — not yet implemented. The design is a daily digest written to
-`~/.yondermesh/briefings/` summarizing agent activity ("your N agents across M
-devices did K tasks today, plus which sessions look stuck"). It's the first
-user-facing surface of the L4 derivation layer, but the briefing generator is
-currently a stub — no digest is produced yet. The intended config shape:
+No — and that is deliberate. yondermesh is an **agent tool, not a reporting
+product**: it exists so agents can see each other, talk to each other, and hand
+work off. Summaries for humans ("today your N agents did K things") are a
+separate concern and are not built in; an earlier prototype was removed.
 
-```yaml
-briefing:
-  enabled: true
-  output: ~/.yondermesh/briefings
+If you want a digest, ask an agent for it — that is the whole point:
+
 ```
+You: what did my agents do today?
+Agent: → observe --scope global --since 24h
+```
+
+Everything needed for that is already queryable through the MCP tools
+(`observe` / `message` / `orchestrate` / `workspace`) and the CLI.
 
 ## Q: Where do I report bugs?
 

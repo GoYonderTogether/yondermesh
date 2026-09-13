@@ -72,7 +72,7 @@ Daemon 从 `src/daemon/config.ts` 定义的默认值读取配置，可通过 `Da
 
 ### 覆盖数据目录
 
-设置 `YONDERMESH_HOME` 环境变量可整体迁移数据目录（DB、PID 文件、配置、日志、briefing）：
+设置 `YONDERMESH_HOME` 环境变量可整体迁移数据目录（DB、PID 文件、配置、日志）：
 
 ```bash
 export YONDERMESH_HOME=/var/lib/yondermesh

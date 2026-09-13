@@ -91,7 +91,6 @@ ymesh send --cli opencode --session <id> --mode stopped --message "Now do the sa
 - **Session handoff** `shipped` — extract a compacted handoff package (summaries + recent messages + task plan) and pass it to another agent.
 - **Synchronous injection (Mailbox v3)** `preview` — `ymesh send` / `send` (MCP) deliver a user message to any connected CLI and return the cleaned reply. 26 CLIs (23 via wrapper channels for stopped/running; Claude Code and Codex via new-mode spawn; ChatGPT via the IDE class). 5 trigger channels in use, 3 modes (stopped / running / new, with optional `model` + `effort` for `new`). Failure is never silent: unknown CLI, missing model, upstream API rate-limit all surface as text in the response.
 - **Cross-device sync** `planned` — E2E-encrypted relay design exists; the sync code path is a TODO stub, not yet functional.
-- **Daily briefing** `shipped` — `ymesh briefing generate` writes a per-day digest (`~/.yondermesh/briefings/<date>.md`) and the daemon refreshes it hourly. Slice by agent / project / device / hour, with completed / active / awaiting-review counts. Deterministic, zero-LLM. Note: a session counts for a day if it **overlapped** that day (started earlier but still working counts too).
 - **No UI, no cloud lock-in, no model proxy, no agent modification.**
 
 ## Architecture
@@ -169,7 +168,7 @@ Full adapter matrix (32 registered · 27 with harvest · 26 send-reachable, cove
 | Skip Claude live watcher | `false` | — |
 | Skip Codex live watcher | `false` | — |
 
-A `config.yaml` with `devices`, `sync`, `mcp`, and `briefing` sections is the design target, not a working configuration today.
+A `config.yaml` with `devices`, `sync`, and `mcp` sections is the design target, not a working configuration today.
 
 ## Documentation
 
@@ -196,7 +195,6 @@ Full documentation: **https://goyondertogether.github.io/yondermesh/**
 - [x] **Mailbox v3** — synchronous injection (`ymesh send` / `send`); 26 CLIs (23 via wrapper channels for stopped/running; Claude Code and Codex via new-mode spawn; ChatGPT via the IDE class), 5 trigger channels in use, 3 modes
 - [ ] **M3** — enterprise: audit trail, RBAC, session replay, compliance reports
 - `planned` **Cross-device sync** — E2E-encrypted relay; sync code path is a TODO stub
-- `shipped` **Daily briefing** — per-day digest written to `~/.yondermesh/briefings/`, refreshed hourly by the daemon
 - `planned` **config.yaml parsing** — daemon currently uses built-in defaults only
 
 ## Contributing

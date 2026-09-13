@@ -20,7 +20,7 @@
  *    通过 POST /api/conversations/{id}/hooks 或 config.toml [hooks] 注册。
  *
  * 4. Always-on context：通过 config.toml 的 [default_agent] / system_message 注入
- *    常驻上下文（如 yondermesh briefing）。
+ *    常驻上下文（如 yondermesh 的 4 工具说明）。
  *
  * 设计原则：
  *   - 与 mcp/register.ts 风格一致：read/write/isRegistered 三段式 API
@@ -278,7 +278,7 @@ export function unregisterAllHooks(): boolean {
  * 注入常驻上下文（system message / default_agent 提示）。
  * 写入 [default_agent] 段的 system_message 字段（幂等覆盖）。
  *
- * Always-on 上下文用于让每个新 session 都带上 yondermesh briefing，
+ * Always-on 上下文用于让每个新 session 都知道 yondermesh 的 4 个工具，
  * 使 agent 知道它处于 mesh 中、可查询其他 agent 上下文。
  */
 export function setAlwaysOnContext(context: string): { set: boolean; path: string } {

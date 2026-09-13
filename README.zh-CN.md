@@ -89,7 +89,6 @@ ymesh send --cli opencode --session <id> --mode stopped --message "再对上一�
 - **Mount 系统** `shipped` —— 非侵入式地把 MCP server、skill、always-on 上下文安装到每个 CLI 自己的配置目录。
 - **Session 接力** `shipped` —— 提取浓缩 handoff 包（摘要 + 近期消息 + 任务计划），传给另一个 agent。
 - **同步注入（Mailbox v3）** `preview` —— `ymesh send` / `send`（MCP 工具）把 user message 投递到任意已接入的 CLI 并返回清洗后的回复。5 种在用触发通道，3 种模式（停止 / 运行中 / 新建，新建模式可选 `model` + `effort`）。失败永不沉默：未知 CLI、未配 model、上游 API 限流，都会以文本形式回到 response 里。
-- **每日简报** `shipped` —— `ymesh briefing generate` 生成当日摘要（`~/.yondermesh/briefings/<日期>.md`），daemon 每小时刷新。按 agent / 项目 / 设备 / 时段切分，含完成数、活跃数、待审阅数；纯规则、零 LLM。口径说明：会话只要**与当天有交集**就算当天（昨天开始、今天还在干也算）。
 - **无 UI、无云锁定、无模型代理、无 agent 修改。**
 
 ## 架构
@@ -167,7 +166,7 @@ yondermesh 读取每个 CLI agent 的原生 session 格式，并通过触发层�
 | 跳过 Claude 实时监听 | `false` | — |
 | 跳过 Codex 实时监听 | `false` | — |
 
-包含 `devices`、`sync`、`mcp`、`briefing` 段的 `config.yaml` 是设计目标，当前不可用。
+包含 `devices`、`sync`、`mcp` 段的 `config.yaml` 是设计目标，当前不可用。
 
 ## 文档
 
@@ -194,7 +193,6 @@ yondermesh 读取每个 CLI agent 的原生 session 格式，并通过触发层�
 - [x] **Mailbox v3** —— 同步注入（`ymesh send` / `send`）；26 个 CLI（23 个经 wrapper 通道支持 stopped/running，Claude Code 与 Codex 经 new 模式 spawn 接入，ChatGPT 经 IDE 类接入），5 种在用触发通道，3 种模式
 - [ ] **M3** —— 企业版：审计日志、RBAC、session 回放、合规报告
 - `planned` **跨设备同步** —— 端到端加密 relay；sync 代码路径是 TODO 空壳
-- `shipped` **每日简报** —— 每日摘要写入 `~/.yondermesh/briefings/`，daemon 每小时刷新
 - `planned` **config.yaml 解析** —— daemon 当前仅使用内置默认值
 
 ## 贡献

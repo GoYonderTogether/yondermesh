@@ -2,7 +2,7 @@
  * 卡住检测 — L4 派生层第一块
  *
  * 完全 deterministic，零 LLM（ARCHITECTURE §III.6「内核零 LLM」）。
- * 供 briefing / distill 等下游消费；本模块不接入 briefing（解耦，后续独立 loop）。
+ * 供 orchestrate / 诊断等下游消费。
  *
  * 判定口径（默认，可配）：
  *   - stale：距上次活动 ≥ staleHours（默认 2 小时）

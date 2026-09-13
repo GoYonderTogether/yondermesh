@@ -53,14 +53,6 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh inject` | Inject a message into a running session (--cli &lt;agent&gt; --session &lt;id&gt; --message "text") |
 | `ymesh transfer` | Transfer a session across agents (--cli &lt;src&gt; --session &lt;id&gt; --target &lt;dst&gt; [--output &lt;path&gt;]) |
 | `ymesh send` | Sync injection v3: send a message to a target agent and get the reply synchronously (--cli &lt;agent&gt; [--session &lt;id&gt;] [--mode stopped|running|new] --message "text" [--model &lt;m&gt;] [--effort &lt;e&gt;] [--cwd &lt;path&gt;] [--timeout &lt;ms&gt;] [--json]) |
-| `ymesh briefing` | generate   Generate a daily briefing (multi-dim slices: agent/project/device/hour + completed/success-rate/stuck) |
-| `ymesh Options:` | [--date &lt;YYYY-MM-DD&gt;] [--output &lt;dir&gt;] [--json] |
-| `ymesh stats` | Work statistics (multi-dim slices: by day/project/model) |
-| `ymesh Options:` | [--by day|project|model] [--from &lt;time&gt;] [--to &lt;time&gt;] [--json] |
-| `ymesh distill` | run         Distill tags/themes/preferences from extract products (rule-based, zero LLM) |
-| `ymesh distill` | list        List distilled projects |
-| `ymesh distill` | show        Show a distilled project (--hash &lt;projectHash&gt;) |
-| `ymesh Options:` | --project &lt;path&gt; [--json] |
 | `ymesh scaffold` | &lt;name&gt;     Generate a new adapter template (importer/wrapper/inject/index) into src/&lt;name&gt;/ |
 | `ymesh Options:` | --config-dir &lt;dir&gt; --cli-binary &lt;bin&gt; |
 | `ymesh --session-format` | jsonl|sqlite|json|markdown --yes (overwrite existing) |
@@ -72,13 +64,8 @@ ymesh <command> --db <path>     # override DB path
 | `ymesh retain` | analyze      Scan database for redundancy (noise/oversized/stale sessions + session-level classification), report compressible volume (read-only) |
 | `ymesh retain` | apply        Execute retention (L0 drop noise + L2 truncate + SL0/SL1/SL2 session-level + L3 archive), with deduplicated backup |
 | `ymesh Options:` | --dry-run (preview) --no-backup (skip backup) [--db &lt;path&gt;] [--json] |
-| `ymesh retrospective` | Single-session retrospective: fact layer (originalNeed/toolCalls/detours) + 5-section markdown skeleton |
-| `ymesh Options:` | --session &lt;id&gt; [--output &lt;path&gt;] [--json] [--no-redact] [--db &lt;path&gt;] |
 | `ymesh reimport` | Re-scan a source to backfill structured tool_calls (idempotent; dry-run by default) |
 | `ymesh Options:` | --source &lt;name&gt; [--limit &lt;n&gt;] [--dry-run] [--yes] [--db &lt;path&gt;] [--json] |
-| `ymesh issue` | create        Submit retrospective as a user-story GitHub issue (shell-out to gh CLI) |
-| `ymesh Options:` | --title &lt;t&gt; [--body &lt;text&gt;] [--body-file &lt;path&gt;|-] [--label &lt;l&gt;...] |
-| `ymesh [--repo` | &lt;owner/name&gt;] [--dry-run] |
 
 ## Global Options
 
