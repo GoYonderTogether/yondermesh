@@ -172,6 +172,12 @@ check_logs() {
   if [[ ! -d "$log_dir" ]]; then
     log_dir="$YONDERMESH_HOME/logs"
   fi
+  # daemon 实际把日志直接写在 YONDERMESH_HOME 根目录（daemon.err.log / daemon.log /
+  # mcp.err.log），不是 state 目录也不是 logs/ 子目录 —— 不认这一点的话，
+  # doctor 永远报「no log directory found」，等于日志检查从来没生效过。
+  if [[ ! -d "$log_dir" ]] && compgen -G "$YONDERMESH_HOME/*.log" > /dev/null 2>&1; then
+    log_dir="$YONDERMESH_HOME"
+  fi
 
   if [[ ! -d "$log_dir" ]]; then
     check_warn "no log directory found"
@@ -180,7 +186,27 @@ check_logs() {
 
   check_pass; printf '  log dir: %s\n' "$log_dir"
 
-  local recent_errors; recent_errors=$(grep -ri 'error\|fail\|crash\|exception' "$log_dir" 2>/dev/null | tail -5 || true)
+  # 只看**近期**日志（每个文件尾部 300 行）：daemon.err.log 会一直追加，
+  # 把两周前的一次瞬时错误当成当前故障，会让 doctor 永久 DEGRADED。
+  # set -o pipefail 下，grep 没命中会返回 1 把整个脚本带崩（实测 exit=1），
+  # 所以整段用 `|| true` 兜住。
+  # 只扫**错误流**（*.err.log）：
+  #   · daemon.log 是 stdout，里面是「cass: 跳过」这类正常的启动摘要（cass 是一次性
+  #     历史导入，跳过是设计行为），把它当错误源会一直误报；
+  #     而且它是小文件、内容横跨多次启动，几天前的一次性错误会一直留在尾部。
+  #   · 真错误（扫描失败、投递失败、compact 失败）都写 stderr。
+  # 只认最近 24 小时有写入的文件，避免拿历史归档说事。
+  local recent_errors=""
+  local err_logs
+  err_logs=$(find "$log_dir" -maxdepth 1 -name '*.err.log' -type f -mtime -1 2>/dev/null | tr '\n' ' ')
+  if [[ -z "$err_logs" ]]; then
+    err_logs=$(find "$log_dir" -maxdepth 1 -name '*.log' -type f -mtime -1 2>/dev/null | tr '\n' ' ')
+  fi
+  recent_errors=$(
+    for f in $err_logs; do
+      tail -300 "$f" 2>/dev/null | grep -i 'error\|fail\|crash\|exception' || true
+    done | tail -5 || true
+  )
   if [[ -n "$recent_errors" ]]; then
     check_warn "found error patterns in recent logs"
     if [[ "$VERBOSE" == "true" ]]; then
